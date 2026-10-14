@@ -2,7 +2,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Float32MultiArray
 from sensor_msgs.msg import Imu
-from geometry_msgs.msg import Vector3
+from geometry_msgs.msg import Quaternion, Vector3
 import serial
 import json
 import time
@@ -57,7 +57,15 @@ class MotorControllerNode(Node):
         
         # create publisher for IMU data
         self.imu_publisher = self.create_publisher(Imu, 'imu_data', 10)
-        
+
+        # ##### ADDED: publisher for IMU orientation #####
+        self.orientation_publisher = self.create_publisher(
+            Quaternion,
+            'imu_orientation',
+            10
+        )
+        # ##### END ADDED CODE #####
+
         # initialize serial connection
         self.robot = None
         self.init_serial()
@@ -239,6 +247,10 @@ class MotorControllerNode(Node):
             imu_msg.orientation.x = qx
             imu_msg.orientation.y = qy
             imu_msg.orientation.z = qz
+
+            # ##### ADDED: publish IMU orientation separately #####
+            self.orientation_publisher.publish(imu_msg.orientation)
+            # ##### END ADDED CODE #####
             
             # angular velocity (rad/s) - convert from degrees/s if needed
             imu_msg.angular_velocity.x = float(imu_data.get('gx', 0))  # roll rate
