@@ -118,7 +118,7 @@ class RobotTestNode(Node):
 
         self._rot_prev_yaw: float | None = None   # IMU yaw at the previous timer tick
         self._rot_accumulated: float = 0.0         # total rotation measured so far
-        self._rot_target: float = 0.0              # desired total rotation (rad, ≥ 0)
+        self._rot_target: float = 0.0              # desired total rotation (rad, signed: + = CCW, - = CW)
 
         self._move_target_heading: float | None = None  # IMU yaw locked at move start
         self._imu_warned = False
@@ -186,11 +186,11 @@ class RobotTestNode(Node):
         self.command_queue.append(("move", dist))
 
     def rotate(self, angle):
-        """Queue rotation. Always rotate counterclockwise."""
-        # Convert any angle to [0, 2*pi)
-        angle = angle % (2 * math.pi)
+        """Queue rotation. Rotates in the shortest direction (CW or CCW)."""
+        # Normalize to (-pi, pi] so the robot always takes the shortest path
+        angle = wrap_signed(angle)
 
-        if angle < 1e-6 or 2 * math.pi - angle < 1e-6:
+        if abs(angle) < 1e-6:
             return
 
         self.command_queue.append(("rotate", angle))
@@ -213,7 +213,7 @@ class RobotTestNode(Node):
             if distance > 1e-6:
                 target_angle = math.atan2(dy, dx)
 
-                initial_rotation = wrap(
+                initial_rotation = wrap_signed(
                     target_angle - ptheta
                 )
                 self.rotate(initial_rotation)
@@ -224,11 +224,11 @@ class RobotTestNode(Node):
                 ptheta = target_angle
 
             # Step 3: Match waypoint's final angle
-            final_rotation = wrap(gtheta - ptheta)
+            final_rotation = wrap_signed(gtheta - ptheta)
             self.rotate(final_rotation)
 
             # Update planning pose
-            px, py, ptheta = gx, gy, wrap(gtheta)
+            px, py, ptheta = gx, gy, wrap_signed(gtheta)
 
             self.get_logger().info(
                 f"Planned waypoint {i}: "
@@ -375,8 +375,9 @@ class RobotTestNode(Node):
                         f"duration={duration:.2f}s (no IMU)"
                     )
                 else:
-                    # Initial effort from P controller
-                    effort = min(MAX_TURN_INPUT, TURN_KP * value)
+                    # Initial effort from P controller (signed: + = CCW, - = CW)
+                    effort = TURN_KP * value
+                    effort = max(-MAX_TURN_INPUT, min(MAX_TURN_INPUT, effort))
                     self.motor_command = [-effort, effort]
                     self.get_logger().info(
                         f"Starting closed-loop rotation: "
