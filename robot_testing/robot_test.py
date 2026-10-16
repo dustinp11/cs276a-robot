@@ -21,13 +21,21 @@ ROTATION_INPUT = 0.5
 ANGULAR_SPEED_CW  = math.pi / 3   # rad/s
 ANGULAR_SPEED_CCW = math.pi / 3   # assumed symmetric
 
-# ── Fix 1: Closed-loop turn controller ───────────────────────────────────────
+# ── Fix 1: Closed-loop PID turn controller ───────────────────────────────────
 # The robot rotates until the IMU-measured yaw change matches the planned angle.
-# Motor effort scales with remaining error: effort = TURN_KP * error_radians,
-# clamped to [-MAX_TURN_INPUT, MAX_TURN_INPUT].
-TURN_KP = 0.4                # proportional gain (tune up if turns are sluggish)
+#
+#   effort = Kp*error + Ki*∫error·dt + Kd*d(error)/dt
+#
+# P – scales effort with remaining angle; drops near zero close to target.
+# I – accumulates over time; breaks through stiction when P alone is too weak.
+# D – damps the approach speed; reduces overshoot.
+TURN_KP = 0.4                # proportional gain
+TURN_KI = 1.5                # integral gain   (raise if robot stalls near target)
+TURN_KD = 0.05               # derivative gain (raise if robot overshoots)
 MAX_TURN_INPUT = 0.5         # motor command cap for turns
+TURN_MAX_INTEGRAL = 0.2      # anti-windup cap on integral contribution (motor units)
 TURN_TOLERANCE = 0.03        # rad (~1.7°) – declare turn complete within this band
+TIMER_PERIOD = 0.05          # seconds – must match create_timer() period below
 
 # ── Fix 2: Heading-hold controller (forward motion) ──────────────────────────
 # While driving forward, the target heading is locked at motion start.
@@ -119,6 +127,7 @@ class RobotTestNode(Node):
         self._rot_prev_yaw: float | None = None   # IMU yaw at the previous timer tick
         self._rot_accumulated: float = 0.0         # total rotation measured so far
         self._rot_target: float = 0.0              # desired total rotation (rad, ≥ 0)
+        self._rot_integral: float = 0.0            # I term: accumulated error over time
 
         self._move_target_heading: float | None = None  # IMU yaw locked at move start
         self._imu_warned = False
@@ -312,6 +321,7 @@ class RobotTestNode(Node):
 
                 # accumulate the yaw change since the last timer tick.
                 # wrap_signed handles ±π crossovers.
+                delta = 0.0
                 if self._rot_prev_yaw is not None:
                     delta = wrap_signed(current_imu_yaw - self._rot_prev_yaw)
                     self._rot_accumulated += delta
@@ -320,14 +330,27 @@ class RobotTestNode(Node):
                 error = self._rot_target - self._rot_accumulated
 
                 if abs(error) < TURN_TOLERANCE:
+                    # Turn complete – reset PID state, record actual rotation
+                    self._rot_integral = 0.0
                     self.motor_command = [0.0, 0.0]
                     self.active_movement = None
                     self.update_pose("rotate", self._rot_accumulated)
                     self.publish_command()
                     return
 
-                # P controller, positive error rotate more CCW
-                effort = TURN_KP * error
+                # I term: accumulate error × dt so stiction near the target
+                # is eventually overcome. Clamped to prevent windup.
+                self._rot_integral += error * TIMER_PERIOD
+                self._rot_integral = max(-TURN_MAX_INTEGRAL,
+                                         min(TURN_MAX_INTEGRAL, self._rot_integral))
+
+                # D term: derivative of the *process variable* (actual rotation
+                # rate), not the error setpoint, to avoid a spike at turn start.
+                # Negative sign: positive delta reduces error, so it damps effort.
+                d_term = -TURN_KD * (delta / TIMER_PERIOD)
+
+                # PID: positive total effort → CCW (L negative, R positive)
+                effort = TURN_KP * error + TURN_KI * self._rot_integral + d_term
                 effort = max(-MAX_TURN_INPUT, min(MAX_TURN_INPUT, effort))
                 self.motor_command = [-effort, effort]
 
@@ -361,6 +384,7 @@ class RobotTestNode(Node):
 
             if movement_type == "rotate":
                 self._rot_accumulated = 0.0
+                self._rot_integral = 0.0          # clear I term from any previous turn
                 self._rot_target = value
                 self._rot_prev_yaw = current_imu_yaw
 
