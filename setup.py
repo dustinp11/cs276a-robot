@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'robot_test = robot_testing.robot_test:main',
+            'test_yaw = robot_testing.test_yaw:main',
         ],
     },
 )
