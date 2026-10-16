@@ -327,6 +327,11 @@ class RobotTestNode(Node):
                     self._rot_accumulated += delta
                 self._rot_prev_yaw = current_imu_yaw
 
+                self.get_logger().info(
+                    f"Rotating: {math.degrees(self._rot_accumulated):.1f}° "
+                    f"/ {math.degrees(self._rot_target):.1f}°"
+                )
+
                 error = self._rot_target - self._rot_accumulated
 
                 if abs(error) < TURN_TOLERANCE:
