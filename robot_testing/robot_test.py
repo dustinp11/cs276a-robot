@@ -11,12 +11,13 @@ from std_msgs.msg import Float32MultiArray
 
 
 # Calibrated parameters
-FORWARD_INPUT = 0.3
-FORWARD_SPEED = 0.4          # m/s
+FORWARD_INPUT = 0.4
+FORWARD_SPEED = 0.567333          # m/s
 
-ROTATION_INPUT = 0.5
-ANGULAR_SPEED_CW = math.pi / 3   # rad/s
-ANGULAR_SPEED_CCW = math.pi / 3  # assumed symmetric
+ROTATION_INPUT_CW = 0.5
+ROTATION_INPUT_CCW = 0.5
+ANGULAR_SPEED_CW = 2 * math.pi / 4.5   # measured full-turn time, rad/s
+ANGULAR_SPEED_CCW = 2 * math.pi / 5.2  # measured full-turn time, rad/s
 
 
 def get_waypoint_file():
@@ -127,21 +128,30 @@ class RobotTestNode(Node):
 
     
     def rotate(self, angle):
-        """Queue rotation. Always rotate counterclockwise."""
+        """Queue the faster direction for the requested angular change."""
+        ccw_angle = angle % (2 * math.pi)
+        cw_angle = (2 * math.pi - ccw_angle) % (2 * math.pi)
 
-        # Convert any angle to [0, 2*pi)
-        angle = angle % (2 * math.pi)
-
-        if angle < 1e-6 or 2 * math.pi - angle < 1e-6:
+        if ccw_angle < 1e-6 or cw_angle < 1e-6:
             return
 
-        duration = angle / ANGULAR_SPEED_CCW
+        ccw_duration = ccw_angle / ANGULAR_SPEED_CCW
+        cw_duration = cw_angle / ANGULAR_SPEED_CW
+
+        if cw_duration < ccw_duration:
+            command = [ROTATION_INPUT_CW, -ROTATION_INPUT_CW]
+            duration = cw_duration
+            rotation = -cw_angle
+        else:
+            command = [-ROTATION_INPUT_CCW, ROTATION_INPUT_CCW]
+            duration = ccw_duration
+            rotation = ccw_angle
 
         self.command_queue.append((
-            [-ROTATION_INPUT, ROTATION_INPUT],
+            command,
             duration,
             "rotate",
-            angle
+            rotation
         ))
 
 
