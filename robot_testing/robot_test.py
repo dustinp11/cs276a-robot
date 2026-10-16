@@ -321,10 +321,14 @@ class RobotTestNode(Node):
 
                 # accumulate the yaw change since the last timer tick.
                 # wrap_signed handles ±π crossovers.
+                # NOTE: The IMU z-axis points down (left-hand convention), so
+                # CCW motion produces a negative raw yaw delta. We negate it so
+                # that CCW accumulates positively (matching a positive CCW target)
+                # and CW accumulates negatively (matching a negative CW target).
                 delta = 0.0
                 if self._rot_prev_yaw is not None:
                     delta = wrap_signed(current_imu_yaw - self._rot_prev_yaw)
-                    self._rot_accumulated += delta
+                    self._rot_accumulated -= delta
                 self._rot_prev_yaw = current_imu_yaw
 
                 self.get_logger().info(
