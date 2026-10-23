@@ -12,15 +12,17 @@ class VelocityToMotorNode(Node):
         self.wheel_base = 0.127  # [m]
 
         self.cmd_max = 1.5
+        # Calibrated parameters: motor input 0.4 -> 0.567333 m/s on current surface
         self.left_linear_deadzone = 0.08
-        self.left_linear_slope = 2.3 
+        self.left_linear_slope = 1.772915625  # 0.567333 / (0.4 - 0.08)
         self.right_linear_deadzone = 0.08
-        self.right_linear_slope = 2.3 
+        self.right_linear_slope = 1.772915625  # 0.567333 / (0.4 - 0.08)
         
-        self.left_angular_deadzone = 0.225
-        self.left_angular_slope = 15.0
-        self.right_angular_deadzone = 0.22
-        self.right_angular_slope = 15.0
+        # Calibrated parameters: turn in place using motor input 0.5
+        self.left_angular_deadzone = 0.5
+        self.left_angular_slope = 1e6
+        self.right_angular_deadzone = 0.5
+        self.right_angular_slope = 1e6
 
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.motor_pub = self.create_publisher(Float32MultiArray, '/motor_commands', 10)

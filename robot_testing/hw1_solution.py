@@ -11,7 +11,7 @@ from math import sin, cos
 The class of the pid controller for differential drive robot.
 """
 class PIDcontroller:
-    def __init__(self, Kp, Ki, Kd):
+    def __init__(self, Kp, Ki, Kd, maximum_value=0.567333):
         self.Kp = Kp
         self.Ki = Ki
         self.Kd = Kd
@@ -19,7 +19,7 @@ class PIDcontroller:
         self.I = np.array([0.0, 0.0])
         self.lastError = np.array([0.0, 0.0])
         self.timestep = 0.1
-        self.maximumValue = 0.2
+        self.maximumValue = maximum_value
 
     def setTarget(self, state):
         """
@@ -111,7 +111,13 @@ class Hw1SolutionNode(Node):
             [0.0, 0.0, 0.0]
         ])
         
-        self.pid = PIDcontroller(0.5, 0.01, 0.005)
+        # Calibrated parameters from robot_test.py
+        self.forward_speed = 0.567333
+        self.angular_speed_cw = 2 * np.pi / 4.5    # measured full-turn time: 4.5s (CW)
+        self.angular_speed_ccw = 2 * np.pi / 5.2   # measured full-turn time: 5.2s (CCW)
+        self.fixed_rotation_vel = (self.angular_speed_cw + self.angular_speed_ccw) / 2
+        
+        self.pid = PIDcontroller(1.0, 0.01, 0.005, maximum_value=self.forward_speed)
         
         self.current_state = np.array([0.0, 0.0, 0.0])
         
@@ -127,7 +133,6 @@ class Hw1SolutionNode(Node):
         
         self.stage = 'rotate_to_goal'
         self.stage_pid = PIDcontroller(0.5, 0.01, 0.005)
-        self.fixed_rotation_vel = 0.785
         
     def update_dead_reckoning(self, linear_vel, angular_vel):
         """
@@ -228,12 +233,12 @@ class Hw1SolutionNode(Node):
     def get_rotation_direction(self, heading_error):
         """
         Determine rotation direction based on heading error.
-        Returns: angular velocity with fixed magnitude but correct direction
+        Returns: angular velocity with calibrated magnitude and correct direction
         """
         if heading_error > 0:
-            return self.fixed_rotation_vel
+            return self.angular_speed_ccw
         else:
-            return -self.fixed_rotation_vel
+            return -self.angular_speed_cw
         
     def control_loop(self):
         """
