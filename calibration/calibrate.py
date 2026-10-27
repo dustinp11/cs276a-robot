@@ -17,10 +17,20 @@ def board_points(columns, rows, square_size_m):
 
 def detect_corners(image, pattern):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    found, corners = cv2.findChessboardCornersSB(
-        gray, pattern, cv2.CALIB_CB_NORMALIZE_IMAGE
+    found, corners = cv2.findChessboardCorners(
+        gray, pattern,
+        cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE,
     )
-    return corners if found else None
+    if not found:
+        found, corners = cv2.findChessboardCornersSB(
+            gray, pattern, cv2.CALIB_CB_NORMALIZE_IMAGE
+        )
+    if not found:
+        return None
+    return cv2.cornerSubPix(
+        gray, corners, (5, 5), (-1, -1),
+        (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 40, 1e-3),
+    )
 
 
 def fit_camera(objects, observations, size):
@@ -40,6 +50,41 @@ def fit_camera(objects, observations, size):
             (obs.reshape(-1, 2) - projected.reshape(-1, 2)) ** 2, axis=1
         )))))
     return rms, matrix, distortion, rotations, translations, errors
+
+
+def fit_fisheye(objects, observations, size):
+    object_points = [
+        points.astype(np.float64).reshape(-1, 1, 3) for points in objects
+    ]
+    image_points = [points.astype(np.float64) for points in observations]
+    matrix = np.array([
+        [max(size), 0.0, size[0] / 2],
+        [0.0, max(size), size[1] / 2],
+        [0.0, 0.0, 1.0],
+    ], dtype=np.float64)
+    distortion = np.zeros((4, 1), dtype=np.float64)
+    rms, matrix, distortion, rotations, translations = cv2.fisheye.calibrate(
+        object_points, image_points, size, matrix, distortion, None, None,
+        flags=cv2.fisheye.CALIB_RECOMPUTE_EXTRINSIC | cv2.fisheye.CALIB_FIX_SKEW,
+        criteria=(cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-7),
+    )
+    errors = []
+    for obj, obs, rotation, translation in zip(
+        object_points, image_points, rotations, translations
+    ):
+        projected, _ = cv2.fisheye.projectPoints(
+            obj, rotation, translation, matrix, distortion
+        )
+        errors.append(float(np.sqrt(np.mean(np.sum(
+            (obs.reshape(-1, 2) - projected.reshape(-1, 2)) ** 2, axis=1
+        )))))
+    return rms, matrix, distortion, rotations, translations, errors
+
+
+def reject_high_error_views(errors):
+    median = float(np.median(errors))
+    mad = float(np.median(np.abs(np.asarray(errors) - median)))
+    return max(1.0, median + 3 * 1.4826 * mad)
 
 
 def write_camera_yaml(path, size, matrix, distortion, new_matrix):
@@ -63,7 +108,8 @@ def write_camera_yaml(path, size, matrix, distortion, new_matrix):
 def run(args):
     if args.columns < 3 or args.rows < 3:
         raise ValueError("Use at least three inner corners along each board dimension.")
-    if not np.isfinite(args.square_size_m) or args.square_size_m <= 0:
+    if (args.square_size_m is not None
+            and (not np.isfinite(args.square_size_m) or args.square_size_m <= 0)):
         raise ValueError("--square-size-m must be a positive measured length in meters.")
     if args.min_views < 3:
         raise ValueError("--min-views must be at least 3; 15–25 varied views are recommended.")
@@ -77,7 +123,8 @@ def run(args):
     diagnostics.mkdir()
     pattern = (args.columns, args.rows)
     objects, observations, accepted, rejected = [], [], [], []
-    obj = board_points(*pattern, args.square_size_m)
+    square_size = args.square_size_m if args.square_size_m is not None else 1.0
+    obj = board_points(*pattern, square_size)
     size = None
     first_image = None
     for index, path in enumerate(paths):
@@ -99,16 +146,89 @@ def run(args):
         accepted.append(str(path))
         if first_image is None:
             first_image = image.copy()
-        cv2.drawChessboardCorners(image, pattern, corners, True)
-        if not cv2.imwrite(str(diagnostics / f"{index:04d}_{path.stem}.png"), image):
-            raise OSError("Failed to save corner diagnostic image")
+    detected = accepted.copy()
     (args.output / "detections.json").write_text(json.dumps(
-        {"accepted": accepted, "rejected": rejected}, indent=2) + "\n")
+        {"detected": detected, "accepted": accepted, "rejected": rejected}, indent=2) + "\n")
     if len(accepted) < args.min_views:
         raise ValueError(f"Only {len(accepted)} usable views; need {args.min_views}. See detections.json.")
+    keep = list(range(len(accepted)))
+    error_history = {}
+    for _ in range(4):
+        rms, matrix, distortion, rotations, translations, errors = fit_camera(
+            [objects[i] for i in keep], [observations[i] for i in keep], size
+        )
+        error_history.update(zip(keep, errors))
+        threshold = reject_high_error_views(errors)
+        filtered = [index for index, error in zip(keep, errors) if error <= threshold]
+        if len(filtered) < args.min_views or filtered == keep:
+            break
+        keep = filtered
     rms, matrix, distortion, rotations, translations, errors = fit_camera(
+        [objects[i] for i in keep], [observations[i] for i in keep], size
+    )
+    error_history.update(zip(keep, errors))
+    threshold = reject_high_error_views(errors)
+    if any(error > threshold for error in errors) and len(keep) > args.min_views:
+        filtered = [index for index, error in zip(keep, errors) if error <= threshold]
+        if len(filtered) >= args.min_views:
+            keep = filtered
+            rms, matrix, distortion, rotations, translations, errors = fit_camera(
+                [objects[i] for i in keep], [observations[i] for i in keep], size
+            )
+            error_history.update(zip(keep, errors))
+    keep_set = set(keep)
+    for index, path in enumerate(accepted):
+        if index not in keep_set:
+            rejected.append({
+                "image": path,
+                "reason": "high pinhole reprojection error",
+                "rms_reprojection_px": error_history.get(index),
+            })
+        image = cv2.imread(path)
+        cv2.drawChessboardCorners(image, pattern, observations[index], True)
+        if index in keep_set:
+            label = f"accepted: {error_history[index]:.2f}px"
+            color = (0, 180, 0)
+        else:
+            label = f"rejected: {error_history[index]:.2f}px"
+            color = (0, 0, 255)
+        cv2.putText(image, label, (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+        if not cv2.imwrite(str(diagnostics / f"{index:04d}_{Path(path).stem}.png"), image):
+            raise OSError("Failed to save corner diagnostic image")
+
+    accepted = [accepted[index] for index in keep]
+    objects = [objects[index] for index in keep]
+    observations = [observations[index] for index in keep]
+    fisheye_rms, fisheye_matrix, fisheye_distortion, _, _, fisheye_errors = fit_fisheye(
         objects, observations, size
     )
+    model_comparison = {
+        "image_size_wh": list(size),
+        "views_used": len(accepted),
+        "pinhole": {
+            "model": "OpenCV plumb_bob",
+            "rms_reprojection_px": float(rms),
+            "mean_per_view_rms_px": float(np.mean(errors)),
+            "median_per_view_rms_px": float(np.median(errors)),
+            "max_per_view_rms_px": float(np.max(errors)),
+            "camera_matrix": matrix.tolist(),
+            "distortion": distortion.ravel().tolist(),
+        },
+        "fisheye": {
+            "model": "OpenCV fisheye",
+            "rms_reprojection_px": float(fisheye_rms),
+            "mean_per_view_rms_px": float(np.mean(fisheye_errors)),
+            "median_per_view_rms_px": float(np.median(fisheye_errors)),
+            "max_per_view_rms_px": float(np.max(fisheye_errors)),
+            "camera_matrix": fisheye_matrix.tolist(),
+            "distortion": fisheye_distortion.ravel().tolist(),
+        },
+    }
+    (args.output / "model_comparison.json").write_text(
+        json.dumps(model_comparison, indent=2, allow_nan=False) + "\n"
+    )
+    (args.output / "detections.json").write_text(json.dumps(
+        {"detected": detected, "accepted": accepted, "rejected": rejected}, indent=2) + "\n")
     # Alpha=0 and full size mirror the existing vision driver's remap settings.
     new_matrix, roi = cv2.getOptimalNewCameraMatrix(matrix, distortion, size, 0.0, size)
     write_camera_yaml(args.output / "camera_parameter.yaml", size, matrix, distortion, new_matrix)
@@ -117,15 +237,24 @@ def run(args):
         "opencv_version": cv2.__version__, "model": "plumb_bob",
         "distortion_order": ["k1", "k2", "p1", "p2", "k3"],
         "image_size_wh": list(size), "board_inner_corners_cr": list(pattern),
-        "square_size_m": args.square_size_m, "rms_reprojection_px": float(rms),
+        "square_size_m": args.square_size_m,
+        "translation_unit": "meters" if args.square_size_m is not None else "board-square units",
+        "rms_reprojection_px": float(rms),
         "camera_matrix": matrix.tolist(), "distortion": distortion.ravel().tolist(),
         "undistorted_camera_matrix": new_matrix.tolist(), "valid_roi_xywh": list(map(int, roi)),
         "rejected": rejected,
-        "views": [{"image": path, "rms_reprojection_px": error,
-                   "rvec_board_to_camera": rotation.ravel().tolist(),
-                   "tvec_board_to_camera_m": translation.ravel().tolist()}
-                  for path, error, rotation, translation in zip(
-                      accepted, errors, rotations, translations)],
+        "views": [
+            {
+                "image": path,
+                "rms_reprojection_px": error,
+                "rvec_board_to_camera": rotation.ravel().tolist(),
+                ("tvec_board_to_camera_m" if args.square_size_m is not None
+                 else "tvec_board_to_camera_board_squares"): translation.ravel().tolist(),
+            }
+            for path, error, rotation, translation in zip(
+                accepted, errors, rotations, translations
+            )
+        ],
     }
     (args.output / "calibration.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     corrected = cv2.undistort(first_image, matrix, distortion, None, new_matrix)
@@ -133,6 +262,7 @@ def run(args):
                        np.hstack((first_image, corrected))):
         raise OSError("Failed to write preview")
     print(f"Calibrated {len(accepted)} views; RMS reprojection error: {rms:.4f} px")
+    print(f"Rejected {len(rejected)} views; model comparison: model_comparison.json")
     print(f"Results: {args.output.resolve()}")
     print("Review corner overlays, per-view errors, and straight lines in the preview before use.")
 
@@ -142,7 +272,10 @@ def main():
     parser.add_argument("--images", type=Path, required=True, help="Directory of RAW distorted images")
     parser.add_argument("--columns", type=int, required=True, help="Inner corner columns, not squares")
     parser.add_argument("--rows", type=int, required=True, help="Inner corner rows, not squares")
-    parser.add_argument("--square-size-m", type=float, required=True)
+    parser.add_argument(
+        "--square-size-m", type=float,
+        help="Measured checker-square side length in meters; omit to report translations in square units",
+    )
     parser.add_argument("--min-views", type=int, default=10)
     parser.add_argument("--output", type=Path, required=True, help="New results directory")
     args = parser.parse_args()

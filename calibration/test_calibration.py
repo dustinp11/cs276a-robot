@@ -61,9 +61,15 @@ class CalibrationTests(unittest.TestCase):
             run(args)
             import json
             report = json.loads((args.output / "calibration.json").read_text())
+            comparison = json.loads((args.output / "model_comparison.json").read_text())
+            detections = json.loads((args.output / "detections.json").read_text())
             self.assertEqual(len(report["views"]), 18)
             self.assertEqual(len(report["rejected"]), 1)
+            self.assertEqual(len(detections["detected"]), 18)
             self.assertLess(report["rms_reprojection_px"], 0.5)
+            self.assertEqual(comparison["views_used"], len(report["views"]))
+            self.assertIn("fisheye", comparison)
+            self.assertLess(comparison["fisheye"]["rms_reprojection_px"], 0.5)
             np.testing.assert_allclose(np.array(report["camera_matrix"])[[0, 1], [0, 1]],
                                        self.matrix[[0, 1], [0, 1]], rtol=0.02)
             storage = cv2.FileStorage(str(args.output / "camera_parameter.yaml"), cv2.FILE_STORAGE_READ)
