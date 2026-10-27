@@ -11,6 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', ['launch/hw1_solution.launch.py']),
+        ('share/' + package_name + '/config', ['config/landmarks.json']),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -29,6 +30,7 @@ setup(
             'motor_control = robot_testing.motor_control:main',
             'velocity_mapping = robot_testing.velocity_mapping:main',
             'hw1_solution = robot_testing.hw1_solution:main',
+            'hw2_localization = robot_testing.hw2_localization:main',
         ],
     },
 )

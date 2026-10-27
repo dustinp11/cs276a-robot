@@ -1,5 +1,5 @@
 {
-  "surveyed": false,
+  "surveyed": true,
   "map_frame": "map",
   "camera_frame": "camera_frame",
   "camera_mount": {
@@ -24,19 +24,10 @@
       "id": 0,
       "family": "36h11",
       "frame": "tag_0",
-      "x_m": 1.0,
+      "x_m": 1.5,
       "y_m": 0.0,
       "z_m": 0.2,
       "facing_deg": 180.0
-    },
-    {
-      "id": 1,
-      "family": "36h11",
-      "frame": "tag_1",
-      "x_m": 1.0,
-      "y_m": 2.0,
-      "z_m": 0.2,
-      "facing_deg": 270.0
     }
   ]
 }
