@@ -34,8 +34,8 @@ Controls the robot through seven sequential steps:
      AprilTag, and ends navigation.
 
 4. Step 4: Turn 90 degrees CCW towards AprilTag 3 (ID 3):
-   - Uses exact same 30-degree CCW search steps as Step 2 with 1s settling.
-   - Fine-adjusts with 1s delay in between turns until directly facing AprilTag 3.
+   - Turns 90 degrees CCW directly towards AprilTag 3, settles 1s.
+   - Looks for AprilTag 3 and fine-adjusts (1s delay between turns) until directly facing it.
    - Prints "facing apriltag3" in terminal and pauses for 3 seconds.
 
 5. Step 5: Turn 63 degrees CCW towards AprilTag 5 (ID 5):
@@ -905,11 +905,13 @@ class ControlNode(Node):
                     self.get_logger().info(
                         f'Waypoint (1, 2) reached within tolerance! '
                         f'Final tag z = {z:.3f} m (error: {error:+.3f} m). '
-                        f'Step 4: Searching for AprilTag 3 in 30-degree CCW steps...'
+                        f'Step 4: Turning 90 degrees CCW directly towards AprilTag 3...'
                     )
                     self.stop_robot()
-                    self.turn_step_traveled = 0.0
-                    self.state = 'tag3_turn_step_ccw_30'
+                    self.align_target_angle = math.pi / 2.0  # 90 degrees
+                    self.align_direction = 1.0  # CCW
+                    self.align_traveled_angle = 0.0
+                    self.state = 'turn_90_ccw_to_tag3'
                     return
                 elif error > self.tolerance:
                     self.get_logger().info(
@@ -961,62 +963,34 @@ class ControlNode(Node):
             self.distance_traveled += 0.15 * dt
             return
 
-        # Phase 14: Step turn 30 degrees CCW to search for AprilTag 3
-        if self.state == 'tag3_turn_step_ccw_30':
+        # Phase 14: Direct 90 degrees CCW turn towards AprilTag 3
+        if self.state == 'turn_90_ccw_to_tag3':
             twist = Twist()
             twist.linear.x = 0.0
             v_ang = float(self.angular_speed_ccw)
             twist.angular.z = v_ang
             step_dt = v_ang * dt
-            self.turn_step_traveled += step_dt
+            self.align_traveled_angle += step_dt
             self.cmd_pub.publish(twist)
 
-            if self.turn_step_traveled >= self.step_angle_rad:
+            if self.align_traveled_angle >= self.align_target_angle:
                 self.stop_robot()
                 self.get_logger().info(
-                    f'Turned 30 degrees CCW. Stopping for {self.settle_time_s:.1f}s '
-                    f'delay to check for AprilTag 3...'
+                    f'Turned 90 degrees CCW. Stopping for {self.settle_time_s:.1f}s '
+                    f'delay to look for AprilTag 3 and adjust...'
                 )
-                self.state = 'tag3_search_stopped_query'
-                self.stop_time = self.get_clock().now()
-            return
-
-        # Phase 15: Stationary query after 30-degree spin for AprilTag 3
-        if self.state == 'tag3_search_stopped_query':
-            self.stop_robot()
-            time_stopped = (now - self.stop_time).nanoseconds / 1e9
-            if time_stopped < self.settle_time_s:
-                return
-
-            self.request_localization_service()
-            bearing_rad, pixel_err = self.get_tag3_bearing_error()
-            if bearing_rad is not None:
-                self.get_logger().info(
-                    f'AprilTag 3 acquired! Pixel offset: {pixel_err:.1f} px, '
-                    f'bearing: {math.degrees(bearing_rad):.1f} deg. '
-                    f'Settling {self.settle_time_s:.1f}s before starting fine alignment...'
-                )
-                self.stop_robot()
                 self.state = 'tag3_settling_and_measuring'
                 self.stop_time = self.get_clock().now()
-                return
-
-            if time_stopped > (self.settle_time_s + 2.0):
-                self.get_logger().info(
-                    f'AprilTag 3 not visible at this angle after {self.settle_time_s:.1f}s delay. '
-                    f'Turning CCW another 30 degrees...'
-                )
-                self.turn_step_traveled = 0.0
-                self.state = 'tag3_turn_step_ccw_30'
             return
 
-        # Phase 16: Settle 1s and measure exact angle off from AprilTag 3
+        # Phase 15: Settle 1s, look for AprilTag 3, and measure angle off
         if self.state == 'tag3_settling_and_measuring':
             self.stop_robot()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
             if time_stopped < self.settle_time_s:
                 return
 
+            self.request_localization_service()
             bearing_rad, pixel_err = self.get_tag3_bearing_error()
             if bearing_rad is not None:
                 deg_off = math.degrees(abs(bearing_rad))
@@ -1047,15 +1021,17 @@ class ControlNode(Node):
                 self.state = 'tag3_rotating_to_align'
                 return
 
-            if time_stopped > (self.settle_time_s + 3.0):
+            if time_stopped > (self.settle_time_s + 4.0):
                 self.get_logger().warn(
-                    'Lost AprilTag 3 during settling. Resuming 30-degree CCW search...'
+                    'AprilTag 3 not detected after 90-degree turn. '
+                    'Proceeding with 3-second pause before Step 5...'
                 )
-                self.turn_step_traveled = 0.0
-                self.state = 'tag3_turn_step_ccw_30'
+                print('facing apriltag3')
+                self.state = 'tag3_pause_before_step5'
+                self.stop_time = self.get_clock().now()
             return
 
-        # Phase 17: Rotate ONLY target angle towards AprilTag 3, then stop and wait 1s
+        # Phase 16: Rotate ONLY target angle towards AprilTag 3, then stop and wait 1s
         if self.state == 'tag3_rotating_to_align':
             twist = Twist()
             twist.linear.x = 0.0
@@ -1076,7 +1052,7 @@ class ControlNode(Node):
                 self.stop_time = self.get_clock().now()
             return
 
-        # Phase 17b: Pause 3 seconds after facing AprilTag 3 before moving to Step 5
+        # Phase 17: Pause 3 seconds after facing AprilTag 3 before moving to Step 5
         if self.state == 'tag3_pause_before_step5':
             self.stop_robot()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
