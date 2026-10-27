@@ -1,0 +1,278 @@
+{
+  "created_utc": "2026-10-27T05:24:52.396176+00:00",
+  "opencv_version": "5.0.0",
+  "model": "plumb_bob",
+  "distortion_order": [
+    "k1",
+    "k2",
+    "p1",
+    "p2",
+    "k3"
+  ],
+  "image_size_wh": [
+    1280,
+    720
+  ],
+  "board_inner_corners_cr": [
+    7,
+    7
+  ],
+  "square_size_m": 0.029,
+  "rms_reprojection_px": 0.2204417855216478,
+  "camera_matrix": [
+    [
+      624.3129802885693,
+      0.0,
+      668.6832556677438
+    ],
+    [
+      0.0,
+      622.7992634647392,
+      338.9806380518499
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion": [
+    -0.3543282703167223,
+    0.1712039125159486,
+    -0.00022561926687494232,
+    0.00030765399497199067,
+    -0.047778916125451584
+  ],
+  "undistorted_camera_matrix": [
+    [
+      624.3129802885693,
+      0.0,
+      668.6832556677438
+    ],
+    [
+      0.0,
+      622.7992634647392,
+      338.9806380518499
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "valid_roi_xywh": [
+    0,
+    0,
+    1279,
+    719
+  ],
+  "rejected": [
+    {
+      "image": "images/camera_image_raw_compressed-1793078124-040019837.png",
+      "reason": "full chessboard not detected"
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078314-041616118.png",
+      "reason": "full chessboard not detected"
+    }
+  ],
+  "views": [
+    {
+      "image": "images/camera_image_raw_compressed-1793078087-901650267.png",
+      "rms_reprojection_px": 0.2721045911312103,
+      "rvec_board_to_camera": [
+        -1.0383530162026893,
+        0.9079905598003963,
+        1.1012950439539457
+      ],
+      "tvec_board_to_camera_m": [
+        0.0031234903562565633,
+        -5.537923899642035e-05,
+        0.36476811013105775
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078103-251243438.png",
+      "rms_reprojection_px": 0.2690744698047638,
+      "rvec_board_to_camera": [
+        -0.5555708361199306,
+        0.35607354379796785,
+        1.3561450832874833
+      ],
+      "tvec_board_to_camera_m": [
+        -0.0009318399492641632,
+        -0.13670943370687738,
+        0.3059168023557901
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078111-886959529.png",
+      "rms_reprojection_px": 0.2603861391544342,
+      "rvec_board_to_camera": [
+        -0.30598249759994295,
+        0.7934730585028331,
+        1.6281771191576828
+      ],
+      "tvec_board_to_camera_m": [
+        0.04521948830633374,
+        -0.11490665353179111,
+        0.2951586878228324
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078140-047531341.png",
+      "rms_reprojection_px": 0.3032433092594147,
+      "rvec_board_to_camera": [
+        -0.9394237492728577,
+        0.5636269572332495,
+        1.5714101238706
+      ],
+      "tvec_board_to_camera_m": [
+        -0.011615938674655239,
+        -0.09087971567209818,
+        0.34557066804819797
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078150-581236285.png",
+      "rms_reprojection_px": 0.1956787109375,
+      "rvec_board_to_camera": [
+        -0.061050629497951654,
+        -0.3396313331434868,
+        1.3827738677309551
+      ],
+      "tvec_board_to_camera_m": [
+        -0.15177365622439487,
+        -0.3300948842399368,
+        0.6550928069109853
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078180-977229190.png",
+      "rms_reprojection_px": 0.16972200572490692,
+      "rvec_board_to_camera": [
+        0.6144984691319101,
+        0.14273950201210162,
+        1.4602915022783227
+      ],
+      "tvec_board_to_camera_m": [
+        -0.1042733263944543,
+        -0.28656037454578576,
+        0.6144077319737589
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078194-410845643.png",
+      "rms_reprojection_px": 0.13202261924743652,
+      "rvec_board_to_camera": [
+        0.6347889062212136,
+        0.02642591370229745,
+        1.5910171849915224
+      ],
+      "tvec_board_to_camera_m": [
+        -0.1556655566583797,
+        -0.36289064051767517,
+        0.7738725087986769
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078207-530514336.png",
+      "rms_reprojection_px": 0.17569699883460999,
+      "rvec_board_to_camera": [
+        -0.4782961991367514,
+        -0.8666492915642175,
+        1.273115597577382
+      ],
+      "tvec_board_to_camera_m": [
+        -0.21052517723803665,
+        -0.4136448046478282,
+        0.9150026572491283
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078231-181901931.png",
+      "rms_reprojection_px": 0.160147562623024,
+      "rvec_board_to_camera": [
+        -0.551009255884095,
+        -0.8104656317286901,
+        1.1863951166051503
+      ],
+      "tvec_board_to_camera_m": [
+        -0.11257698081376978,
+        -0.26863464570525397,
+        0.5861929819392543
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078248-466698747.png",
+      "rms_reprojection_px": 0.2288162112236023,
+      "rvec_board_to_camera": [
+        -0.20516032996670294,
+        -0.3190128445170543,
+        1.4295700504958149
+      ],
+      "tvec_board_to_camera_m": [
+        0.02215739563840785,
+        -0.06926774959064973,
+        0.3933453643246338
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078267-965019469.png",
+      "rms_reprojection_px": 0.19077837467193604,
+      "rvec_board_to_camera": [
+        0.31929023798961936,
+        -0.6626029216744741,
+        1.4286937198568816
+      ],
+      "tvec_board_to_camera_m": [
+        -0.03159575750872594,
+        -0.1742074908274867,
+        0.43851680093015644
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078289-726879617.png",
+      "rms_reprojection_px": 0.23827716708183289,
+      "rvec_board_to_camera": [
+        -0.16801199644788212,
+        -1.0363586640067484,
+        1.2672290655293503
+      ],
+      "tvec_board_to_camera_m": [
+        -0.004429051078323421,
+        -0.13704433867291854,
+        0.38744984471264077
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078300-590029769.png",
+      "rms_reprojection_px": 0.21738342940807343,
+      "rvec_board_to_camera": [
+        0.8450851727851063,
+        -0.009056312402590498,
+        1.3401106266205811
+      ],
+      "tvec_board_to_camera_m": [
+        0.015836805540139436,
+        -0.0978022391231073,
+        0.3060019517006363
+      ]
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078323-617208979.png",
+      "rms_reprojection_px": 0.20073455572128296,
+      "rvec_board_to_camera": [
+        0.4450880664356505,
+        0.4499555148886217,
+        1.5722325301173068
+      ],
+      "tvec_board_to_camera_m": [
+        -0.005497680644709736,
+        -0.09895177513784723,
+        0.39467755232733975
+      ]
+    }
+  ],
+  "corner_detector": "findChessboardCorners + cornerSubPix (5x5 window, 100 iterations, epsilon 0.001)"
+}

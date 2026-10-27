@@ -1,0 +1,28 @@
+{
+  "accepted": [
+    "images/camera_image_raw_compressed-1793078087-901650267.png",
+    "images/camera_image_raw_compressed-1793078103-251243438.png",
+    "images/camera_image_raw_compressed-1793078111-886959529.png",
+    "images/camera_image_raw_compressed-1793078140-047531341.png",
+    "images/camera_image_raw_compressed-1793078150-581236285.png",
+    "images/camera_image_raw_compressed-1793078180-977229190.png",
+    "images/camera_image_raw_compressed-1793078194-410845643.png",
+    "images/camera_image_raw_compressed-1793078207-530514336.png",
+    "images/camera_image_raw_compressed-1793078231-181901931.png",
+    "images/camera_image_raw_compressed-1793078248-466698747.png",
+    "images/camera_image_raw_compressed-1793078267-965019469.png",
+    "images/camera_image_raw_compressed-1793078289-726879617.png",
+    "images/camera_image_raw_compressed-1793078300-590029769.png",
+    "images/camera_image_raw_compressed-1793078323-617208979.png"
+  ],
+  "rejected": [
+    {
+      "image": "images/camera_image_raw_compressed-1793078124-040019837.png",
+      "reason": "full chessboard not detected"
+    },
+    {
+      "image": "images/camera_image_raw_compressed-1793078314-041616118.png",
+      "reason": "full chessboard not detected"
+    }
+  ]
+}
