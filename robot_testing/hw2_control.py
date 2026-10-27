@@ -1080,7 +1080,7 @@ class ControlNode(Node):
         if self.state == 'tag3_pause_before_step5':
             self.stop_robot()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
-            if time_stopped < 1.5:
+            if time_stopped < 2:
                 return
 
             self.get_logger().info(
