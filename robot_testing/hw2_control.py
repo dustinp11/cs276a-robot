@@ -163,7 +163,7 @@ class ControlNode(Node):
         self.target_z_origin = math.hypot(self.tag5_x, self.tag5_y)
 
         self.tolerance = 0.035  # 3.5 cm tolerance
-        self.settle_time_s = 1.0  # 1s delay for camera stream to stabilize
+        self.settle_time_s = 0.7  # 1s delay for camera stream to stabilize
 
         # Calibrated parameters: on current surface, full 360-deg turn takes 3.75s
         self.turn_time_360_s = 3.75
@@ -938,7 +938,7 @@ class ControlNode(Node):
         if self.state == 'tag3_pause_before_step5':
             self.stop_robot()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
-            if time_stopped < 3.0:
+            if time_stopped < 1.5:
                 return
 
             self.get_logger().info(
@@ -1235,7 +1235,7 @@ class ControlNode(Node):
                     'Proceeding to turn 120 degrees CCW towards AprilTag 0...'
                 )
                 self.stop_robot()
-                self.align_target_angle = math.radians(120.0)
+                self.align_target_angle = math.radians(100.0)
                 self.align_direction = 1.0  # CCW
                 self.align_traveled_angle = 0.0
                 self.state = 'turn_120_ccw_to_tag0'
