@@ -13,7 +13,6 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/hw3.launch.py',
             'launch/hw3_manual.launch.py',
-            'launch/hw3_teleop.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/hw3_params.yaml',
