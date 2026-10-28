@@ -199,12 +199,154 @@ class ControlNode(Node):
         self.pose_future = None
         self.request_started = 0.0
 
+        # Coordinates logging: reset file on every run, record position every 1 second
+        self.coord_paths = [Path('coordinates.txt').resolve()]
+        repo_coord_path = (Path(__file__).resolve().parent.parent / 'coordinates.txt').resolve()
+        if repo_coord_path not in self.coord_paths:
+            self.coord_paths.append(repo_coord_path)
+
+        for path in self.coord_paths:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(path, 'w', encoding='utf-8') as f:
+                    pass
+            except Exception as e:
+                self.get_logger().warn(f'Failed to initialize coordinate file {path}: {e}')
+
+        self.coord_timer = self.create_timer(1.0, self.record_coordinates_tick)
+
         self.timer = self.create_timer(0.1, self.control_tick)
         self.get_logger().info(
             f'hw2_control initialized: Leg 1 to (1, 0), align Tag 1, Leg 2 to (1, 2). '
             f'Tag 0 x={self.tag0_x:.3f} m, Tag 1 y={self.tag1_y:.3f} m, '
-            f'Settle delay={self.settle_time_s:.1f}s.'
+            f'Settle delay={self.settle_time_s:.1f}s. Logging coordinates every 1s.'
         )
+
+    def get_estimated_position(self):
+        """Return (x, y) estimated position coordinates in meters."""
+        # 1. Prefer latest localization pose from hw2_localization if recent
+        if self.latest_robot_pose is not None:
+            if time.monotonic() - self.latest_robot_pose_time < 3.0:
+                px = self.latest_robot_pose.pose.position.x
+                py = self.latest_robot_pose.pose.position.y
+                if math.isfinite(px) and math.isfinite(py):
+                    return float(px), float(py)
+
+        # 2. State-based estimation using dead reckoning and tag depth measurements
+        hypot_1_2 = math.hypot(1.0, 2.0)
+        ux = -1.0 / hypot_1_2
+        uy = -2.0 / hypot_1_2
+
+        state = self.state
+
+        if state == 'initial_settling':
+            z = self.get_tag0_z_distance()
+            if z is not None:
+                return float(self.tag0_x - z), 0.0
+            return 0.0, 0.0
+
+        if state == 'driving_forward':
+            return float(self.distance_traveled), 0.0
+
+        if state == 'settling_and_checking':
+            z = self.get_tag0_z_distance()
+            if z is not None:
+                return float(self.tag0_x - z), 0.0
+            return 1.0, 0.0
+
+        if state in (
+            'turn_step_ccw_30',
+            'tag1_search_stopped_query',
+            'tag1_settling_and_measuring',
+            'tag1_rotating_to_align',
+        ):
+            return 1.0, 0.0
+
+        if state == 'driving_to_wp2_half':
+            return 1.0, float(self.distance_traveled)
+
+        if state in ('tag1_mid_settling_and_measuring', 'tag1_mid_rotating_to_align'):
+            z = self.get_tag1_z_distance()
+            if z is not None:
+                return 1.0, float(self.tag1_y - z)
+            return 1.0, 1.0
+
+        if state == 'driving_to_wp2_remaining':
+            return 1.0, float(1.0 + self.distance_traveled)
+
+        if state == 'settling_and_checking_wp2':
+            z = self.get_tag1_z_distance()
+            if z is not None:
+                return 1.0, float(self.tag1_y - z)
+            return 1.0, 2.0
+
+        if state == 'adjusting_wp2':
+            return 1.0, float(2.0 + self.adjust_direction * self.distance_traveled)
+
+        if state in (
+            'tag3_turn_step_ccw_30',
+            'tag3_search_stopped_query',
+            'tag3_settling_and_measuring',
+            'tag3_rotating_to_align',
+            'tag3_pause_before_step5',
+            'turn_63_ccw_to_tag5',
+            'tag5_settling_and_measuring',
+            'tag5_rotating_to_align',
+        ):
+            return 1.0, 2.0
+
+        if state == 'driving_to_origin_half':
+            return (
+                float(1.0 + ux * self.distance_traveled),
+                float(2.0 + uy * self.distance_traveled),
+            )
+
+        if state in ('tag5_mid_settling_and_measuring', 'tag5_mid_rotating_to_align'):
+            z = self.get_tag5_z_distance()
+            if z is not None:
+                dist_to_origin = z - self.target_z_origin
+                return float(-ux * dist_to_origin), float(-uy * dist_to_origin)
+            return float(1.0 + ux * 1.0), float(2.0 + uy * 1.0)
+
+        if state == 'driving_to_origin_remaining':
+            traveled = 1.0 + self.distance_traveled
+            return float(1.0 + ux * traveled), float(2.0 + uy * traveled)
+
+        if state == 'settling_and_checking_origin':
+            z = self.get_tag5_z_distance()
+            if z is not None:
+                dist_to_origin = z - self.target_z_origin
+                return float(-ux * dist_to_origin), float(-uy * dist_to_origin)
+            return 0.0, 0.0
+
+        if state == 'adjusting_origin':
+            offset = self.adjust_direction * self.distance_traveled
+            return float(-ux * offset), float(-uy * offset)
+
+        if state in (
+            'turn_120_ccw_to_tag0',
+            'tag0_final_settling_and_measuring',
+            'tag0_final_rotating_to_align',
+            'done',
+        ):
+            z = self.get_tag0_z_distance()
+            if z is not None:
+                return float(self.tag0_x - z), 0.0
+            return 0.0, 0.0
+
+        return 0.0, 0.0
+
+    def record_coordinates_tick(self):
+        """Print estimated position coordinate to coordinates.txt every 1 second."""
+        x, y = self.get_estimated_position()
+        coord_line = f'({x:.3f}, {y:.3f})\n'
+        for path in self.coord_paths:
+            try:
+                with open(path, 'a', encoding='utf-8') as f:
+                    f.write(coord_line)
+                    f.flush()
+            except Exception as e:
+                self.get_logger().warn(f'Failed to write coordinate to {path}: {e}')
 
     def stop_robot(self):
         """Halt all robot movement immediately."""
