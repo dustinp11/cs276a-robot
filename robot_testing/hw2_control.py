@@ -1,20 +1,22 @@
-"""Waypoint tracking to (1, 0) followed by 90-degree CCW turn from hw1_solution.
+"""Waypoint tracking to (1, 0) followed by 30-degree step search for AprilTag 1.
 
 Controls the robot in two sequential steps:
 1. Step 1: Forward-only navigation to (1.0, 0.0):
-   - Initial stationary check: waits 5 seconds for camera to stabilize, reads
+   - Initial stationary check: waits 3 seconds for camera to stabilize, reads
      AprilTag 0 z-distance (depth in front of camera).
    - Tag 0 is at x = 1.75 m; target depth at (1, 0) is z = 0.75 m.
    - Drives forward ONLY (angular.z strictly 0.0, no rotation).
-   - Once dead reckoning reaches target distance, halts and settles 5 seconds.
+   - Once dead reckoning reaches target distance, halts and settles 3 seconds.
    - Measures AprilTag 0 z-distance directly.
    - If short of (1, 0) (z > 0.75 m + tolerance), moves forward by the difference.
    - Repeats until tag z is within tolerance of 0.75 m.
 
-2. Step 2: Turn 90 degrees CCW:
-   - Rotates in-place 90 degrees CCW using the calibrated dead reckoning rotation
-     control from hw1_solution (angular_speed_ccw = 2 * pi / 5.2 rad/s).
-   - Halts and ends navigation when the 90-degree turn is complete.
+2. Step 2: Turn CCW until directly facing AprilTag 1:
+   - Rotates CCW in 30-degree increments using calibrated angular velocity
+     (full 360-degree turn takes 3.75s -> angular speed = 2 * pi / 3.75 rad/s).
+   - Stops and waits 3 seconds every 30 degrees to check for AprilTag 1.
+   - Once AprilTag 1 is detected, fine-aligns until directly facing AprilTag 1,
+     then halts and concludes navigation.
 """
 
 import json
@@ -26,6 +28,11 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from rclpy.node import Node
 from tf2_ros import Buffer, TransformListener
+
+try:
+    from apriltag_msgs.msg import AprilTagDetectionArray
+except ImportError:
+    AprilTagDetectionArray = None
 
 try:
     from hw2_interfaces.srv import GetRobotPose
@@ -62,7 +69,7 @@ def load_tag0_x():
 
 
 class ControlNode(Node):
-    """Controls forward-only translation to (1, 0) using AprilTag 0 z-distance."""
+    """Controls forward translation to (1, 0) and 10-deg CCW search for AprilTag 1."""
 
     def __init__(self):
         super().__init__('hw2_control')
@@ -71,6 +78,13 @@ class ControlNode(Node):
         self.pose_sub = self.create_subscription(
             PoseStamped, '/robot_pose', self.on_pose, 1
         )
+
+        if AprilTagDetectionArray is not None:
+            self.detection_sub = self.create_subscription(
+                AprilTagDetectionArray, '/detections', self.on_detections, 10
+            )
+        else:
+            self.detection_sub = None
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -87,14 +101,18 @@ class ControlNode(Node):
         # When robot is at target_x, depth to Tag 0 is (tag0_x - target_x)
         self.target_z = self.tag0_x - self.target_x
         self.tolerance = 0.035  # 3.5 cm tolerance
-        self.settle_time_s = 5.0  # 5s delay before polling localization for camera catchup
+        self.settle_time_s = 3.0  # 3s delay for camera stream to stabilize
 
-        # Calibrated parameters from robot_test.py / hw1_solution
-        self.angular_speed_cw = 2.0 * math.pi / 4.5
-        self.angular_speed_ccw = 2.0 * math.pi / 5.2
-        self.angle_tolerance = 0.1
-        self.current_yaw = 0.0
-        self.target_yaw = math.pi / 2.0
+        # Calibrated parameters: on current surface, full 360-deg turn takes 3.75s
+        self.turn_time_360_s = 3.75
+        self.angular_speed_cw = 2.0 * math.pi / self.turn_time_360_s
+        self.angular_speed_ccw = 2.0 * math.pi / self.turn_time_360_s
+        self.step_angle_rad = 30.0 * math.pi / 180.0  # 30 degrees per search step
+        self.turn_step_traveled = 0.0
+
+        # AprilTag 1 centering
+        self.latest_tag1_detection = None
+        self.tag1_centered_count = 0
 
         # Control and motion variables
         self.state = 'initial_settling'
@@ -111,14 +129,23 @@ class ControlNode(Node):
 
         self.timer = self.create_timer(0.1, self.control_tick)
         self.get_logger().info(
-            f'hw2_control initialized: Forward-only to (1, 0). '
-            f'Tag 0 x={self.tag0_x:.3f} m, Target Tag z={self.target_z:.3f} m, '
-            f'Tolerance={self.tolerance:.3f} m.'
+            f'hw2_control initialized: Forward to (1, 0), then 30-deg CCW search for Tag 1. '
+            f'Angular speed: {self.angular_speed_ccw:.3f} rad/s (3.75s per 360 deg).'
         )
 
     def stop_robot(self):
         """Halt all robot movement immediately."""
         self.cmd_pub.publish(Twist())
+
+    def on_detections(self, msg):
+        """Track detections of AprilTag 1."""
+        for det in msg.detections:
+            if det.id == 1:
+                self.latest_tag1_detection = {
+                    'cx': float(det.centre.x),
+                    'cy': float(det.centre.y),
+                    'time': time.monotonic(),
+                }
 
     def on_pose(self, msg):
         """Cache pose from /robot_pose topic."""
@@ -153,6 +180,21 @@ class ControlNode(Node):
 
         return None
 
+    def get_tag1_transform(self):
+        """Lookup AprilTag 1 transform in TF buffer."""
+        candidate_cam_frames = ('camera_frame', 'camera_link', 'camera_optical_frame')
+        candidate_tag_frames = ('tag_1', 'tag36h11:1', 'tag_36h11_1')
+        for cam in candidate_cam_frames:
+            for tag in candidate_tag_frames:
+                try:
+                    trans = self.tf_buffer.lookup_transform(
+                        cam, tag, rclpy.time.Time()
+                    )
+                    return trans
+                except Exception:
+                    continue
+        return None
+
     def request_localization_service(self):
         """Request fresh pose from /get_robot_pose service if available."""
         if self.pose_client is None or not self.pose_client.service_is_ready():
@@ -182,20 +224,51 @@ class ControlNode(Node):
         except Exception:
             pass
 
-    def get_rotation_direction(self, heading_error):
-        """Calibrated rotational velocity from hw1_solution."""
-        if heading_error > 0:
-            return self.angular_speed_ccw
-        else:
-            return -self.angular_speed_cw
+    def handle_centering_tag1(self, dt):
+        """Align robot rotation until directly facing AprilTag 1."""
+        twist = Twist()
+        twist.linear.x = 0.0
 
-    def update_dead_reckoning(self, linear_vel, angular_vel, dt):
-        """Propagate orientation estimate using dead reckoning from hw1_solution."""
-        self.current_yaw += angular_vel * dt
-        self.current_yaw = (self.current_yaw + math.pi) % (2.0 * math.pi) - math.pi
+        tag1_visible = False
+        pixel_error = None
+
+        if (self.latest_tag1_detection is not None and
+                time.monotonic() - self.latest_tag1_detection['time'] < 1.5):
+            tag1_visible = True
+            cx = self.latest_tag1_detection['cx']
+            pixel_error = cx - 640.0
+        else:
+            tf_trans = self.get_tag1_transform()
+            if tf_trans is not None:
+                tag1_visible = True
+                lx = tf_trans.transform.translation.x
+                pixel_error = lx * 1000.0
+
+        if tag1_visible and pixel_error is not None:
+            if abs(pixel_error) <= 35.0:
+                self.tag1_centered_count += 1
+                twist.angular.z = 0.0
+                if self.tag1_centered_count >= 2:
+                    self.stop_robot()
+                    self.get_logger().info(
+                        f'AprilTag 1 centered (pixel error: {pixel_error:.1f} px). '
+                        f'Directly facing AprilTag 1! Navigation complete.'
+                    )
+                    self.state = 'done'
+                    return
+            else:
+                self.tag1_centered_count = 0
+                if pixel_error < 0:
+                    twist.angular.z = float(self.angular_speed_ccw * 0.35)
+                else:
+                    twist.angular.z = float(-self.angular_speed_cw * 0.35)
+        else:
+            twist.angular.z = 0.0
+
+        self.cmd_pub.publish(twist)
 
     def control_tick(self):
-        """Main periodic control loop executing forward navigation and 90-deg CCW turn."""
+        """Main periodic control loop executing forward drive and AprilTag 1 search."""
         now = self.get_clock().now()
         dt = (now - self.last_tick).nanoseconds / 1e9
         self.last_tick = now
@@ -248,7 +321,6 @@ class ControlNode(Node):
                 self.stop_time = self.get_clock().now()
                 return
 
-            # Choose appropriate speed: moderate for long run, gentle for fine adjustments
             if self.target_drive_dist > 0.3:
                 speed = 0.35 if dist_remaining > 0.15 else 0.18
             else:
@@ -281,12 +353,11 @@ class ControlNode(Node):
                     self.get_logger().info(
                         f'Waypoint (1, 0) reached within tolerance! '
                         f'Final tag z = {z:.3f} m (error: {error:+.3f} m). '
-                        f'Step 2: Turning 90 degrees CCW via hw1_solution rotation...'
+                        f'Step 2: Searching for AprilTag 1 in 30-degree CCW steps...'
                     )
                     self.stop_robot()
-                    self.current_yaw = 0.0
-                    self.target_yaw = math.pi / 2.0
-                    self.state = 'turning_90_ccw'
+                    self.turn_step_traveled = 0.0
+                    self.state = 'turn_step_ccw_30'
                 elif error > self.tolerance:
                     self.get_logger().info(
                         f'Robot is {error:.3f} m short of (1, 0). '
@@ -298,12 +369,11 @@ class ControlNode(Node):
                 else:
                     self.get_logger().info(
                         f'Robot reached (1, 0) (tag z={z:.3f} m <= {self.target_z:.3f} m). '
-                        f'Step 2: Turning 90 degrees CCW via hw1_solution rotation...'
+                        f'Step 2: Searching for AprilTag 1 in 30-degree CCW steps...'
                     )
                     self.stop_robot()
-                    self.current_yaw = 0.0
-                    self.target_yaw = math.pi / 2.0
-                    self.state = 'turning_90_ccw'
+                    self.turn_step_traveled = 0.0
+                    self.state = 'turn_step_ccw_30'
                 return
 
             if time_stopped > (self.settle_time_s + 5.0):
@@ -312,25 +382,60 @@ class ControlNode(Node):
                 )
             return
 
-        # Phase 4: Turn 90 degrees CCW based on hw1_solution dead reckoning rotation
-        if self.state == 'turning_90_ccw':
-            heading_error = self.target_yaw - self.current_yaw
-            heading_error = (heading_error + math.pi) % (2.0 * math.pi) - math.pi
-
-            if abs(heading_error) < self.angle_tolerance:
-                self.stop_robot()
-                self.get_logger().info(
-                    f'Turned 90 degrees CCW (yaw={self.current_yaw:.3f} rad). '
-                    f'Navigation complete.'
-                )
-                self.state = 'done'
-                return
-
+        # Phase 4: Step turn 30 degrees CCW to search for AprilTag 1
+        if self.state == 'turn_step_ccw_30':
             twist = Twist()
             twist.linear.x = 0.0
-            twist.angular.z = float(self.get_rotation_direction(heading_error))
-            self.update_dead_reckoning(0.0, twist.angular.z, dt)
+            v_ang = float(self.angular_speed_ccw)
+            twist.angular.z = v_ang
+            step_dt = v_ang * dt
+            self.turn_step_traveled += step_dt
             self.cmd_pub.publish(twist)
+
+            if self.turn_step_traveled >= self.step_angle_rad:
+                self.stop_robot()
+                self.get_logger().info(
+                    'Turned 30 degrees CCW. Stopping for 3s delay to check for AprilTag 1...'
+                )
+                self.state = 'tag1_search_stopped_query'
+                self.stop_time = self.get_clock().now()
+            return
+
+        # Phase 5: Stationary query after 30-degree spin
+        if self.state == 'tag1_search_stopped_query':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped < self.settle_time_s:
+                return
+
+            self.request_localization_service()
+            tag1_seen = False
+            if (self.latest_tag1_detection is not None and
+                    time.monotonic() - self.latest_tag1_detection['time'] < 2.0):
+                tag1_seen = True
+            elif self.get_tag1_transform() is not None:
+                tag1_seen = True
+
+            if tag1_seen:
+                self.get_logger().info(
+                    'AprilTag 1 acquired! Fine-aligning until directly facing AprilTag 1...'
+                )
+                self.tag1_centered_count = 0
+                self.state = 'centering_tag1'
+                return
+
+            if time_stopped > (self.settle_time_s + 2.0):
+                self.get_logger().info(
+                    'AprilTag 1 not visible at this angle after 3s delay. '
+                    'Turning CCW another 30 degrees...'
+                )
+                self.turn_step_traveled = 0.0
+                self.state = 'turn_step_ccw_30'
+            return
+
+        # Phase 6: Fine-align until directly facing AprilTag 1
+        if self.state == 'centering_tag1':
+            self.handle_centering_tag1(dt)
             return
 
 
