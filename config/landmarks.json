@@ -1,0 +1,42 @@
+{
+  "surveyed": false,
+  "map_frame": "map",
+  "camera_frame": "camera_frame",
+  "camera_mount": {
+    "x_m": 0.0,
+    "y_m": 0.0,
+    "z_m": 0.2,
+    "roll_deg": 0.0,
+    "pitch_deg": 0.0,
+    "yaw_deg": 0.0
+  },
+  "quality": {
+    "min_decision_margin": 20.0,
+    "max_hamming": 1,
+    "max_tag_distance_m": 5.0,
+    "max_height_error_m": 0.2,
+    "max_tilt_deg": 20.0,
+    "max_disagreement_m": 0.25,
+    "max_disagreement_deg": 20.0
+  },
+  "landmarks": [
+    {
+      "id": 0,
+      "family": "36h11",
+      "frame": "tag_0",
+      "x_m": 1.0,
+      "y_m": 0.0,
+      "z_m": 0.2,
+      "facing_deg": 180.0
+    },
+    {
+      "id": 1,
+      "family": "36h11",
+      "frame": "tag_1",
+      "x_m": 1.0,
+      "y_m": 2.0,
+      "z_m": 0.2,
+      "facing_deg": 270.0
+    }
+  ]
+}
