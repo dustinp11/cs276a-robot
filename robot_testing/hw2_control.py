@@ -1,6 +1,6 @@
-"""Waypoint tracking to (1, 0), align to AprilTag 1, and traverse to (1, 2).
+"""Waypoint tracking to (1, 0), align to Tag 1, traverse to (1, 2), and loop to (0, 0).
 
-Controls the robot through three sequential steps:
+Controls the robot through seven sequential steps:
 1. Step 1: Forward-only navigation to (1.0, 0.0):
    - Initial stationary check: waits 1 second for camera to stabilize, reads
      AprilTag 0 z-distance (depth in front of camera).
@@ -32,6 +32,27 @@ Controls the robot through three sequential steps:
      - Repeats until within tolerance.
    - If AprilTag 1 is no longer visible: prints that it can no longer see the
      AprilTag, and ends navigation.
+
+4. Step 4: Turn 90 degrees CCW towards AprilTag 3 (ID 3):
+   - Uses exact same 30-degree CCW search steps as Step 2 with 1s settling.
+   - Fine-adjusts with 1s delay in between turns until directly facing AprilTag 3.
+   - Prints "facing apriltag3" in terminal.
+
+5. Step 5: Turn 63 degrees CCW towards AprilTag 5 (ID 5):
+   - Rotates 63 degrees CCW, settles 1s.
+   - Fine-adjusts with 1s delay in between turns until directly facing AprilTag 5.
+
+6. Step 6: Navigation 2.23 m back towards (0, 0):
+   - Moves forward 1.0 m towards AprilTag 5 via dead reckoning.
+   - Halts and settles 1 second to re-center towards AprilTag 5 (1s delay between turns).
+   - Determines localization distance to (0, 0) from AprilTag 5 z-distance.
+   - Drives forward remaining distance to (0, 0).
+   - Settles 1 second at (0, 0) and adjusts forward or backward until within tolerance.
+
+7. Step 7: Turn 120 degrees CCW towards AprilTag 0 (ID 0):
+   - Rotates 120 degrees CCW, settles 1s.
+   - Fine-adjusts with 1s delay in between turns until AprilTag 0 is center.
+   - Ends navigation.
 """
 
 import json
@@ -56,9 +77,13 @@ except ImportError:
 
 
 def load_landmarks():
-    """Load surveyed coordinates for Tag 0 (x) and Tag 1 (y) from landmarks.json."""
+    """Load surveyed coordinates for landmarks from landmarks.json."""
     tag0_x = 1.75
     tag1_y = 2.2
+    tag3_x = -0.4
+    tag3_y = 2.0
+    tag5_x = -0.14
+    tag5_y = -0.29
     possible_paths = [
         Path(__file__).resolve().parent.parent / 'config' / 'landmarks.json',
         Path('config/landmarks.json'),
@@ -78,14 +103,21 @@ def load_landmarks():
                 with open(path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     for lm in data.get('landmarks', []):
-                        if lm.get('id') == 0:
+                        lid = lm.get('id')
+                        if lid == 0:
                             tag0_x = float(lm.get('x_m', 1.75))
-                        elif lm.get('id') == 1:
+                        elif lid == 1:
                             tag1_y = float(lm.get('y_m', 2.2))
-                    return tag0_x, tag1_y
+                        elif lid == 3:
+                            tag3_x = float(lm.get('x_m', -0.4))
+                            tag3_y = float(lm.get('y_m', 2.0))
+                        elif lid == 5:
+                            tag5_x = float(lm.get('x_m', -0.14))
+                            tag5_y = float(lm.get('y_m', -0.29))
+                    return tag0_x, tag1_y, tag3_x, tag3_y, tag5_x, tag5_y
             except Exception:
                 pass
-    return tag0_x, tag1_y
+    return tag0_x, tag1_y, tag3_x, tag3_y, tag5_x, tag5_y
 
 
 class ControlNode(Node):
@@ -115,12 +147,20 @@ class ControlNode(Node):
         else:
             self.get_logger().info('hw2_interfaces not found; relying on TF and /robot_pose.')
 
-        # Target definitions for waypoint 1 (1, 0) and waypoint 2 (1, 2)
-        self.tag0_x, self.tag1_y = load_landmarks()
+        # Target definitions for landmarks and waypoints
+        (
+            self.tag0_x,
+            self.tag1_y,
+            self.tag3_x,
+            self.tag3_y,
+            self.tag5_x,
+            self.tag5_y,
+        ) = load_landmarks()
         self.target_x_wp1 = 1.0
         self.target_z_wp1 = self.tag0_x - self.target_x_wp1
         self.target_y_wp2 = 2.0
         self.target_z_wp2 = self.tag1_y - self.target_y_wp2
+        self.target_z_origin = math.hypot(self.tag5_x, self.tag5_y)
 
         self.tolerance = 0.035  # 3.5 cm tolerance
         self.settle_time_s = 1.0  # 1s delay for camera stream to stabilize
@@ -132,7 +172,8 @@ class ControlNode(Node):
         self.step_angle_rad = 30.0 * math.pi / 180.0  # 30 degrees per search step
         self.turn_step_traveled = 0.0
 
-        # AprilTag 1 fine-alignment tracking (ID 1 ONLY)
+        # AprilTag tracking
+        self.latest_tag_detections = {}
         self.latest_tag1_detection = None
         self.align_target_angle = 0.0
         self.align_traveled_angle = 0.0
@@ -170,52 +211,30 @@ class ControlNode(Node):
         self.cmd_pub.publish(Twist())
 
     def on_detections(self, msg):
-        """Track detections of AprilTag 1 ONLY; ignore all other tags."""
+        """Track detections of all AprilTags."""
         for det in msg.detections:
+            info = {
+                'cx': float(det.centre.x),
+                'cy': float(det.centre.y),
+                'time': time.monotonic(),
+            }
+            self.latest_tag_detections[det.id] = info
             if det.id == 1:
-                self.latest_tag1_detection = {
-                    'cx': float(det.centre.x),
-                    'cy': float(det.centre.y),
-                    'time': time.monotonic(),
-                }
+                self.latest_tag1_detection = info
 
     def on_pose(self, msg):
         """Cache pose from /robot_pose topic."""
         self.latest_robot_pose = msg
         self.latest_robot_pose_time = time.monotonic()
 
-    def get_tag0_z_distance(self):
-        """Lookup AprilTag 0 z-distance (depth in front of camera) via TF or pose."""
-        # 1. Direct TF lookup: camera frame -> tag_0 frame
+    def get_tag_transform(self, tag_id):
+        """Lookup AprilTag transform in TF buffer for a given tag ID."""
         candidate_cam_frames = ('camera_frame', 'camera_link', 'camera_optical_frame')
-        candidate_tag_frames = ('tag_0', 'tag36h11:0', 'tag_36h11_0')
-        for cam in candidate_cam_frames:
-            for tag in candidate_tag_frames:
-                try:
-                    trans = self.tf_buffer.lookup_transform(
-                        cam, tag, rclpy.time.Time()
-                    )
-                    z = float(trans.transform.translation.z)
-                    if math.isfinite(z) and 0.1 < z < 10.0:
-                        return z
-                except Exception:
-                    continue
-
-        # 2. Fallback: check /robot_pose topic if recent
-        if self.latest_robot_pose is not None:
-            if time.monotonic() - self.latest_robot_pose_time < 3.0:
-                px = self.latest_robot_pose.pose.position.x
-                if math.isfinite(px):
-                    z = self.tag0_x - px
-                    if 0.1 < z < 10.0:
-                        return z
-
-        return None
-
-    def get_tag1_transform(self):
-        """Lookup AprilTag 1 transform in TF buffer (ID 1 ONLY)."""
-        candidate_cam_frames = ('camera_frame', 'camera_link', 'camera_optical_frame')
-        candidate_tag_frames = ('tag_1', 'tag36h11:1', 'tag_36h11_1')
+        candidate_tag_frames = (
+            f'tag_{tag_id}',
+            f'tag36h11:{tag_id}',
+            f'tag_36h11_{tag_id}',
+        )
         for cam in candidate_cam_frames:
             for tag in candidate_tag_frames:
                 try:
@@ -227,10 +246,10 @@ class ControlNode(Node):
                     continue
         return None
 
-    def get_tag1_z_distance(self):
-        """Lookup AprilTag 1 z-distance (depth in front of camera) via TF or pose."""
-        # 1. Direct TF lookup: camera frame -> tag_1 frame
-        tf_trans = self.get_tag1_transform()
+    def get_tag_z_distance(self, tag_id):
+        """Lookup AprilTag z-distance (depth in front of camera) via TF or pose."""
+        # 1. Direct TF lookup: camera frame -> tag frame
+        tf_trans = self.get_tag_transform(tag_id)
         if tf_trans is not None:
             z = float(tf_trans.transform.translation.z)
             if math.isfinite(z) and 0.05 < z < 10.0:
@@ -238,33 +257,41 @@ class ControlNode(Node):
 
         # 2. Fallback: check /robot_pose topic if recent
         if self.latest_robot_pose is not None:
-            if time.monotonic() - self.latest_robot_pose_time < 2.0:
+            if time.monotonic() - self.latest_robot_pose_time < 3.0:
+                px = self.latest_robot_pose.pose.position.x
                 py = self.latest_robot_pose.pose.position.y
-                if math.isfinite(py):
+                if tag_id == 0 and math.isfinite(px):
+                    z = self.tag0_x - px
+                    if 0.1 < z < 10.0:
+                        return z
+                elif tag_id == 1 and math.isfinite(py):
                     z = self.tag1_y - py
+                    if 0.05 < z < 10.0:
+                        return z
+                elif tag_id == 5 and math.isfinite(px) and math.isfinite(py):
+                    z = math.hypot(self.tag5_x - px, self.tag5_y - py)
                     if 0.05 < z < 10.0:
                         return z
 
         return None
 
-    def get_tag1_bearing_error(self):
+    def get_tag_bearing_error(self, tag_id):
         """
-        Calculate bearing error to AprilTag 1 in radians and pixel offset.
+        Calculate bearing error to specified AprilTag in radians and pixel offset.
         Positive -> tag is to the left (robot needs to turn CCW).
         Negative -> tag is to the right (robot needs to turn CW).
         Returns (bearing_rad, pixel_error) or (None, None).
         """
-        # 1. Check pixel detection on /detections (AprilTag 1 ONLY)
         now = time.monotonic()
-        if (self.latest_tag1_detection is not None and
-                now - self.latest_tag1_detection['time'] < 2.0):
-            cx = self.latest_tag1_detection['cx']
+        det = self.latest_tag_detections.get(tag_id)
+        if det is not None and now - det['time'] < 2.0:
+            cx = det['cx']
             bearing_rad = math.atan2(640.0 - cx, 491.0)
             pixel_error = cx - 640.0
             return bearing_rad, pixel_error
 
-        # 2. Check TF transform for tag_1 ONLY
-        tf_trans = self.get_tag1_transform()
+        # Fallback: check TF transform
+        tf_trans = self.get_tag_transform(tag_id)
         if tf_trans is not None:
             lx = tf_trans.transform.translation.x
             lz = tf_trans.transform.translation.z
@@ -274,6 +301,38 @@ class ControlNode(Node):
                 return bearing_rad, pixel_error
 
         return None, None
+
+    def get_tag0_z_distance(self):
+        """Lookup AprilTag 0 z-distance."""
+        return self.get_tag_z_distance(0)
+
+    def get_tag1_transform(self):
+        """Lookup AprilTag 1 transform in TF buffer."""
+        return self.get_tag_transform(1)
+
+    def get_tag1_z_distance(self):
+        """Lookup AprilTag 1 z-distance."""
+        return self.get_tag_z_distance(1)
+
+    def get_tag5_z_distance(self):
+        """Lookup AprilTag 5 z-distance."""
+        return self.get_tag_z_distance(5)
+
+    def get_tag0_bearing_error(self):
+        """Bearing error to AprilTag 0."""
+        return self.get_tag_bearing_error(0)
+
+    def get_tag1_bearing_error(self):
+        """Bearing error to AprilTag 1."""
+        return self.get_tag_bearing_error(1)
+
+    def get_tag3_bearing_error(self):
+        """Bearing error to AprilTag 3."""
+        return self.get_tag_bearing_error(3)
+
+    def get_tag5_bearing_error(self):
+        """Bearing error to AprilTag 5."""
+        return self.get_tag_bearing_error(5)
 
     def request_localization_service(self):
         """Request fresh pose from /get_robot_pose service if available."""
@@ -703,10 +762,13 @@ class ControlNode(Node):
                 if abs(error) <= self.tolerance:
                     self.get_logger().info(
                         f'Waypoint (1, 2) reached within tolerance! '
-                        f'Final tag z = {z:.3f} m (error: {error:+.3f} m). Navigation complete.'
+                        f'Final tag z = {z:.3f} m (error: {error:+.3f} m). '
+                        f'Step 4: Searching for AprilTag 3 in 30-degree CCW steps...'
                     )
                     self.stop_robot()
-                    self.state = 'done'
+                    self.turn_step_traveled = 0.0
+                    self.state = 'tag3_turn_step_ccw_30'
+                    return
                 elif error > self.tolerance:
                     self.get_logger().info(
                         f'Robot is {error:.3f} m short of (1, 2). '
@@ -755,6 +817,523 @@ class ControlNode(Node):
             twist.angular.z = 0.0
             self.cmd_pub.publish(twist)
             self.distance_traveled += 0.15 * dt
+            return
+
+        # Phase 14: Step turn 30 degrees CCW to search for AprilTag 3
+        if self.state == 'tag3_turn_step_ccw_30':
+            twist = Twist()
+            twist.linear.x = 0.0
+            v_ang = float(self.angular_speed_ccw)
+            twist.angular.z = v_ang
+            step_dt = v_ang * dt
+            self.turn_step_traveled += step_dt
+            self.cmd_pub.publish(twist)
+
+            if self.turn_step_traveled >= self.step_angle_rad:
+                self.stop_robot()
+                self.get_logger().info(
+                    f'Turned 30 degrees CCW. Stopping for {self.settle_time_s:.1f}s '
+                    f'delay to check for AprilTag 3...'
+                )
+                self.state = 'tag3_search_stopped_query'
+                self.stop_time = self.get_clock().now()
+            return
+
+        # Phase 15: Stationary query after 30-degree spin for AprilTag 3
+        if self.state == 'tag3_search_stopped_query':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped < self.settle_time_s:
+                return
+
+            self.request_localization_service()
+            bearing_rad, pixel_err = self.get_tag3_bearing_error()
+            if bearing_rad is not None:
+                self.get_logger().info(
+                    f'AprilTag 3 acquired! Pixel offset: {pixel_err:.1f} px, '
+                    f'bearing: {math.degrees(bearing_rad):.1f} deg. '
+                    f'Settling {self.settle_time_s:.1f}s before starting fine alignment...'
+                )
+                self.stop_robot()
+                self.state = 'tag3_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
+                return
+
+            if time_stopped > (self.settle_time_s + 2.0):
+                self.get_logger().info(
+                    f'AprilTag 3 not visible at this angle after {self.settle_time_s:.1f}s delay. '
+                    f'Turning CCW another 30 degrees...'
+                )
+                self.turn_step_traveled = 0.0
+                self.state = 'tag3_turn_step_ccw_30'
+            return
+
+        # Phase 16: Settle 1s and measure exact angle off from AprilTag 3
+        if self.state == 'tag3_settling_and_measuring':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped < self.settle_time_s:
+                return
+
+            bearing_rad, pixel_err = self.get_tag3_bearing_error()
+            if bearing_rad is not None:
+                deg_off = math.degrees(abs(bearing_rad))
+                self.get_logger().info(
+                    f'Stationary AprilTag 3 measurement: pixel offset={pixel_err:.1f} px, '
+                    f'angle off={deg_off:.1f} deg.'
+                )
+
+                if (abs(pixel_err) <= self.tag1_align_pixel_tolerance or
+                        abs(bearing_rad) <= self.tag1_align_tolerance_rad):
+                    self.stop_robot()
+                    print('facing apriltag3')
+                    self.get_logger().info('facing apriltag3')
+                    self.get_logger().info(
+                        'Step 5: Turning 63 degrees CCW towards AprilTag 5...'
+                    )
+                    self.align_target_angle = math.radians(63.0)
+                    self.align_direction = 1.0  # CCW
+                    self.align_traveled_angle = 0.0
+                    self.state = 'turn_63_ccw_to_tag5'
+                    return
+
+                self.align_target_angle = abs(bearing_rad)
+                self.align_direction = 1.0 if bearing_rad > 0 else -1.0
+                self.align_traveled_angle = 0.0
+                direction_str = 'CCW (left)' if self.align_direction > 0 else 'CW (right)'
+                self.get_logger().info(
+                    f'Turning {deg_off:.1f} degrees {direction_str} towards AprilTag 3...'
+                )
+                self.state = 'tag3_rotating_to_align'
+                return
+
+            if time_stopped > (self.settle_time_s + 3.0):
+                self.get_logger().warn(
+                    'Lost AprilTag 3 during settling. Resuming 30-degree CCW search...'
+                )
+                self.turn_step_traveled = 0.0
+                self.state = 'tag3_turn_step_ccw_30'
+            return
+
+        # Phase 17: Rotate ONLY target angle towards AprilTag 3, then stop and wait 1s
+        if self.state == 'tag3_rotating_to_align':
+            twist = Twist()
+            twist.linear.x = 0.0
+            v_ang = float(self.align_direction * self.angular_speed_ccw)
+            twist.angular.z = v_ang
+            step_dt = abs(v_ang) * dt
+            self.align_traveled_angle += step_dt
+            self.cmd_pub.publish(twist)
+
+            if self.align_traveled_angle >= self.align_target_angle:
+                self.stop_robot()
+                traveled_deg = math.degrees(self.align_traveled_angle)
+                self.get_logger().info(
+                    f'Completed fine rotation of {traveled_deg:.1f} deg towards Tag 3. '
+                    f'Stopping for {self.settle_time_s:.1f}s settling delay before checking tag...'
+                )
+                self.state = 'tag3_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
+            return
+
+        # Phase 18: Turn 63 degrees CCW towards AprilTag 5
+        if self.state == 'turn_63_ccw_to_tag5':
+            twist = Twist()
+            twist.linear.x = 0.0
+            v_ang = float(self.angular_speed_ccw)
+            twist.angular.z = v_ang
+            step_dt = v_ang * dt
+            self.align_traveled_angle += step_dt
+            self.cmd_pub.publish(twist)
+
+            if self.align_traveled_angle >= self.align_target_angle:
+                self.stop_robot()
+                self.get_logger().info(
+                    f'Turned 63 degrees CCW. Stopping for {self.settle_time_s:.1f}s '
+                    f'delay before fine-adjusting to AprilTag 5...'
+                )
+                self.state = 'tag5_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
+            return
+
+        # Phase 19: Settle 1s and fine-adjust towards AprilTag 5
+        if self.state == 'tag5_settling_and_measuring':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped < self.settle_time_s:
+                return
+
+            self.request_localization_service()
+            bearing_rad, pixel_err = self.get_tag5_bearing_error()
+            if bearing_rad is not None:
+                deg_off = math.degrees(abs(bearing_rad))
+                self.get_logger().info(
+                    f'Stationary AprilTag 5 measurement: pixel offset={pixel_err:.1f} px, '
+                    f'angle off={deg_off:.1f} deg.'
+                )
+
+                if (abs(pixel_err) <= self.tag1_align_pixel_tolerance or
+                        abs(bearing_rad) <= self.tag1_align_tolerance_rad):
+                    self.stop_robot()
+                    self.get_logger().info(
+                        f'Directly facing AprilTag 5 within tolerance! '
+                        f'(offset: {pixel_err:.1f} px, {deg_off:.1f} deg <= '
+                        f'{self.tag1_align_tolerance_deg:.1f} deg).'
+                    )
+                    self.get_logger().info(
+                        'Step 6: Moving forward 1.0 m towards (0, 0) via dead reckoning...'
+                    )
+                    self.target_drive_dist = 1.0
+                    self.distance_traveled = 0.0
+                    self.state = 'driving_to_origin_half'
+                    return
+
+                self.align_target_angle = abs(bearing_rad)
+                self.align_direction = 1.0 if bearing_rad > 0 else -1.0
+                self.align_traveled_angle = 0.0
+                direction_str = 'CCW (left)' if self.align_direction > 0 else 'CW (right)'
+                self.get_logger().info(
+                    f'Fine-adjusting: turning {deg_off:.1f} degrees {direction_str} '
+                    f'towards AprilTag 5...'
+                )
+                self.state = 'tag5_rotating_to_align'
+                return
+
+            if time_stopped > (self.settle_time_s + 3.0):
+                self.get_logger().warn(
+                    'AprilTag 5 not detected after 63-deg turn. '
+                    'Proceeding with 1.0 m forward drive towards (0, 0)...'
+                )
+                self.target_drive_dist = 1.0
+                self.distance_traveled = 0.0
+                self.state = 'driving_to_origin_half'
+            return
+
+        # Phase 20: Rotate ONLY target angle towards AprilTag 5, then stop and wait 1s
+        if self.state == 'tag5_rotating_to_align':
+            twist = Twist()
+            twist.linear.x = 0.0
+            v_ang = float(self.align_direction * self.angular_speed_ccw)
+            twist.angular.z = v_ang
+            step_dt = abs(v_ang) * dt
+            self.align_traveled_angle += step_dt
+            self.cmd_pub.publish(twist)
+
+            if self.align_traveled_angle >= self.align_target_angle:
+                self.stop_robot()
+                traveled_deg = math.degrees(self.align_traveled_angle)
+                self.get_logger().info(
+                    f'Completed fine rotation of {traveled_deg:.1f} deg towards Tag 5. '
+                    f'Stopping for {self.settle_time_s:.1f}s settling delay before checking tag...'
+                )
+                self.state = 'tag5_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
+            return
+
+        # Phase 21: Drive forward 1.0 m towards AprilTag 5 via dead reckoning
+        if self.state == 'driving_to_origin_half':
+            dist_remaining = self.target_drive_dist - self.distance_traveled
+            if dist_remaining <= 0.005:
+                self.stop_robot()
+                self.get_logger().info(
+                    f'Completed 1.0 m intermediate drive towards (0, 0) '
+                    f'(traveled {self.distance_traveled:.3f} m). '
+                    f'Stopping for {self.settle_time_s:.1f}s delay before re-centering on Tag 5...'
+                )
+                self.state = 'tag5_mid_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
+                return
+
+            if self.target_drive_dist > 0.3:
+                speed = 0.35 if dist_remaining > 0.15 else 0.18
+            else:
+                speed = 0.15
+
+            twist = Twist()
+            twist.linear.x = float(speed)
+            twist.angular.z = 0.0  # Forward ONLY towards AprilTag 5
+            self.cmd_pub.publish(twist)
+            self.distance_traveled += speed * dt
+            return
+
+        # Phase 22: Settle 1s at 1m mark, check center on Tag 5, or determine distance to (0, 0)
+        if self.state == 'tag5_mid_settling_and_measuring':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped < self.settle_time_s:
+                return
+
+            self.request_localization_service()
+            bearing_rad, pixel_err = self.get_tag5_bearing_error()
+
+            if bearing_rad is not None:
+                deg_off = math.degrees(abs(bearing_rad))
+                self.get_logger().info(
+                    f'Intermediate AprilTag 5 measurement: offset={pixel_err:.1f} px, '
+                    f'angle off={deg_off:.1f} deg.'
+                )
+
+                if (abs(pixel_err) <= self.tag1_align_pixel_tolerance or
+                        abs(bearing_rad) <= self.tag1_align_tolerance_rad):
+                    self.stop_robot()
+                    z = self.get_tag5_z_distance()
+                    if z is not None:
+                        remaining_dist = z - self.target_z_origin
+                        self.get_logger().info(
+                            f'Centered towards AprilTag 5! Tag 5 z={z:.3f} m, '
+                            f'target z={self.target_z_origin:.3f} m. '
+                            f'Localization distance to (0, 0): {remaining_dist:.3f} m.'
+                        )
+                        self.target_drive_dist = max(0.0, remaining_dist)
+                        self.distance_traveled = 0.0
+                        self.state = 'driving_to_origin_remaining'
+                        return
+                    elif time_stopped > (self.settle_time_s + 2.0):
+                        self.get_logger().warn(
+                            'Tag 5 depth not resolved; using nominal 1.23 m remaining distance.'
+                        )
+                        self.target_drive_dist = 1.23
+                        self.distance_traveled = 0.0
+                        self.state = 'driving_to_origin_remaining'
+                        return
+                    return
+
+                self.align_target_angle = abs(bearing_rad)
+                self.align_direction = 1.0 if bearing_rad > 0 else -1.0
+                self.align_traveled_angle = 0.0
+                direction_str = 'CCW (left)' if self.align_direction > 0 else 'CW (right)'
+                self.get_logger().info(
+                    f'Re-centering at 1m mark: turning {deg_off:.1f} deg {direction_str} '
+                    f'towards AprilTag 5...'
+                )
+                self.state = 'tag5_mid_rotating_to_align'
+                return
+
+            if time_stopped > (self.settle_time_s + 2.0):
+                self.get_logger().warn(
+                    'AprilTag 5 not seen at 1m mark; driving remaining 1.23 m towards (0, 0)...'
+                )
+                self.target_drive_dist = 1.23
+                self.distance_traveled = 0.0
+                self.state = 'driving_to_origin_remaining'
+            return
+
+        # Phase 23: Intermediate rotate to align with AprilTag 5, then settle 1s
+        if self.state == 'tag5_mid_rotating_to_align':
+            twist = Twist()
+            twist.linear.x = 0.0
+            v_ang = float(self.align_direction * self.angular_speed_ccw)
+            twist.angular.z = v_ang
+            step_dt = abs(v_ang) * dt
+            self.align_traveled_angle += step_dt
+            self.cmd_pub.publish(twist)
+
+            if self.align_traveled_angle >= self.align_target_angle:
+                self.stop_robot()
+                traveled_deg = math.degrees(self.align_traveled_angle)
+                self.get_logger().info(
+                    f'Completed intermediate turn of {traveled_deg:.1f} deg towards Tag 5. '
+                    f'Stopping for {self.settle_time_s:.1f}s settling delay before checking tag...'
+                )
+                self.state = 'tag5_mid_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
+            return
+
+        # Phase 24: Drive remaining distance to (0, 0)
+        if self.state == 'driving_to_origin_remaining':
+            dist_remaining = self.target_drive_dist - self.distance_traveled
+            if dist_remaining <= 0.005:
+                self.stop_robot()
+                self.get_logger().info(
+                    f'Completed remaining drive of {self.distance_traveled:.3f} m to (0, 0). '
+                    f'Stopping for {self.settle_time_s:.1f}s settling delay to verify position...'
+                )
+                self.state = 'settling_and_checking_origin'
+                self.stop_time = self.get_clock().now()
+                return
+
+            if self.target_drive_dist > 0.3:
+                speed = 0.35 if dist_remaining > 0.15 else 0.18
+            else:
+                speed = 0.15
+
+            twist = Twist()
+            twist.linear.x = float(speed)
+            twist.angular.z = 0.0  # Forward ONLY towards AprilTag 5
+            self.cmd_pub.publish(twist)
+            self.distance_traveled += speed * dt
+            return
+
+        # Phase 25: Settle 1s at (0, 0); verify position with Tag 5 z-distance
+        if self.state == 'settling_and_checking_origin':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped < self.settle_time_s:
+                return
+
+            self.request_localization_service()
+            z = self.get_tag5_z_distance()
+
+            if z is not None:
+                error = z - self.target_z_origin
+                self.get_logger().info(
+                    f'Stationary AprilTag 5 z distance: {z:.3f} m '
+                    f'(target: {self.target_z_origin:.3f} m, error: {error:+.3f} m).'
+                )
+
+                if abs(error) <= self.tolerance:
+                    self.get_logger().info(
+                        f'Waypoint (0, 0) reached within tolerance! '
+                        f'Final tag z = {z:.3f} m (error: {error:+.3f} m). '
+                        f'Step 7: Turning 120 degrees CCW towards AprilTag 0...'
+                    )
+                    self.stop_robot()
+                    self.align_target_angle = math.radians(120.0)
+                    self.align_direction = 1.0  # CCW
+                    self.align_traveled_angle = 0.0
+                    self.state = 'turn_120_ccw_to_tag0'
+                    return
+                elif error > self.tolerance:
+                    self.get_logger().info(
+                        f'Robot is {error:.3f} m short of (0, 0). '
+                        f'Moving forward {error:.3f} m to reach position...'
+                    )
+                    self.target_drive_dist = error
+                    self.adjust_direction = 1.0
+                    self.distance_traveled = 0.0
+                    self.state = 'adjusting_origin'
+                    return
+                else:
+                    overshoot = abs(error)
+                    self.get_logger().info(
+                        f'Robot overshot (0, 0) by {overshoot:.3f} m. '
+                        f'Moving backward {overshoot:.3f} m to reach position...'
+                    )
+                    self.target_drive_dist = overshoot
+                    self.adjust_direction = -1.0
+                    self.distance_traveled = 0.0
+                    self.state = 'adjusting_origin'
+                    return
+
+            if time_stopped > (self.settle_time_s + 2.0):
+                self.get_logger().warn(
+                    'AprilTag 5 not detected during origin check. '
+                    'Proceeding to turn 120 degrees CCW towards AprilTag 0...'
+                )
+                self.stop_robot()
+                self.align_target_angle = math.radians(120.0)
+                self.align_direction = 1.0  # CCW
+                self.align_traveled_angle = 0.0
+                self.state = 'turn_120_ccw_to_tag0'
+            return
+
+        # Phase 26: Fine adjustment forward or backward to reach (0, 0)
+        if self.state == 'adjusting_origin':
+            dist_remaining = self.target_drive_dist - self.distance_traveled
+            if dist_remaining <= 0.005:
+                self.stop_robot()
+                direction_label = 'forward' if self.adjust_direction > 0 else 'backward'
+                self.get_logger().info(
+                    f'Completed {direction_label} adjustment of '
+                    f'{self.distance_traveled:.3f} m. '
+                    f'Stopping for {self.settle_time_s:.1f}s settling delay...'
+                )
+                self.state = 'settling_and_checking_origin'
+                self.stop_time = self.get_clock().now()
+                return
+
+            twist = Twist()
+            twist.linear.x = float(0.15 * self.adjust_direction)
+            twist.angular.z = 0.0
+            self.cmd_pub.publish(twist)
+            self.distance_traveled += 0.15 * dt
+            return
+
+        # Phase 27: Turn 120 degrees CCW towards AprilTag 0
+        if self.state == 'turn_120_ccw_to_tag0':
+            twist = Twist()
+            twist.linear.x = 0.0
+            v_ang = float(self.angular_speed_ccw)
+            twist.angular.z = v_ang
+            step_dt = v_ang * dt
+            self.align_traveled_angle += step_dt
+            self.cmd_pub.publish(twist)
+
+            if self.align_traveled_angle >= self.align_target_angle:
+                self.stop_robot()
+                self.get_logger().info(
+                    f'Turned 120 degrees CCW. Stopping for {self.settle_time_s:.1f}s '
+                    f'delay before fine-adjusting to AprilTag 0...'
+                )
+                self.state = 'tag0_final_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
+            return
+
+        # Phase 28: Settle 1s and fine-adjust towards AprilTag 0
+        if self.state == 'tag0_final_settling_and_measuring':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped < self.settle_time_s:
+                return
+
+            self.request_localization_service()
+            bearing_rad, pixel_err = self.get_tag0_bearing_error()
+            if bearing_rad is not None:
+                deg_off = math.degrees(abs(bearing_rad))
+                self.get_logger().info(
+                    f'Stationary AprilTag 0 measurement: pixel offset={pixel_err:.1f} px, '
+                    f'angle off={deg_off:.1f} deg.'
+                )
+
+                if (abs(pixel_err) <= self.tag1_align_pixel_tolerance or
+                        abs(bearing_rad) <= self.tag1_align_tolerance_rad):
+                    self.stop_robot()
+                    self.get_logger().info(
+                        f'AprilTag 0 is centered! Final offset: {pixel_err:.1f} px, '
+                        f'{deg_off:.1f} deg <= {self.tag1_align_tolerance_deg:.1f} deg. '
+                        f'Navigation mission successfully complete!'
+                    )
+                    self.state = 'done'
+                    return
+
+                self.align_target_angle = abs(bearing_rad)
+                self.align_direction = 1.0 if bearing_rad > 0 else -1.0
+                self.align_traveled_angle = 0.0
+                direction_str = 'CCW (left)' if self.align_direction > 0 else 'CW (right)'
+                self.get_logger().info(
+                    f'Fine-adjusting: turning {deg_off:.1f} degrees {direction_str} '
+                    f'towards AprilTag 0...'
+                )
+                self.state = 'tag0_final_rotating_to_align'
+                return
+
+            if time_stopped > (self.settle_time_s + 3.0):
+                self.get_logger().info(
+                    'AprilTag 0 not detected after 120-deg turn. Navigation complete.'
+                )
+                self.stop_robot()
+                self.state = 'done'
+            return
+
+        # Phase 29: Rotate ONLY target angle towards AprilTag 0, then stop and wait 1s
+        if self.state == 'tag0_final_rotating_to_align':
+            twist = Twist()
+            twist.linear.x = 0.0
+            v_ang = float(self.align_direction * self.angular_speed_ccw)
+            twist.angular.z = v_ang
+            step_dt = abs(v_ang) * dt
+            self.align_traveled_angle += step_dt
+            self.cmd_pub.publish(twist)
+
+            if self.align_traveled_angle >= self.align_target_angle:
+                self.stop_robot()
+                traveled_deg = math.degrees(self.align_traveled_angle)
+                self.get_logger().info(
+                    f'Completed fine rotation of {traveled_deg:.1f} deg towards Tag 0. '
+                    f'Stopping for {self.settle_time_s:.1f}s settling delay before checking tag...'
+                )
+                self.state = 'tag0_final_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
             return
 
 
