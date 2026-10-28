@@ -1,0 +1,1 @@
+source /opt/ros/jazzy/setup.bash && source rubikpi_ros2/install/setup.bash && ros2 launch robot_vision_camera robot_vision_camera.launch.py

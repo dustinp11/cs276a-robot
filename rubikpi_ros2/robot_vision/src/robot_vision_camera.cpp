@@ -5,8 +5,8 @@ RobotVisionCamera::RobotVisionCamera(const std::string & name)
 {
   getROSParams();
 
-  // Use Sensor Data QoS (Best Effort) for camera topics
-  auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
+  // Keep only the newest frame so slow subscribers do not build up latency.
+  auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
 
   // Create publishers for raw, compressed images, and camera info
   pub_ = this->create_publisher<sensor_msgs::msg::Image>(topic_name, qos);
@@ -322,7 +322,7 @@ void RobotVisionCamera::buildGStreamerPipeline(){
   g_object_set(G_OBJECT(data.appsink), 
                "emit-signals", TRUE,
                "sync", FALSE,
-               "max-buffers", 10,
+               "max-buffers", 1,
                "drop", TRUE,
                nullptr);
   
