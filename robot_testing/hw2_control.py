@@ -1,17 +1,25 @@
 """Map-frame waypoint tracking with stop-and-measure AprilTag localization.
 
-This node controls the robot to move from (0, 0) to (1, 0):
-1. First, while stationary, query hw2_localization (via service /get_robot_pose or
-   topic /robot_pose) to determine the current robot pose in the map frame.
-2. If already at (1, 0), stop and end.
-3. Otherwise, drive towards (1, 0) using the 3-stage control loop (rotate_to_goal ->
-   drive -> rotate_to_orient) and dead reckoning from hw1_solution.
-4. During motion, do not run hw2_localization since the camera has trouble
-   detecting AprilTags while moving.
-5. Once the HW1 motion loop finishes, stop the robot completely and query
-   hw2_localization again while stationary.
-6. If not yet at (1, 0), repeat motion using the newly localized position as the
-   starting state until hw2_localization confirms the robot is at (1, 0).
+This node controls the robot through two sequential waypoints:
+1. Move from (0, 0) to (1, 0):
+   - Check initial position via hw2_localization while stationary.
+   - Drive to (1, 0) using the HW1 3-stage controller (rotate_to_goal -> drive
+     -> rotate_to_orient) and dead reckoning.
+   - No camera localization while in motion.
+   - Stop and verify position via hw2_localization, adjusting until (1, 0) is reached.
+
+2. At (1, 0), turn 90 degrees left towards AprilTag 1:
+   - Rotate left using calibrated HW1 rotation control until AprilTag 1 is
+     centered in the camera view.
+
+3. Traverse to (1, 2):
+   - Drive to (1, 2) using HW1 controller and dead reckoning.
+   - Stop completely before consulting the camera for position.
+   - If AprilTag 1 cannot be seen because it is too close:
+     - Back up until AprilTag 1 is visible in the camera (stopping each time).
+     - Compute the difference between calculated position and (1, 2).
+     - Drive forward that remaining distance based on odometer readings.
+   - Conclude at (1, 2).
 """
 
 from math import atan2, cos, hypot, isfinite, pi, sin
@@ -22,12 +30,18 @@ from geometry_msgs.msg import PoseStamped, Twist
 from rclpy.node import Node
 
 try:
+    from apriltag_msgs.msg import AprilTagDetectionArray
+except ImportError:
+    AprilTagDetectionArray = None
+
+try:
     from hw2_interfaces.srv import GetRobotPose
 except ImportError:
     GetRobotPose = None
 
 
-TARGET_WAYPOINT = (1.0, 0.0, 0.0)
+WAYPOINT_1 = (1.0, 0.0, 0.0)
+WAYPOINT_2 = (1.0, 2.0, pi / 2.0)
 
 
 def yaw_from_pose(pose):
@@ -122,7 +136,13 @@ class ControlNode(Node):
             PoseStamped, '/robot_pose', self.on_pose, 1
         )
 
-        # Connect to /get_robot_pose service if interface is available
+        if AprilTagDetectionArray is not None:
+            self.detection_sub = self.create_subscription(
+                AprilTagDetectionArray, '/detections', self.on_detections, 10
+            )
+        else:
+            self.detection_sub = None
+
         self.pose_client = None
         if GetRobotPose is not None:
             self.pose_client = self.create_client(GetRobotPose, '/get_robot_pose')
@@ -136,27 +156,40 @@ class ControlNode(Node):
             self.get_parameter('pose_request_timeout_s').value
         )
 
-        # Robot parameters from hw1_solution
+        # Calibrated parameters from robot_test.py / hw1_solution
         self.forward_speed = 0.567333
         self.angular_speed_cw = 2.0 * pi / 4.5
         self.angular_speed_ccw = 2.0 * pi / 5.2
         self.tolerance = 0.1
         self.angle_tolerance = 0.1
-        self.settle_time_s = 0.5  # Pause to ensure vehicle is stationary before camera capture
+        self.settle_time_s = 0.5
 
-        self.target_point = list(TARGET_WAYPOINT)
+        # Sequential waypoints: WP1=(1, 0, 0), WP2=(1, 2, pi/2)
+        self.wp1 = list(WAYPOINT_1)
+        self.wp2 = list(WAYPOINT_2)
         self.current_state = [0.0, 0.0, 0.0]  # Assumed start at (0, 0, 0)
-        self.drive_backwards = False  # Keep front camera pointed toward AprilTag 0
+        self.drive_backwards = False
 
         self.pid = PIDcontroller(
             1.0, 0.01, 0.005, maximum_value=self.forward_speed
         )
-        self.pid.setTarget(self.target_point)
+        self.pid.setTarget(self.wp1)
 
-        # High-level state: 'localizing' -> 'driving' -> 'done'
-        self.state = 'localizing'
-        # HW1 motion sub-stage: 'rotate_to_goal' -> 'drive' -> 'rotate_to_orient'
+        # State machine:
+        # 'localizing_wp1' -> 'driving_wp1' -> 'turn_to_wp2' ->
+        # 'driving_wp2' -> 'localizing_wp2' -> 'backing_up' / 'forward_odom_to_goal' -> 'done'
+        self.state = 'localizing_wp1'
         self.hw1_stage = 'rotate_to_goal'
+
+        self.latest_tag1_detection = None
+        self.tag1_centered_count = 0
+
+        # Backing up / odometer variables for WP2
+        self.loc_wp2_start_time = 0.0
+        self.backup_distance_step = 0.2  # Back up in 20 cm steps if tag is too close
+        self.backup_traveled = 0.0
+        self.odom_target_distance = 0.0
+        self.odom_traveled = 0.0
 
         self.pose_future = None
         self.request_started = 0.0
@@ -167,17 +200,27 @@ class ControlNode(Node):
         self.timer = self.create_timer(0.1, self.control_tick)
 
         self.get_logger().info(
-            'hw2_control initialized: Target is (1, 0). '
-            'Stationary localization enabled.'
+            'hw2_control initialized: Leg 1 to (1, 0), Leg 2 to (1, 2).'
         )
 
     def stop_robot(self):
         """Command zero velocity to halt all robot movement."""
         self.cmd_pub.publish(Twist())
 
+    def on_detections(self, msg):
+        """Track detections of AprilTag 1 for centering after WP1."""
+        for det in msg.detections:
+            if det.id == 1:
+                self.latest_tag1_detection = {
+                    'cx': float(det.centre.x),
+                    'cy': float(det.centre.y),
+                    'time': time.monotonic(),
+                }
+
     def on_pose(self, pose):
         """Receive pose from /robot_pose topic (used only when stationary)."""
-        if self.state == 'localizing':
+        stationary_states = ('localizing_wp1', 'localizing_wp2', 'backing_up_settling')
+        if self.state in stationary_states:
             now = self.get_clock().now()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
             if time_stopped >= self.settle_time_s:
@@ -190,7 +233,6 @@ class ControlNode(Node):
 
         if self.pose_future is not None:
             if time.monotonic() - self.request_started > self.request_timeout_s:
-                self.get_logger().warn('Localization request timed out; retrying...')
                 future = self.pose_future
                 self.pose_future = None
                 try:
@@ -204,21 +246,13 @@ class ControlNode(Node):
         if service_ready != self.localization_service_available:
             self.localization_service_available = service_ready
             if service_ready:
-                self.get_logger().info(
-                    'Localization service /get_robot_pose is available.'
-                )
+                self.get_logger().info('Localization service /get_robot_pose available.')
             else:
-                self.get_logger().warn(
-                    'Localization service /get_robot_pose is not available; waiting.'
-                )
+                self.get_logger().warn('Localization service /get_robot_pose waiting.')
         if not service_ready:
             return
 
         self.localization_request_count += 1
-        request_id = self.localization_request_count
-        self.get_logger().info(
-            f'Sending localization request #{request_id} to /get_robot_pose.'
-        )
         self.request_started = time.monotonic()
         self.pose_future = self.pose_client.call_async(GetRobotPose.Request())
         self.pose_future.add_done_callback(self.on_pose_service_response)
@@ -236,57 +270,134 @@ class ControlNode(Node):
             self.get_logger().error(f'Pose request failed: {exception}')
             return
 
+        stationary_states = ('localizing_wp1', 'localizing_wp2', 'backing_up_settling')
         if response.success:
-            pose = response.pose
-            position = pose.pose.position
-            yaw = yaw_from_pose(pose)
-            self.get_logger().info(
-                f'Localization response from /get_robot_pose: '
-                f'frame={pose.header.frame_id}, '
-                f'position=({position.x:.3f}, {position.y:.3f}, '
-                f'{position.z:.3f}) m, '
-                f'yaw={yaw:.3f} rad, tags={list(response.tag_ids)}.'
-            )
-            if self.state == 'localizing':
-                self.process_localized_pose(pose)
+            if self.state in stationary_states:
+                self.process_localized_pose(response.pose)
         else:
-            self.get_logger().warn(
-                f'Localization request failed: {response.message}'
-            )
+            self.get_logger().debug(f'Localization waiting: {response.message}')
 
     def process_localized_pose(self, pose):
-        """Check position reported by hw2_localization against goal (1, 0)."""
-        p, q = pose.pose.position, pose.pose.orientation
-        values = (p.x, p.y, p.z, q.x, q.y, q.z, q.w)
+        """Check position reported by hw2_localization against active goal."""
+        p = pose.pose.position
+        values = (p.x, p.y, p.z)
         if not all(isfinite(v) for v in values):
+            return
+
+        yaw = yaw_from_pose(pose)
+        if not isfinite(yaw):
             return
 
         x = float(p.x)
         y = float(p.y)
-        yaw = float(yaw_from_pose(pose))
+        yaw = float(yaw)
 
-        dist_to_goal = hypot(self.target_point[0] - x, self.target_point[1] - y)
         self.get_logger().info(
             f'Measured pose via hw2_localization: pos=({x:.3f}, {y:.3f}), '
-            f'yaw={yaw:.3f} rad. Distance to (1, 0): {dist_to_goal:.3f} m.'
+            f'yaw={yaw:.3f} rad, state={self.state}.'
         )
 
-        if dist_to_goal <= self.tolerance:
+        # Handle WP1 verification
+        if self.state == 'localizing_wp1':
+            dist_to_wp1 = hypot(self.wp1[0] - x, self.wp1[1] - y)
+            self.get_logger().info(f'Distance to WP1 (1, 0): {dist_to_wp1:.3f} m.')
+            if dist_to_wp1 <= self.tolerance:
+                self.get_logger().info(
+                    f'WP1 (1.0, 0.0) reached within tolerance: {dist_to_wp1:.3f} m. '
+                    f'Turning 90 degrees left to locate AprilTag 1...'
+                )
+                self.current_state = [x, y, yaw]
+                self.state = 'turn_to_wp2'
+                self.tag1_centered_count = 0
+                self.stop_robot()
+            else:
+                self.get_logger().info(
+                    f'Not yet at (1, 0) ({dist_to_wp1:.3f} m > {self.tolerance:.3f} m). '
+                    f'Adjusting drive to (1, 0)...'
+                )
+                self.current_state = [x, y, yaw]
+                self.pid.setTarget(self.wp1)
+                self.hw1_stage = 'rotate_to_goal'
+                self.state = 'driving_wp1'
+
+        # Handle WP2 verification
+        elif self.state == 'localizing_wp2':
+            dist_to_wp2 = hypot(self.wp2[0] - x, self.wp2[1] - y)
+            self.get_logger().info(f'Distance to WP2 (1, 2): {dist_to_wp2:.3f} m.')
+            if dist_to_wp2 <= self.tolerance:
+                self.get_logger().info(
+                    f'WP2 (1.0, 2.0) reached within tolerance: {dist_to_wp2:.3f} m. '
+                    f'Mission Complete!'
+                )
+                self.state = 'done'
+                self.stop_robot()
+            else:
+                self.get_logger().info(
+                    f'Not yet at (1, 2) ({dist_to_wp2:.3f} m > {self.tolerance:.3f} m). '
+                    f'Adjusting drive to (1, 2)...'
+                )
+                self.current_state = [x, y, yaw]
+                self.pid.setTarget(self.wp2)
+                self.hw1_stage = 'drive'
+                self.state = 'driving_wp2'
+
+        # Handle localization acquired after backing up
+        elif self.state == 'backing_up_settling':
+            dist_to_wp2 = hypot(self.wp2[0] - x, self.wp2[1] - y)
             self.get_logger().info(
-                f'Robot reached target (1.0, 0.0) within tolerance: '
-                f'{dist_to_goal:.3f} m <= {self.tolerance:.3f} m. Complete!'
-            )
-            self.state = 'done'
-            self.stop_robot()
-        else:
-            self.get_logger().info(
-                f'Robot not yet at (1, 0) ({dist_to_goal:.3f} m > {self.tolerance:.3f} m). '
-                f'Starting HW1 control loop to drive to (1, 0)...'
+                f'AprilTag 1 acquired after backing up! Position: ({x:.3f}, {y:.3f}). '
+                f'Difference to (1, 2): {dist_to_wp2:.3f} m.'
             )
             self.current_state = [x, y, yaw]
-            self.pid.setTarget(self.target_point)
-            self.hw1_stage = 'rotate_to_goal'
-            self.state = 'driving'
+            self.odom_target_distance = dist_to_wp2
+            self.odom_traveled = 0.0
+            self.state = 'forward_odom_to_goal'
+            self.get_logger().info(
+                f'Moving forward {dist_to_wp2:.3f} m based on odometer readings...'
+            )
+
+    def handle_turn_to_wp2(self, dt):
+        """Turn 90 degrees left at (1, 0) until AprilTag 1 is centered in camera."""
+        twist = Twist()
+        tag1_visible = False
+        if self.latest_tag1_detection is not None:
+            if time.monotonic() - self.latest_tag1_detection['time'] < 0.5:
+                tag1_visible = True
+
+        if tag1_visible:
+            cx = self.latest_tag1_detection['cx']
+            pixel_error = cx - 640.0
+            if abs(pixel_error) <= 30.0:
+                self.tag1_centered_count += 1
+                twist.angular.z = 0.0
+                if self.tag1_centered_count >= 2:
+                    self.get_logger().info(
+                        f'AprilTag 1 centered (pixel error: {pixel_error:.1f} px). '
+                        f'Turn complete! Starting traversal to (1, 2)...'
+                    )
+                    self.stop_robot()
+                    self.current_state[2] = pi / 2.0
+                    self.pid.setTarget(self.wp2)
+                    self.hw1_stage = 'drive'
+                    self.state = 'driving_wp2'
+                    return
+            else:
+                self.tag1_centered_count = 0
+                if pixel_error < 0:
+                    twist.angular.z = float(self.angular_speed_ccw * 0.5)
+                else:
+                    twist.angular.z = float(-self.angular_speed_cw * 0.5)
+        else:
+            self.tag1_centered_count = 0
+            desired_heading = pi / 2.0
+            heading_error = (desired_heading - self.current_state[2] + pi) % (2.0 * pi) - pi
+            if abs(heading_error) < 0.05:
+                twist.angular.z = 0.0
+            else:
+                twist.angular.z = float(self.get_rotation_direction(heading_error))
+
+        self.update_dead_reckoning(0.0, twist.angular.z, dt)
+        self.cmd_pub.publish(twist)
 
     def get_desired_heading_to_goal(self, target_wp, drive_backwards):
         """Calculate desired planar heading angle to target position."""
@@ -316,34 +427,8 @@ class ControlNode(Node):
         self.current_state[2] += angular_vel * dt
         self.current_state[2] = (self.current_state[2] + pi) % (2.0 * pi) - pi
 
-    def control_tick(self):
-        """Main periodic control loop."""
-        now = self.get_clock().now()
-        dt = (now - self.last_tick).nanoseconds / 1e9
-        self.last_tick = now
-        if dt <= 0.0 or dt > 0.5:
-            dt = 0.1
-
-        if self.state == 'done':
-            self.stop_robot()
-            return
-
-        # 1. State: Stationary localization check
-        if self.state == 'localizing':
-            self.stop_robot()
-            time_stopped = (now - self.stop_time).nanoseconds / 1e9
-            # Ensure robot has stopped moving before querying camera detection
-            if time_stopped >= self.settle_time_s:
-                self.request_localization_service()
-            return
-
-        # 2. State: Driving via HW1 control loop (NO localization while in motion)
-        if self.state == 'driving':
-            self.execute_hw1_step(dt)
-
-    def execute_hw1_step(self, dt):
-        """Step the HW1 3-stage control loop and dead reckoning."""
-        target_wp = self.target_point
+    def execute_hw1_step(self, dt, target_wp):
+        """Step the HW1 3-stage control loop and dead reckoning towards target_wp."""
         delta_x = target_wp[0] - self.current_state[0]
         delta_y = target_wp[1] - self.current_state[1]
         position_error = hypot(delta_x, delta_y)
@@ -383,21 +468,130 @@ class ControlNode(Node):
             heading_error = (heading_error + pi) % (2.0 * pi) - pi
 
             if abs(heading_error) < self.angle_tolerance:
-                # HW1 loop has completed for this run!
-                # Stop robot and switch back to stationary localization check.
-                self.get_logger().info(
-                    'HW1 loop reached goal via dead reckoning. '
-                    'Stopping robot to verify position via hw2_localization...'
-                )
-                self.stop_robot()
-                self.state = 'localizing'
-                self.stop_time = self.get_clock().now()
-                return
+                twist_msg.angular.z = 0.0
+                return True
             else:
                 twist_msg.angular.z = float(self.get_rotation_direction(heading_error))
 
         self.update_dead_reckoning(twist_msg.linear.x, twist_msg.angular.z, dt)
         self.cmd_pub.publish(twist_msg)
+        return False
+
+    def control_tick(self):
+        """Main periodic control loop."""
+        now = self.get_clock().now()
+        dt = (now - self.last_tick).nanoseconds / 1e9
+        self.last_tick = now
+        if dt <= 0.0 or dt > 0.5:
+            dt = 0.1
+
+        if self.state == 'done':
+            self.stop_robot()
+            return
+
+        # 1. Stationary localization check for WP1 (1, 0)
+        if self.state == 'localizing_wp1':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped >= self.settle_time_s:
+                self.request_localization_service()
+            return
+
+        # 2. Drive to WP1 (1, 0) via HW1 control loop
+        if self.state == 'driving_wp1':
+            reached = self.execute_hw1_step(dt, self.wp1)
+            if reached:
+                self.get_logger().info(
+                    'HW1 loop reached WP1 by dead reckoning. Stopping to verify position...'
+                )
+                self.stop_robot()
+                self.state = 'localizing_wp1'
+                self.stop_time = self.get_clock().now()
+            return
+
+        # 3. Turn 90 degrees left at (1, 0) until AprilTag 1 is centered
+        if self.state == 'turn_to_wp2':
+            self.handle_turn_to_wp2(dt)
+            return
+
+        # 4. Drive to WP2 (1, 2) via HW1 control loop
+        if self.state == 'driving_wp2':
+            reached = self.execute_hw1_step(dt, self.wp2)
+            if reached:
+                self.get_logger().info(
+                    'HW1 loop reached WP2 by dead reckoning. Stopping to verify position...'
+                )
+                self.stop_robot()
+                self.state = 'localizing_wp2'
+                self.stop_time = self.get_clock().now()
+                self.loc_wp2_start_time = time.monotonic()
+            return
+
+        # 5. Stationary localization check for WP2 (1, 2)
+        if self.state == 'localizing_wp2':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped >= self.settle_time_s:
+                self.request_localization_service()
+            # If tag cannot be seen after waiting 2.0s, tag may be too close; back up
+            if time.monotonic() - self.loc_wp2_start_time > 2.0:
+                self.get_logger().warn(
+                    'Cannot see AprilTag 1 near (1, 2) (tag may be too close). '
+                    'Backing up until AprilTag 1 is visible...'
+                )
+                self.state = 'backing_up'
+                self.backup_traveled = 0.0
+            return
+
+        # 6. Back up until AprilTag 1 is visible
+        if self.state == 'backing_up':
+            v = -0.15
+            twist = Twist()
+            twist.linear.x = v
+            step_dist = abs(v) * dt
+            self.backup_traveled += step_dist
+            self.update_dead_reckoning(v, 0.0, dt)
+            self.cmd_pub.publish(twist)
+            if self.backup_traveled >= self.backup_distance_step:
+                self.get_logger().info(
+                    f'Backed up {self.backup_traveled:.2f} m. Stopping to check camera...'
+                )
+                self.stop_robot()
+                self.state = 'backing_up_settling'
+                self.stop_time = self.get_clock().now()
+                self.loc_wp2_start_time = time.monotonic()
+            return
+
+        # 7. Stationary settling check after backing up
+        if self.state == 'backing_up_settling':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped >= self.settle_time_s:
+                self.request_localization_service()
+            if time.monotonic() - self.loc_wp2_start_time > 2.0:
+                self.get_logger().info('AprilTag 1 still not visible. Backing up further...')
+                self.state = 'backing_up'
+                self.backup_traveled = 0.0
+            return
+
+        # 8. Move forward remaining distance based on odometer readings
+        if self.state == 'forward_odom_to_goal':
+            dist_left = self.odom_target_distance - self.odom_traveled
+            v = 0.2 if dist_left > 0.1 else 0.1
+            twist = Twist()
+            twist.linear.x = v
+            step_dist = v * dt
+            self.odom_traveled += step_dist
+            self.update_dead_reckoning(v, 0.0, dt)
+            self.cmd_pub.publish(twist)
+            if self.odom_traveled >= self.odom_target_distance:
+                self.get_logger().info(
+                    f'Traversed {self.odom_traveled:.3f} m based on odometer readings. '
+                    f'Reached (1.0, 2.0)! Complete.'
+                )
+                self.stop_robot()
+                self.state = 'done'
+            return
 
 
 def main(args=None):
