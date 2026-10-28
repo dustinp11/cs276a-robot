@@ -9,9 +9,9 @@ This node controls the robot through two sequential waypoints:
    - Stop and verify position via hw2_localization, adjusting until (1, 0) is reached.
 
 2. At (1, 0), find AprilTag 1:
-   - When AprilTag 1 is not in view, spin CCW by 45 degrees, stop completely,
-     and query hw2_localization for the tag.
-   - Repeat spinning 45 degrees CCW, stopping, and querying until AprilTag 1 is seen.
+   - When AprilTag 1 is not in view, spin CCW by 15 degrees, stop completely,
+     and query hw2_localization for AprilTag 1.
+   - Repeat spinning 15 degrees CCW, stopping, and querying until AprilTag 1 is seen.
    - Once seen, center AprilTag 1 in the camera view using calibrated rotation.
 
 3. Traverse to (1, 2):
@@ -45,6 +45,7 @@ except ImportError:
 
 WAYPOINT_1 = (1.0, 0.0, 0.0)
 WAYPOINT_2 = (1.0, 2.0, pi / 2.0)
+SPIN_STEP_RAD = pi / 12.0  # 15 degrees CCW
 
 
 def yaw_from_pose(pose):
@@ -90,7 +91,7 @@ class PIDcontroller:
         heading_error = desired_heading - currentState[2]
         heading_error = (heading_error + pi) % (2.0 * pi) - pi
 
-        if abs(distance) < 0.05:
+        if abs(distance) < 0.02:
             heading_error = targetState[2] - currentState[2]
             heading_error = (heading_error + pi) % (2.0 * pi) - pi
             distance = 0.0
@@ -123,7 +124,7 @@ class PIDcontroller:
         if abs(result[1]) > max_angular:
             result[1] = (1.0 if result[1] > 0 else -1.0) * max_angular
 
-        if abs(e[0]) < 0.05:
+        if abs(e[0]) < 0.02:
             result[0] = 0.0
         return result
 
@@ -152,9 +153,9 @@ class ControlNode(Node):
         else:
             self.get_logger().info('hw2_interfaces not found; relying on /robot_pose topic.')
 
-        self.declare_parameter('max_pose_age_s', 0.5)
+        self.declare_parameter('max_pose_age_s', 1.0)
         self.max_pose_age_s = float(self.get_parameter('max_pose_age_s').value)
-        self.declare_parameter('pose_request_timeout_s', 1.5)
+        self.declare_parameter('pose_request_timeout_s', 3.0)
         self.request_timeout_s = float(
             self.get_parameter('pose_request_timeout_s').value
         )
@@ -163,9 +164,9 @@ class ControlNode(Node):
         self.forward_speed = 0.567333
         self.angular_speed_cw = 2.0 * pi / 4.5
         self.angular_speed_ccw = 2.0 * pi / 5.2
-        self.tolerance = 0.1
+        self.tolerance = 0.02  # Lowered tolerance (2 cm) to avoid stopping short
         self.angle_tolerance = 0.1
-        self.settle_time_s = 0.5
+        self.settle_time_s = 1.0  # Increased settling time to allow laggy camera to update
 
         # Sequential waypoints: WP1=(1, 0, 0), WP2=(1, 2, pi/2)
         self.wp1 = list(WAYPOINT_1)
@@ -179,7 +180,7 @@ class ControlNode(Node):
         self.pid.setTarget(self.wp1)
 
         # State machine:
-        # 'localizing_wp1' -> 'driving_wp1' -> 'search_spin_ccw_45' ->
+        # 'localizing_wp1' -> 'driving_wp1' -> 'search_spin_ccw_15' ->
         # 'search_stopped_query' -> 'centering_tag1' -> 'driving_wp2' ->
         # 'localizing_wp2' -> 'backing_up' -> 'forward_odom_to_goal' -> 'done'
         self.state = 'localizing_wp1'
@@ -237,7 +238,7 @@ class ControlNode(Node):
             if time_stopped >= self.settle_time_s:
                 if self.state == 'search_stopped_query':
                     if (self.latest_tag1_detection and
-                            time.monotonic() - self.latest_tag1_detection['time'] < 0.5):
+                            time.monotonic() - self.latest_tag1_detection['time'] < 1.0):
                         self.tag1_found_in_query = True
                         self.process_localized_pose(pose)
                 else:
@@ -297,7 +298,7 @@ class ControlNode(Node):
                     tag_match = (
                         1 in response.tag_ids or
                         (self.latest_tag1_detection and
-                         time.monotonic() - self.latest_tag1_detection['time'] < 0.5)
+                         time.monotonic() - self.latest_tag1_detection['time'] < 1.0)
                     )
                     if tag_match:
                         self.tag1_found_in_query = True
@@ -337,13 +338,14 @@ class ControlNode(Node):
             self.get_logger().info(f'Distance to WP1 (1, 0): {dist_to_wp1:.3f} m.')
             if dist_to_wp1 <= self.tolerance:
                 self.get_logger().info(
-                    f'WP1 (1.0, 0.0) reached within tolerance: {dist_to_wp1:.3f} m. '
-                    f'Searching for AprilTag 1: will spin CCW 45 degrees, stop, and query...'
+                    f'WP1 (1.0, 0.0) reached within tolerance: {dist_to_wp1:.3f} m <= '
+                    f'{self.tolerance:.3f} m. '
+                    f'Searching for AprilTag 1: will spin CCW 15 degrees, stop, and query...'
                 )
                 self.current_state = [x, y, yaw]
                 self.stop_robot()
                 self.turn_traveled = 0.0
-                self.state = 'search_spin_ccw_45'
+                self.state = 'search_spin_ccw_15'
             else:
                 self.get_logger().info(
                     f'Not yet at (1, 0) ({dist_to_wp1:.3f} m > {self.tolerance:.3f} m). '
@@ -354,7 +356,7 @@ class ControlNode(Node):
                 self.hw1_stage = 'rotate_to_goal'
                 self.state = 'driving_wp1'
 
-        # Handle AprilTag 1 discovered during 45-degree search query
+        # Handle AprilTag 1 discovered during 15-degree search query
         elif self.state == 'search_stopped_query':
             self.get_logger().info(
                 f'AprilTag 1 acquired by hw2_localization! Pos: ({x:.3f}, {y:.3f}), '
@@ -370,8 +372,8 @@ class ControlNode(Node):
             self.get_logger().info(f'Distance to WP2 (1, 2): {dist_to_wp2:.3f} m.')
             if dist_to_wp2 <= self.tolerance:
                 self.get_logger().info(
-                    f'WP2 (1.0, 2.0) reached within tolerance: {dist_to_wp2:.3f} m. '
-                    f'Mission Complete!'
+                    f'WP2 (1.0, 2.0) reached within tolerance: {dist_to_wp2:.3f} m <= '
+                    f'{self.tolerance:.3f} m. Complete!'
                 )
                 self.state = 'done'
                 self.stop_robot()
@@ -405,7 +407,7 @@ class ControlNode(Node):
         twist = Twist()
         tag1_visible = False
         if self.latest_tag1_detection is not None:
-            if time.monotonic() - self.latest_tag1_detection['time'] < 0.6:
+            if time.monotonic() - self.latest_tag1_detection['time'] < 1.0:
                 tag1_visible = True
 
         if tag1_visible:
@@ -428,11 +430,10 @@ class ControlNode(Node):
             else:
                 self.tag1_centered_count = 0
                 if pixel_error < 0:
-                    twist.angular.z = float(self.angular_speed_ccw * 0.4)
+                    twist.angular.z = float(self.angular_speed_ccw * 0.35)
                 else:
-                    twist.angular.z = float(-self.angular_speed_cw * 0.4)
+                    twist.angular.z = float(-self.angular_speed_cw * 0.35)
         else:
-            # Tag was already seen by hw2_localization; proceed directly to drive
             self.get_logger().info(
                 'AprilTag 1 orientation set. Traversing to (1, 2)...'
             )
@@ -556,8 +557,8 @@ class ControlNode(Node):
                 self.stop_time = self.get_clock().now()
             return
 
-        # 3. Spin CCW by 45 degrees to search for AprilTag 1
-        if self.state == 'search_spin_ccw_45':
+        # 3. Spin CCW by 15 degrees to search for AprilTag 1
+        if self.state == 'search_spin_ccw_15':
             v_ang = float(self.angular_speed_ccw)
             twist = Twist()
             twist.angular.z = v_ang
@@ -565,9 +566,9 @@ class ControlNode(Node):
             self.turn_traveled += step_angle
             self.update_dead_reckoning(0.0, v_ang, dt)
             self.cmd_pub.publish(twist)
-            if self.turn_traveled >= (pi / 4.0):
+            if self.turn_traveled >= SPIN_STEP_RAD:
                 self.get_logger().info(
-                    'Turned 45 degrees CCW. Stopping to query hw2_localization for AprilTag 1...'
+                    'Turned 15 degrees CCW. Stopping to query hw2_localization for AprilTag 1...'
                 )
                 self.stop_robot()
                 self.state = 'search_stopped_query'
@@ -576,7 +577,7 @@ class ControlNode(Node):
                 self.tag1_found_in_query = False
             return
 
-        # 4. Stationary query for AprilTag 1 after 45-degree spin
+        # 4. Stationary query for AprilTag 1 after 15-degree spin
         if self.state == 'search_stopped_query':
             self.stop_robot()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
@@ -586,14 +587,14 @@ class ControlNode(Node):
             if self.state != 'search_stopped_query':
                 return
 
-            # If AprilTag 1 was not found within timeout, spin CCW by another 45 degrees
-            if time.monotonic() - self.query_start_time > 1.8:
+            # Allow 3.5s query window to accommodate laggy camera frames
+            if time.monotonic() - self.query_start_time > 3.5:
                 self.get_logger().info(
                     'AprilTag 1 not detected at this angle. '
-                    'Spinning CCW by another 45 degrees...'
+                    'Spinning CCW by another 15 degrees...'
                 )
                 self.turn_traveled = 0.0
-                self.state = 'search_spin_ccw_45'
+                self.state = 'search_spin_ccw_15'
             return
 
         # 5. Center AprilTag 1 in camera
@@ -620,8 +621,7 @@ class ControlNode(Node):
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
             if time_stopped >= self.settle_time_s:
                 self.request_localization_service()
-            # If tag cannot be seen after waiting 2.0s, tag may be too close; back up
-            if time.monotonic() - self.loc_wp2_start_time > 2.0:
+            if time.monotonic() - self.loc_wp2_start_time > 3.5:
                 self.get_logger().warn(
                     'Cannot see AprilTag 1 near (1, 2) (tag may be too close). '
                     'Backing up until AprilTag 1 is visible...'
@@ -655,7 +655,7 @@ class ControlNode(Node):
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
             if time_stopped >= self.settle_time_s:
                 self.request_localization_service()
-            if time.monotonic() - self.loc_wp2_start_time > 2.0:
+            if time.monotonic() - self.loc_wp2_start_time > 3.5:
                 self.get_logger().info('AprilTag 1 still not visible. Backing up further...')
                 self.state = 'backing_up'
                 self.backup_traveled = 0.0
