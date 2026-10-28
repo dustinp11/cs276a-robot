@@ -1,10 +1,11 @@
 """Map-frame waypoint tracking with stop-and-measure AprilTag localization.
 
 This node controls the robot through two sequential waypoints:
-1. Move from (0, 0) to (1, 0):
+1. Move from (0, 0) to (1, 0) in two 0.5m stages:
    - Check initial position via hw2_localization while stationary.
-   - Drive to (1, 0) using the HW1 3-stage controller (rotate_to_goal -> drive
-     -> rotate_to_orient) and dead reckoning.
+   - Drive 0.5m to checkpoint (0.5, 0.0) using HW1 controller and dead reckoning.
+   - Stop completely for 5s settle delay; query hw2_localization to correct pose.
+   - Drive remaining distance to (1, 0) using HW1 controller and dead reckoning.
    - No camera localization while in motion.
    - Stop and verify position via hw2_localization, adjusting until (1, 0) is reached.
 
@@ -43,6 +44,7 @@ except ImportError:
     GetRobotPose = None
 
 
+CHECKPOINT_1 = (0.5, 0.0, 0.0)
 WAYPOINT_1 = (1.0, 0.0, 0.0)
 WAYPOINT_2 = (1.0, 2.0, pi / 2.0)
 SPIN_STEP_RAD = pi / 12.0  # 15 degrees CCW
@@ -126,6 +128,8 @@ class PIDcontroller:
 
         if abs(e[0]) < 0.02:
             result[0] = 0.0
+        elif abs(result[0]) < 0.15:
+            result[0] = (1.0 if result[0] > 0 else -1.0) * 0.15
         return result
 
 
@@ -164,11 +168,12 @@ class ControlNode(Node):
         self.forward_speed = 0.567333
         self.angular_speed_cw = 2.0 * pi / 4.5
         self.angular_speed_ccw = 2.0 * pi / 5.2
-        self.tolerance = 0.02  # Lowered tolerance (2 cm) to avoid stopping short
-        self.angle_tolerance = 0.1
+        self.tolerance = 0.05  # 5 cm tolerance to avoid rejecting valid arrivals
+        self.angle_tolerance = 0.15  # ~8.6 deg matches ~7 deg/tick rotation
         self.settle_time_s = 5.0  # 5s delay before polling localization for camera catchup
 
-        # Sequential waypoints: WP1=(1, 0, 0), WP2=(1, 2, pi/2)
+        # Sequential targets: Checkpoint 1=(0.5, 0, 0), WP1=(1, 0, 0), WP2=(1, 2, pi/2)
+        self.checkpoint1 = list(CHECKPOINT_1)
         self.wp1 = list(WAYPOINT_1)
         self.wp2 = list(WAYPOINT_2)
         self.current_state = [0.0, 0.0, 0.0]  # Assumed start at (0, 0, 0)
@@ -177,13 +182,14 @@ class ControlNode(Node):
         self.pid = PIDcontroller(
             1.0, 0.01, 0.005, maximum_value=self.forward_speed
         )
-        self.pid.setTarget(self.wp1)
+        self.pid.setTarget(self.checkpoint1)
 
         # State machine:
-        # 'localizing_wp1' -> 'driving_wp1' -> 'search_spin_ccw_15' ->
+        # 'localizing_start' -> 'driving_checkpoint' -> 'localizing_checkpoint' ->
+        # 'driving_wp1' -> 'localizing_wp1' -> 'search_spin_ccw_15' ->
         # 'search_stopped_query' -> 'centering_tag1' -> 'driving_wp2' ->
         # 'localizing_wp2' -> 'backing_up' -> 'forward_odom_to_goal' -> 'done'
-        self.state = 'localizing_wp1'
+        self.state = 'localizing_start'
         self.hw1_stage = 'rotate_to_goal'
 
         # AprilTag 1 visual search and centering variables
@@ -229,6 +235,7 @@ class ControlNode(Node):
     def on_pose(self, pose):
         """Receive pose from /robot_pose topic (used only when stationary)."""
         stationary_states = (
+            'localizing_start', 'localizing_checkpoint',
             'localizing_wp1', 'localizing_wp2',
             'search_stopped_query', 'backing_up_settling',
         )
@@ -289,6 +296,7 @@ class ControlNode(Node):
             return
 
         stationary_states = (
+            'localizing_start', 'localizing_checkpoint',
             'localizing_wp1', 'localizing_wp2',
             'search_stopped_query', 'backing_up_settling',
         )
@@ -332,8 +340,30 @@ class ControlNode(Node):
             f'yaw={yaw:.3f} rad, state={self.state}.'
         )
 
+        # Handle initial start localization
+        if self.state == 'localizing_start':
+            self.get_logger().info(
+                f'Initial pose measured: ({x:.3f}, {y:.3f}), yaw={yaw:.3f} rad. '
+                f'Starting leg 1: driving to 0.5m checkpoint...'
+            )
+            self.current_state = [x, y, yaw]
+            self.pid.setTarget(self.checkpoint1)
+            self.hw1_stage = 'rotate_to_goal'
+            self.state = 'driving_checkpoint'
+
+        # Handle 0.5m checkpoint verification
+        elif self.state == 'localizing_checkpoint':
+            self.get_logger().info(
+                f'0.5m checkpoint pose measured: pos=({x:.3f}, {y:.3f}), yaw={yaw:.3f} rad. '
+                f'Proceeding from checkpoint to WP1 (1.0, 0.0)...'
+            )
+            self.current_state = [x, y, yaw]
+            self.pid.setTarget(self.wp1)
+            self.hw1_stage = 'rotate_to_goal'
+            self.state = 'driving_wp1'
+
         # Handle WP1 verification
-        if self.state == 'localizing_wp1':
+        elif self.state == 'localizing_wp1':
             dist_to_wp1 = hypot(self.wp1[0] - x, self.wp1[1] - y)
             self.get_logger().info(f'Distance to WP1 (1, 0): {dist_to_wp1:.3f} m.')
             if dist_to_wp1 <= self.tolerance:
@@ -353,7 +383,10 @@ class ControlNode(Node):
                 )
                 self.current_state = [x, y, yaw]
                 self.pid.setTarget(self.wp1)
-                self.hw1_stage = 'rotate_to_goal'
+                if dist_to_wp1 < 0.12:
+                    self.hw1_stage = 'drive'
+                else:
+                    self.hw1_stage = 'rotate_to_goal'
                 self.state = 'driving_wp1'
 
         # Handle AprilTag 1 discovered during 15-degree search query
@@ -484,7 +517,8 @@ class ControlNode(Node):
 
         # Stage 1: Rotate to face the goal
         if self.hw1_stage == 'rotate_to_goal':
-            if position_error < self.tolerance:
+            if position_error < 0.08:
+                # Within 8 cm, orientation towards (x, y) is ill-conditioned; align directly
                 self.hw1_stage = 'rotate_to_orient'
                 twist_msg.angular.z = 0.0
             else:
@@ -494,7 +528,7 @@ class ControlNode(Node):
                 heading_error = desired_heading - self.current_state[2]
                 heading_error = (heading_error + pi) % (2.0 * pi) - pi
 
-                if abs(heading_error) < 0.05:
+                if abs(heading_error) < 0.15:
                     self.hw1_stage = 'drive'
                     twist_msg.angular.z = 0.0
                 else:
@@ -537,15 +571,52 @@ class ControlNode(Node):
             self.stop_robot()
             return
 
-        # 1. Stationary localization check for WP1 (1, 0)
-        if self.state == 'localizing_wp1':
+        # 1. Stationary localization check at start
+        if self.state == 'localizing_start':
             self.stop_robot()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
             if time_stopped >= self.settle_time_s:
                 self.request_localization_service()
+            if time_stopped > (self.settle_time_s + 4.0):
+                self.get_logger().warn(
+                    'Initial localization timed out. Defaulting start to (0, 0, 0) '
+                    'and driving to 0.5m checkpoint.'
+                )
+                self.current_state = [0.0, 0.0, 0.0]
+                self.pid.setTarget(self.checkpoint1)
+                self.hw1_stage = 'rotate_to_goal'
+                self.state = 'driving_checkpoint'
             return
 
-        # 2. Drive to WP1 (1, 0) via HW1 control loop
+        # 2. Drive to 0.5m checkpoint via HW1 control loop
+        if self.state == 'driving_checkpoint':
+            reached = self.execute_hw1_step(dt, self.checkpoint1)
+            if reached:
+                self.get_logger().info(
+                    'Reached 0.5m checkpoint by dead reckoning. Stopping to localize...'
+                )
+                self.stop_robot()
+                self.state = 'localizing_checkpoint'
+                self.stop_time = self.get_clock().now()
+            return
+
+        # 3. Stationary localization at 0.5m checkpoint
+        if self.state == 'localizing_checkpoint':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped >= self.settle_time_s:
+                self.request_localization_service()
+            if time_stopped > (self.settle_time_s + 4.0):
+                self.get_logger().warn(
+                    '0.5m checkpoint localization timed out. Proceeding to WP1 (1, 0) '
+                    'using dead reckoning.'
+                )
+                self.pid.setTarget(self.wp1)
+                self.hw1_stage = 'rotate_to_goal'
+                self.state = 'driving_wp1'
+            return
+
+        # 4. Drive to WP1 (1, 0) via HW1 control loop
         if self.state == 'driving_wp1':
             reached = self.execute_hw1_step(dt, self.wp1)
             if reached:
@@ -557,7 +628,15 @@ class ControlNode(Node):
                 self.stop_time = self.get_clock().now()
             return
 
-        # 3. Spin CCW by 15 degrees to search for AprilTag 1
+        # 5. Stationary localization check for WP1 (1, 0)
+        if self.state == 'localizing_wp1':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped >= self.settle_time_s:
+                self.request_localization_service()
+            return
+
+        # 6. Spin CCW by 15 degrees to search for AprilTag 1
         if self.state == 'search_spin_ccw_15':
             v_ang = float(self.angular_speed_ccw)
             twist = Twist()
@@ -577,7 +656,7 @@ class ControlNode(Node):
                 self.tag1_found_in_query = False
             return
 
-        # 4. Stationary query for AprilTag 1 after 15-degree spin
+        # 7. Stationary query for AprilTag 1 after 15-degree spin
         if self.state == 'search_stopped_query':
             self.stop_robot()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
@@ -597,12 +676,12 @@ class ControlNode(Node):
                 self.state = 'search_spin_ccw_15'
             return
 
-        # 5. Center AprilTag 1 in camera
+        # 8. Center AprilTag 1 in camera
         if self.state == 'centering_tag1':
             self.handle_centering_tag1(dt)
             return
 
-        # 6. Drive to WP2 (1, 2) via HW1 control loop
+        # 9. Drive to WP2 (1, 2) via HW1 control loop
         if self.state == 'driving_wp2':
             reached = self.execute_hw1_step(dt, self.wp2)
             if reached:
@@ -615,7 +694,7 @@ class ControlNode(Node):
                 self.loc_wp2_start_time = time.monotonic()
             return
 
-        # 7. Stationary localization check for WP2 (1, 2)
+        # 10. Stationary localization check for WP2 (1, 2)
         if self.state == 'localizing_wp2':
             self.stop_robot()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
@@ -630,7 +709,7 @@ class ControlNode(Node):
                 self.backup_traveled = 0.0
             return
 
-        # 8. Back up until AprilTag 1 is visible
+        # 11. Back up until AprilTag 1 is visible
         if self.state == 'backing_up':
             v = -0.15
             twist = Twist()
@@ -649,7 +728,7 @@ class ControlNode(Node):
                 self.loc_wp2_start_time = time.monotonic()
             return
 
-        # 9. Stationary settling check after backing up
+        # 12. Stationary settling check after backing up
         if self.state == 'backing_up_settling':
             self.stop_robot()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
@@ -661,7 +740,7 @@ class ControlNode(Node):
                 self.backup_traveled = 0.0
             return
 
-        # 10. Move forward remaining distance based on odometer readings
+        # 13. Move forward remaining distance based on odometer readings
         if self.state == 'forward_odom_to_goal':
             dist_left = self.odom_target_distance - self.odom_traveled
             v = 0.2 if dist_left > 0.1 else 0.1
