@@ -160,6 +160,8 @@ class ControlNode(Node):
 
         self.pose_future = None
         self.request_started = 0.0
+        self.localization_request_count = 0
+        self.localization_service_available = None
         self.stop_time = self.get_clock().now()
         self.last_tick = self.get_clock().now()
         self.timer = self.create_timer(0.1, self.control_tick)
@@ -198,9 +200,25 @@ class ControlNode(Node):
                 future.cancel()
             return
 
-        if not self.pose_client.service_is_ready():
+        service_ready = self.pose_client.service_is_ready()
+        if service_ready != self.localization_service_available:
+            self.localization_service_available = service_ready
+            if service_ready:
+                self.get_logger().info(
+                    'Localization service /get_robot_pose is available.'
+                )
+            else:
+                self.get_logger().warn(
+                    'Localization service /get_robot_pose is not available; waiting.'
+                )
+        if not service_ready:
             return
 
+        self.localization_request_count += 1
+        request_id = self.localization_request_count
+        self.get_logger().info(
+            f'Sending localization request #{request_id} to /get_robot_pose.'
+        )
         self.request_started = time.monotonic()
         self.pose_future = self.pose_client.call_async(GetRobotPose.Request())
         self.pose_future.add_done_callback(self.on_pose_service_response)
@@ -219,10 +237,22 @@ class ControlNode(Node):
             return
 
         if response.success:
+            pose = response.pose
+            position = pose.pose.position
+            yaw = yaw_from_pose(pose)
+            self.get_logger().info(
+                f'Localization response from /get_robot_pose: '
+                f'frame={pose.header.frame_id}, '
+                f'position=({position.x:.3f}, {position.y:.3f}, '
+                f'{position.z:.3f}) m, '
+                f'yaw={yaw:.3f} rad, tags={list(response.tag_ids)}.'
+            )
             if self.state == 'localizing':
-                self.process_localized_pose(response.pose)
+                self.process_localized_pose(pose)
         else:
-            self.get_logger().debug(f'Localization waiting: {response.message}')
+            self.get_logger().warn(
+                f'Localization request failed: {response.message}'
+            )
 
     def process_localized_pose(self, pose):
         """Check position reported by hw2_localization against goal (1, 0)."""

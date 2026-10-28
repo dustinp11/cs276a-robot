@@ -364,16 +364,25 @@ class LocalizationService:
         return quaternion_transform((t.x, t.y, t.z), (q.x, q.y, q.z, q.w))
 
     def on_request(self, request, response):
+        self.node.get_logger().info('Received localization request on /get_robot_pose.')
         try:
             estimate = self.provider.request()
         except LocalizationError as exception:
             response.success = False
             response.message = str(exception)
+            self.node.get_logger().warn(
+                f'Localization request failed: {response.message}'
+            )
             return response
         response.success = True
         response.message = 'Pose estimated from current landmark observations'
         response.pose = self.create_pose_message(estimate)
         response.tag_ids = list(estimate.tag_ids)
+        self.node.get_logger().info(
+            f'Returning pose: frame=map, '
+            f'position=({estimate.x:.3f}, {estimate.y:.3f}, 0.000) m, '
+            f'yaw={estimate.yaw:.3f} rad, tags={list(estimate.tag_ids)}.'
+        )
         return response
 
 
