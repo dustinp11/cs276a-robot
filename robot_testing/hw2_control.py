@@ -166,7 +166,7 @@ class ControlNode(Node):
         self.angular_speed_ccw = 2.0 * pi / 5.2
         self.tolerance = 0.02  # Lowered tolerance (2 cm) to avoid stopping short
         self.angle_tolerance = 0.1
-        self.settle_time_s = 1.0  # Increased settling time to allow laggy camera to update
+        self.settle_time_s = 5.0  # 5s delay before polling localization for camera catchup
 
         # Sequential waypoints: WP1=(1, 0, 0), WP2=(1, 2, pi/2)
         self.wp1 = list(WAYPOINT_1)
@@ -568,7 +568,7 @@ class ControlNode(Node):
             self.cmd_pub.publish(twist)
             if self.turn_traveled >= SPIN_STEP_RAD:
                 self.get_logger().info(
-                    'Turned 15 degrees CCW. Stopping to query hw2_localization for AprilTag 1...'
+                    'Turned 15 degrees CCW. Stopping for 5s delay before polling localization...'
                 )
                 self.stop_robot()
                 self.state = 'search_stopped_query'
@@ -587,10 +587,10 @@ class ControlNode(Node):
             if self.state != 'search_stopped_query':
                 return
 
-            # Allow 3.5s query window to accommodate laggy camera frames
-            if time.monotonic() - self.query_start_time > 3.5:
+            # Allow 3.5s of polling after the 5s settling delay before spinning the next 15 degrees
+            if time_stopped > (self.settle_time_s + 3.5):
                 self.get_logger().info(
-                    'AprilTag 1 not detected at this angle. '
+                    'AprilTag 1 not detected at this angle after 5s delay and polling window. '
                     'Spinning CCW by another 15 degrees...'
                 )
                 self.turn_traveled = 0.0
@@ -621,7 +621,7 @@ class ControlNode(Node):
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
             if time_stopped >= self.settle_time_s:
                 self.request_localization_service()
-            if time.monotonic() - self.loc_wp2_start_time > 3.5:
+            if time_stopped > (self.settle_time_s + 3.5):
                 self.get_logger().warn(
                     'Cannot see AprilTag 1 near (1, 2) (tag may be too close). '
                     'Backing up until AprilTag 1 is visible...'
@@ -655,7 +655,7 @@ class ControlNode(Node):
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
             if time_stopped >= self.settle_time_s:
                 self.request_localization_service()
-            if time.monotonic() - self.loc_wp2_start_time > 3.5:
+            if time_stopped > (self.settle_time_s + 3.5):
                 self.get_logger().info('AprilTag 1 still not visible. Backing up further...')
                 self.state = 'backing_up'
                 self.backup_traveled = 0.0
