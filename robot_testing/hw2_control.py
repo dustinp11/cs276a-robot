@@ -18,7 +18,7 @@ Controls the robot through three sequential steps:
    - Turns ONLY the number of degrees it is off.
    - In between each fine align rotation, halts and waits 1 second for the
      camera stream to settle before measuring again.
-   - Concludes alignment when directly facing AprilTag 1 (|error| <= 30 px / ~3.5 deg).
+   - Concludes alignment when directly facing AprilTag 1 (|error| <= 10 deg / ~86 px).
 
 3. Step 3: Forward navigation to (1.0, 2.0) towards AprilTag 1:
    - Moves forward 2.0 m towards AprilTag 1 via dead reckoning.
@@ -132,6 +132,10 @@ class ControlNode(Node):
         self.align_target_angle = 0.0
         self.align_traveled_angle = 0.0
         self.align_direction = 1.0
+        # Increased tolerance to 10 deg (~86 px) so wheels don't get stuck on micro-angles
+        self.tag1_align_tolerance_deg = 10.0
+        self.tag1_align_tolerance_rad = math.radians(self.tag1_align_tolerance_deg)
+        self.tag1_align_pixel_tolerance = 491.0 * math.tan(self.tag1_align_tolerance_rad)
 
         # Control and motion variables
         self.state = 'initial_settling'
@@ -473,12 +477,14 @@ class ControlNode(Node):
                     f'angle off={deg_off:.1f} deg.'
                 )
 
-                # Check if directly facing AprilTag 1 (within 30 px or 3.5 deg)
-                if abs(pixel_err) <= 30.0 or abs(bearing_rad) <= math.radians(3.5):
+                # Check if directly facing AprilTag 1 within increased tolerance (10 deg / ~86 px)
+                if (abs(pixel_err) <= self.tag1_align_pixel_tolerance or
+                        abs(bearing_rad) <= self.tag1_align_tolerance_rad):
                     self.stop_robot()
                     self.get_logger().info(
-                        f'Directly facing AprilTag 1! (offset: {pixel_err:.1f} px, '
-                        f'{deg_off:.1f} deg).'
+                        f'Directly facing AprilTag 1 within tolerance! '
+                        f'(offset: {pixel_err:.1f} px, {deg_off:.1f} deg <= '
+                        f'{self.tag1_align_tolerance_deg:.1f} deg).'
                     )
                     self.get_logger().info(
                         'Step 3: Moving forward 2.0 m towards (1, 2) via dead reckoning...'
