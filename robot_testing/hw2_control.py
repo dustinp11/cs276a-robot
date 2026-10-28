@@ -1,4 +1,4 @@
-"""Waypoint tracking to (1, 0) followed by 30-degree step search for AprilTag 1.
+"""Waypoint tracking to (1, 0) followed by AprilTag 1 search and fine alignment.
 
 Controls the robot in two sequential steps:
 1. Step 1: Forward-only navigation to (1.0, 0.0):
@@ -11,12 +11,14 @@ Controls the robot in two sequential steps:
    - If short of (1, 0) (z > 0.75 m + tolerance), moves forward by the difference.
    - Repeats until tag z is within tolerance of 0.75 m.
 
-2. Step 2: Turn CCW until directly facing AprilTag 1:
-   - Rotates CCW in 30-degree increments using calibrated angular velocity
-     (full 360-degree turn takes 3.75s -> angular speed = 2 * pi / 3.75 rad/s).
+2. Step 2: Turn CCW until directly facing AprilTag 1 (ID 1 ONLY):
+   - Rotates CCW in 30-degree increments (calibrated angular speed: 3.75s per 360 deg).
    - Stops and waits 3 seconds every 30 degrees to check for AprilTag 1.
-   - Once AprilTag 1 is detected, fine-aligns until directly facing AprilTag 1,
-     then halts and concludes navigation.
+   - Once AprilTag 1 is seen, calculates the exact bearing angle it is off.
+   - Turns ONLY the number of degrees it is off.
+   - In between each fine align rotation, halts and waits 3 seconds for the
+     camera stream to settle before measuring again.
+   - Once directly facing AprilTag 1 (|error| <= 30 px / ~3.5 deg), halts and concludes.
 """
 
 import json
@@ -69,7 +71,7 @@ def load_tag0_x():
 
 
 class ControlNode(Node):
-    """Controls forward translation to (1, 0) and 10-deg CCW search for AprilTag 1."""
+    """Controls forward translation to (1, 0) and discrete alignment to AprilTag 1."""
 
     def __init__(self):
         super().__init__('hw2_control')
@@ -95,7 +97,7 @@ class ControlNode(Node):
         else:
             self.get_logger().info('hw2_interfaces not found; relying on TF and /robot_pose.')
 
-        # Target definitions
+        # Target definitions for waypoint 1
         self.tag0_x = load_tag0_x()
         self.target_x = 1.0
         # When robot is at target_x, depth to Tag 0 is (tag0_x - target_x)
@@ -110,9 +112,11 @@ class ControlNode(Node):
         self.step_angle_rad = 30.0 * math.pi / 180.0  # 30 degrees per search step
         self.turn_step_traveled = 0.0
 
-        # AprilTag 1 centering
+        # AprilTag 1 fine-alignment tracking (ID 1 ONLY)
         self.latest_tag1_detection = None
-        self.tag1_centered_count = 0
+        self.align_target_angle = 0.0
+        self.align_traveled_angle = 0.0
+        self.align_direction = 1.0
 
         # Control and motion variables
         self.state = 'initial_settling'
@@ -129,7 +133,7 @@ class ControlNode(Node):
 
         self.timer = self.create_timer(0.1, self.control_tick)
         self.get_logger().info(
-            f'hw2_control initialized: Forward to (1, 0), then 30-deg CCW search for Tag 1. '
+            f'hw2_control initialized: Forward to (1, 0), then 30-deg search & align to Tag 1. '
             f'Angular speed: {self.angular_speed_ccw:.3f} rad/s (3.75s per 360 deg).'
         )
 
@@ -138,7 +142,7 @@ class ControlNode(Node):
         self.cmd_pub.publish(Twist())
 
     def on_detections(self, msg):
-        """Track detections of AprilTag 1."""
+        """Track detections of AprilTag 1 ONLY; ignore all other tags."""
         for det in msg.detections:
             if det.id == 1:
                 self.latest_tag1_detection = {
@@ -181,7 +185,7 @@ class ControlNode(Node):
         return None
 
     def get_tag1_transform(self):
-        """Lookup AprilTag 1 transform in TF buffer."""
+        """Lookup AprilTag 1 transform in TF buffer (ID 1 ONLY)."""
         candidate_cam_frames = ('camera_frame', 'camera_link', 'camera_optical_frame')
         candidate_tag_frames = ('tag_1', 'tag36h11:1', 'tag_36h11_1')
         for cam in candidate_cam_frames:
@@ -194,6 +198,38 @@ class ControlNode(Node):
                 except Exception:
                     continue
         return None
+
+    def get_tag1_bearing_error(self):
+        """
+        Calculate bearing error to AprilTag 1 in radians and pixel offset.
+        Positive -> tag is to the left (robot needs to turn CCW).
+        Negative -> tag is to the right (robot needs to turn CW).
+        Returns (bearing_rad, pixel_error) or (None, None).
+        """
+        # 1. Check pixel detection on /detections (AprilTag 1 ONLY)
+        now = time.monotonic()
+        if (self.latest_tag1_detection is not None and
+                now - self.latest_tag1_detection['time'] < 2.0):
+            cx = self.latest_tag1_detection['cx']
+            # Camera optical center cx = 640.0, fx = 491.0
+            # If cx < 640, tag is to the left in image -> turn CCW (positive)
+            bearing_rad = math.atan2(640.0 - cx, 491.0)
+            pixel_error = cx - 640.0
+            return bearing_rad, pixel_error
+
+        # 2. Check TF transform for tag_1 ONLY
+        tf_trans = self.get_tag1_transform()
+        if tf_trans is not None:
+            lx = tf_trans.transform.translation.x
+            lz = tf_trans.transform.translation.z
+            if math.isfinite(lx) and math.isfinite(lz) and lz > 0.05:
+                # In camera optical frame, +X is right, +Z is forward
+                # If lx < 0 (left), turn CCW (positive)
+                bearing_rad = math.atan2(-lx, lz)
+                pixel_error = lx * 491.0 / lz
+                return bearing_rad, pixel_error
+
+        return None, None
 
     def request_localization_service(self):
         """Request fresh pose from /get_robot_pose service if available."""
@@ -224,51 +260,8 @@ class ControlNode(Node):
         except Exception:
             pass
 
-    def handle_centering_tag1(self, dt):
-        """Align robot rotation until directly facing AprilTag 1."""
-        twist = Twist()
-        twist.linear.x = 0.0
-
-        tag1_visible = False
-        pixel_error = None
-
-        if (self.latest_tag1_detection is not None and
-                time.monotonic() - self.latest_tag1_detection['time'] < 1.5):
-            tag1_visible = True
-            cx = self.latest_tag1_detection['cx']
-            pixel_error = cx - 640.0
-        else:
-            tf_trans = self.get_tag1_transform()
-            if tf_trans is not None:
-                tag1_visible = True
-                lx = tf_trans.transform.translation.x
-                pixel_error = lx * 1000.0
-
-        if tag1_visible and pixel_error is not None:
-            if abs(pixel_error) <= 35.0:
-                self.tag1_centered_count += 1
-                twist.angular.z = 0.0
-                if self.tag1_centered_count >= 2:
-                    self.stop_robot()
-                    self.get_logger().info(
-                        f'AprilTag 1 centered (pixel error: {pixel_error:.1f} px). '
-                        f'Directly facing AprilTag 1! Navigation complete.'
-                    )
-                    self.state = 'done'
-                    return
-            else:
-                self.tag1_centered_count = 0
-                if pixel_error < 0:
-                    twist.angular.z = float(self.angular_speed_ccw * 0.35)
-                else:
-                    twist.angular.z = float(-self.angular_speed_cw * 0.35)
-        else:
-            twist.angular.z = 0.0
-
-        self.cmd_pub.publish(twist)
-
     def control_tick(self):
-        """Main periodic control loop executing forward drive and AprilTag 1 search."""
+        """Main periodic control loop executing forward drive and AprilTag 1 alignment."""
         now = self.get_clock().now()
         dt = (now - self.last_tick).nanoseconds / 1e9
         self.last_tick = now
@@ -315,7 +308,7 @@ class ControlNode(Node):
                 self.stop_robot()
                 self.get_logger().info(
                     f'Completed forward drive of {self.distance_traveled:.3f} m. '
-                    f'Stopping for 5s settling delay before checking tag...'
+                    f'Stopping for 3s settling delay before checking tag 0...'
                 )
                 self.state = 'settling_and_checking'
                 self.stop_time = self.get_clock().now()
@@ -333,7 +326,7 @@ class ControlNode(Node):
             self.distance_traveled += speed * dt
             return
 
-        # Phase 3: Stationary verification and fine adjustment using AprilTag z-distance
+        # Phase 3: Stationary verification and fine adjustment using AprilTag 0 z-distance
         if self.state == 'settling_and_checking':
             self.stop_robot()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
@@ -356,6 +349,7 @@ class ControlNode(Node):
                         f'Step 2: Searching for AprilTag 1 in 30-degree CCW steps...'
                     )
                     self.stop_robot()
+                    self.latest_tag1_detection = None
                     self.turn_step_traveled = 0.0
                     self.state = 'turn_step_ccw_30'
                 elif error > self.tolerance:
@@ -372,6 +366,7 @@ class ControlNode(Node):
                         f'Step 2: Searching for AprilTag 1 in 30-degree CCW steps...'
                     )
                     self.stop_robot()
+                    self.latest_tag1_detection = None
                     self.turn_step_traveled = 0.0
                     self.state = 'turn_step_ccw_30'
                 return
@@ -409,19 +404,16 @@ class ControlNode(Node):
                 return
 
             self.request_localization_service()
-            tag1_seen = False
-            if (self.latest_tag1_detection is not None and
-                    time.monotonic() - self.latest_tag1_detection['time'] < 2.0):
-                tag1_seen = True
-            elif self.get_tag1_transform() is not None:
-                tag1_seen = True
-
-            if tag1_seen:
+            bearing_rad, pixel_err = self.get_tag1_bearing_error()
+            if bearing_rad is not None:
                 self.get_logger().info(
-                    'AprilTag 1 acquired! Fine-aligning until directly facing AprilTag 1...'
+                    f'AprilTag 1 acquired! Pixel offset: {pixel_err:.1f} px, '
+                    f'bearing: {math.degrees(bearing_rad):.1f} deg. '
+                    f'Settling 3s before starting fine alignment...'
                 )
-                self.tag1_centered_count = 0
-                self.state = 'centering_tag1'
+                self.stop_robot()
+                self.state = 'tag1_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
                 return
 
             if time_stopped > (self.settle_time_s + 2.0):
@@ -433,9 +425,70 @@ class ControlNode(Node):
                 self.state = 'turn_step_ccw_30'
             return
 
-        # Phase 6: Fine-align until directly facing AprilTag 1
-        if self.state == 'centering_tag1':
-            self.handle_centering_tag1(dt)
+        # Phase 6: Settle 3s and measure exact angle off from AprilTag 1 (ID 1 ONLY)
+        if self.state == 'tag1_settling_and_measuring':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped < self.settle_time_s:
+                return
+
+            bearing_rad, pixel_err = self.get_tag1_bearing_error()
+            if bearing_rad is not None:
+                deg_off = math.degrees(abs(bearing_rad))
+                self.get_logger().info(
+                    f'Stationary AprilTag 1 measurement: pixel offset={pixel_err:.1f} px, '
+                    f'angle off={deg_off:.1f} deg.'
+                )
+
+                # Check if directly facing AprilTag 1 (within 30 px or 3.5 deg)
+                if abs(pixel_err) <= 30.0 or abs(bearing_rad) <= math.radians(3.5):
+                    self.stop_robot()
+                    self.get_logger().info(
+                        f'Directly facing AprilTag 1! (offset: {pixel_err:.1f} px, '
+                        f'{deg_off:.1f} deg). Navigation complete.'
+                    )
+                    self.state = 'done'
+                    return
+
+                # Calculate rotation to turn ONLY the number of degrees it is off
+                self.align_target_angle = abs(bearing_rad)
+                self.align_direction = 1.0 if bearing_rad > 0 else -1.0
+                self.align_traveled_angle = 0.0
+                direction_str = 'CCW (left)' if self.align_direction > 0 else 'CW (right)'
+                self.get_logger().info(
+                    f'Turning {deg_off:.1f} degrees {direction_str} towards AprilTag 1...'
+                )
+                self.state = 'tag1_rotating_to_align'
+                return
+
+            # If tag not seen yet during stationary settling, wait a moment longer
+            if time_stopped > (self.settle_time_s + 3.0):
+                self.get_logger().warn(
+                    'Lost AprilTag 1 during settling. Resuming 30-degree CCW search...'
+                )
+                self.turn_step_traveled = 0.0
+                self.state = 'turn_step_ccw_30'
+            return
+
+        # Phase 7: Rotate ONLY the target angle, then stop and wait 3s
+        if self.state == 'tag1_rotating_to_align':
+            twist = Twist()
+            twist.linear.x = 0.0
+            v_ang = float(self.align_direction * self.angular_speed_ccw)
+            twist.angular.z = v_ang
+            step_dt = abs(v_ang) * dt
+            self.align_traveled_angle += step_dt
+            self.cmd_pub.publish(twist)
+
+            if self.align_traveled_angle >= self.align_target_angle:
+                self.stop_robot()
+                traveled_deg = math.degrees(self.align_traveled_angle)
+                self.get_logger().info(
+                    f'Completed fine rotation of {traveled_deg:.1f} deg. '
+                    f'Stopping for 3s settling delay before checking AprilTag 1 again...'
+                )
+                self.state = 'tag1_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
             return
 
 
