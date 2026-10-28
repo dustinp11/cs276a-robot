@@ -20,11 +20,16 @@ Controls the robot through three sequential steps:
      camera stream to settle before measuring again.
    - Concludes alignment when directly facing AprilTag 1 (|error| <= 10 deg / ~86 px).
 
-3. Step 3: Forward navigation to (1.0, 2.0) towards AprilTag 1:
-   - Moves forward 2.0 m towards AprilTag 1 via dead reckoning.
-   - Halts and settles 1 second to check for AprilTag 1.
-   - If AprilTag 1 is still visible: adjusts forward via AprilTag 1 z-distance
-     until reaching the coordinate point (1, 2).
+3. Step 3: Navigation to (1.0, 2.0) towards AprilTag 1:
+   - Moves forward 1.0 m towards AprilTag 1 via dead reckoning.
+   - Halts and settles 1 second to re-center towards AprilTag 1 (with 1 second delay
+     between each turn).
+   - Once centered, determines localization distance to (1, 2) from AprilTag 1 z-distance.
+   - Drives forward by the remaining distance to (1, 2).
+   - Settles 1 second at (1, 2) and checks AprilTag 1 z-distance:
+     - Adjusts forward if short of (1, 2).
+     - Adjusts backward if it overshoots (1, 2).
+     - Repeats until within tolerance.
    - If AprilTag 1 is no longer visible: prints that it can no longer see the
      AprilTag, and ends navigation.
 """
@@ -136,6 +141,9 @@ class ControlNode(Node):
         self.tag1_align_tolerance_deg = 10.0
         self.tag1_align_tolerance_rad = math.radians(self.tag1_align_tolerance_deg)
         self.tag1_align_pixel_tolerance = 491.0 * math.tan(self.tag1_align_tolerance_rad)
+
+        # Direction for final position adjustments (+1.0 forward, -1.0 backward)
+        self.adjust_direction = 1.0
 
         # Control and motion variables
         self.state = 'initial_settling'
@@ -487,11 +495,11 @@ class ControlNode(Node):
                         f'{self.tag1_align_tolerance_deg:.1f} deg).'
                     )
                     self.get_logger().info(
-                        'Step 3: Moving forward 2.0 m towards (1, 2) via dead reckoning...'
+                        'Step 3: Moving forward 1.0 m towards AprilTag 1 via dead reckoning...'
                     )
-                    self.target_drive_dist = 2.0  # From (1, 0) to (1, 2) is 2.0 m along heading
+                    self.target_drive_dist = 1.0
                     self.distance_traveled = 0.0
-                    self.state = 'driving_to_wp2'
+                    self.state = 'driving_to_wp2_half'
                     return
 
                 # Calculate rotation to turn ONLY the number of degrees it is off
@@ -534,14 +542,125 @@ class ControlNode(Node):
                 self.stop_time = self.get_clock().now()
             return
 
-        # Phase 8: Drive forward 2.0 m to (1, 2) towards AprilTag 1 via dead reckoning
-        if self.state == 'driving_to_wp2':
+        # Phase 8: Drive forward 1.0 m towards AprilTag 1 via dead reckoning
+        if self.state == 'driving_to_wp2_half':
             dist_remaining = self.target_drive_dist - self.distance_traveled
             if dist_remaining <= 0.005:
                 self.stop_robot()
                 self.get_logger().info(
-                    f'Completed dead reckoning drive of {self.distance_traveled:.3f} m to (1, 2). '
-                    f'Stopping for {self.settle_time_s:.1f}s settling delay to check AprilTag 1...'
+                    f'Completed 1.0 m intermediate drive '
+                    f'(traveled {self.distance_traveled:.3f} m). '
+                    f'Stopping for {self.settle_time_s:.1f}s delay before re-centering on Tag 1...'
+                )
+                self.state = 'tag1_mid_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
+                return
+
+            if self.target_drive_dist > 0.3:
+                speed = 0.35 if dist_remaining > 0.15 else 0.18
+            else:
+                speed = 0.15
+
+            twist = Twist()
+            twist.linear.x = float(speed)
+            twist.angular.z = 0.0  # Forward ONLY towards AprilTag 1
+            self.cmd_pub.publish(twist)
+            self.distance_traveled += speed * dt
+            return
+
+        # Phase 9: Settle 1s at 1m mark, check center on Tag 1, or determine distance to (1, 2)
+        if self.state == 'tag1_mid_settling_and_measuring':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped < self.settle_time_s:
+                return
+
+            self.request_localization_service()
+            bearing_rad, pixel_err = self.get_tag1_bearing_error()
+
+            if bearing_rad is not None:
+                deg_off = math.degrees(abs(bearing_rad))
+                self.get_logger().info(
+                    f'Intermediate AprilTag 1 measurement: offset={pixel_err:.1f} px, '
+                    f'angle off={deg_off:.1f} deg.'
+                )
+
+                # If centered towards AprilTag 1 within tolerance:
+                if (abs(pixel_err) <= self.tag1_align_pixel_tolerance or
+                        abs(bearing_rad) <= self.tag1_align_tolerance_rad):
+                    self.stop_robot()
+                    z = self.get_tag1_z_distance()
+                    if z is not None:
+                        remaining_dist = z - self.target_z_wp2
+                        self.get_logger().info(
+                            f'Centered towards AprilTag 1! Tag 1 z={z:.3f} m, '
+                            f'target z={self.target_z_wp2:.3f} m. '
+                            f'Localization distance to (1, 2): {remaining_dist:.3f} m.'
+                        )
+                        self.target_drive_dist = max(0.0, remaining_dist)
+                        self.distance_traveled = 0.0
+                        self.state = 'driving_to_wp2_remaining'
+                        return
+                    elif time_stopped > (self.settle_time_s + 2.0):
+                        self.get_logger().warn(
+                            'Tag 1 depth not resolved; using nominal 1.0 m remaining distance.'
+                        )
+                        self.target_drive_dist = 1.0
+                        self.distance_traveled = 0.0
+                        self.state = 'driving_to_wp2_remaining'
+                        return
+                    return
+
+                # Not yet centered: rotate ONLY the angle off towards AprilTag 1
+                self.align_target_angle = abs(bearing_rad)
+                self.align_direction = 1.0 if bearing_rad > 0 else -1.0
+                self.align_traveled_angle = 0.0
+                direction_str = 'CCW (left)' if self.align_direction > 0 else 'CW (right)'
+                self.get_logger().info(
+                    f'Re-centering at 1m mark: turning {deg_off:.1f} deg {direction_str} '
+                    f'towards AprilTag 1...'
+                )
+                self.state = 'tag1_mid_rotating_to_align'
+                return
+
+            if time_stopped > (self.settle_time_s + 2.0):
+                print('Can no longer see AprilTag 1.')
+                self.get_logger().info(
+                    'Can no longer see AprilTag 1 at 1m mark. Ending navigation.'
+                )
+                self.stop_robot()
+                self.state = 'done'
+            return
+
+        # Phase 10: Intermediate rotate to align with AprilTag 1, then settle 1s
+        if self.state == 'tag1_mid_rotating_to_align':
+            twist = Twist()
+            twist.linear.x = 0.0
+            v_ang = float(self.align_direction * self.angular_speed_ccw)
+            twist.angular.z = v_ang
+            step_dt = abs(v_ang) * dt
+            self.align_traveled_angle += step_dt
+            self.cmd_pub.publish(twist)
+
+            if self.align_traveled_angle >= self.align_target_angle:
+                self.stop_robot()
+                traveled_deg = math.degrees(self.align_traveled_angle)
+                self.get_logger().info(
+                    f'Completed intermediate turn of {traveled_deg:.1f} deg. '
+                    f'Stopping for {self.settle_time_s:.1f}s settling delay before checking tag...'
+                )
+                self.state = 'tag1_mid_settling_and_measuring'
+                self.stop_time = self.get_clock().now()
+            return
+
+        # Phase 11: Drive remaining distance to (1, 2)
+        if self.state == 'driving_to_wp2_remaining':
+            dist_remaining = self.target_drive_dist - self.distance_traveled
+            if dist_remaining <= 0.005:
+                self.stop_robot()
+                self.get_logger().info(
+                    f'Completed remaining drive of {self.distance_traveled:.3f} m to (1, 2). '
+                    f'Stopping for {self.settle_time_s:.1f}s settling delay to verify position...'
                 )
                 self.state = 'settling_and_checking_wp2'
                 self.stop_time = self.get_clock().now()
@@ -559,7 +678,7 @@ class ControlNode(Node):
             self.distance_traveled += speed * dt
             return
 
-        # Phase 9: Settle 1s and check if AprilTag 1 is still visible; adjust if visible, else end
+        # Phase 12: Settle 1s at (1, 2); verify position with Tag 1 z-distance
         if self.state == 'settling_and_checking_wp2':
             self.stop_robot()
             time_stopped = (now - self.stop_time).nanoseconds / 1e9
@@ -575,7 +694,6 @@ class ControlNode(Node):
             )
 
             if tag1_seen and z is not None:
-                # Still sees AprilTag 1! Adjust the same way as waypoint 1
                 error = z - self.target_z_wp2
                 self.get_logger().info(
                     f'Stationary AprilTag 1 z distance: {z:.3f} m '
@@ -595,15 +713,19 @@ class ControlNode(Node):
                         f'Moving forward {error:.3f} m to reach position...'
                     )
                     self.target_drive_dist = error
+                    self.adjust_direction = 1.0
                     self.distance_traveled = 0.0
-                    self.state = 'adjusting_forward_wp2'
+                    self.state = 'adjusting_wp2'
                 else:
+                    overshoot = abs(error)
                     self.get_logger().info(
-                        f'Robot reached (1, 2) (tag z={z:.3f} m <= {self.target_z_wp2:.3f} m). '
-                        f'Stopping at goal. Navigation complete.'
+                        f'Robot overshot (1, 2) by {overshoot:.3f} m. '
+                        f'Moving backward {overshoot:.3f} m to reach position...'
                     )
-                    self.stop_robot()
-                    self.state = 'done'
+                    self.target_drive_dist = overshoot
+                    self.adjust_direction = -1.0
+                    self.distance_traveled = 0.0
+                    self.state = 'adjusting_wp2'
                 return
 
             if time_stopped > (self.settle_time_s + 1.5):
@@ -613,13 +735,15 @@ class ControlNode(Node):
                 self.state = 'done'
             return
 
-        # Phase 10: Fine forward adjustment to (1, 2)
-        if self.state == 'adjusting_forward_wp2':
+        # Phase 13: Fine adjustment forward or backward to reach (1, 2)
+        if self.state == 'adjusting_wp2':
             dist_remaining = self.target_drive_dist - self.distance_traveled
             if dist_remaining <= 0.005:
                 self.stop_robot()
+                direction_label = 'forward' if self.adjust_direction > 0 else 'backward'
                 self.get_logger().info(
-                    f'Completed adjustment of {self.distance_traveled:.3f} m. '
+                    f'Completed {direction_label} adjustment of '
+                    f'{self.distance_traveled:.3f} m. '
                     f'Stopping for {self.settle_time_s:.1f}s settling delay...'
                 )
                 self.state = 'settling_and_checking_wp2'
@@ -627,7 +751,7 @@ class ControlNode(Node):
                 return
 
             twist = Twist()
-            twist.linear.x = 0.15
+            twist.linear.x = float(0.15 * self.adjust_direction)
             twist.angular.z = 0.0
             self.cmd_pub.publish(twist)
             self.distance_traveled += 0.15 * dt
