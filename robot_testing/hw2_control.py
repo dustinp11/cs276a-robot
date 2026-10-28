@@ -36,7 +36,7 @@ Controls the robot through seven sequential steps:
 4. Step 4: Turn 90 degrees CCW towards AprilTag 3 (ID 3):
    - Uses exact same 30-degree CCW search steps as Step 2 with 1s settling.
    - Fine-adjusts with 1s delay in between turns until directly facing AprilTag 3.
-   - Prints "facing apriltag3" in terminal.
+   - Prints "facing apriltag3" in terminal and pauses for 3 seconds.
 
 5. Step 5: Turn 63 degrees CCW towards AprilTag 5 (ID 5):
    - Rotates 63 degrees CCW, settles 1s.
@@ -179,7 +179,7 @@ class ControlNode(Node):
         self.align_traveled_angle = 0.0
         self.align_direction = 1.0
         # Increased tolerance to 10 deg (~86 px) so wheels don't get stuck on micro-angles
-        self.tag1_align_tolerance_deg = 10.0
+        self.tag1_align_tolerance_deg = 7.0
         self.tag1_align_tolerance_rad = math.radians(self.tag1_align_tolerance_deg)
         self.tag1_align_pixel_tolerance = 491.0 * math.tan(self.tag1_align_tolerance_rad)
 
@@ -889,12 +889,10 @@ class ControlNode(Node):
                     print('facing apriltag3')
                     self.get_logger().info('facing apriltag3')
                     self.get_logger().info(
-                        'Step 5: Turning 63 degrees CCW towards AprilTag 5...'
+                        'Directly facing AprilTag 3. Pausing 3 seconds before Step 5...'
                     )
-                    self.align_target_angle = math.radians(63.0)
-                    self.align_direction = 1.0  # CCW
-                    self.align_traveled_angle = 0.0
-                    self.state = 'turn_63_ccw_to_tag5'
+                    self.state = 'tag3_pause_before_step5'
+                    self.stop_time = self.get_clock().now()
                     return
 
                 self.align_target_angle = abs(bearing_rad)
@@ -934,6 +932,22 @@ class ControlNode(Node):
                 )
                 self.state = 'tag3_settling_and_measuring'
                 self.stop_time = self.get_clock().now()
+            return
+
+        # Phase 17b: Pause 3 seconds after facing AprilTag 3 before moving to Step 5
+        if self.state == 'tag3_pause_before_step5':
+            self.stop_robot()
+            time_stopped = (now - self.stop_time).nanoseconds / 1e9
+            if time_stopped < 3.0:
+                return
+
+            self.get_logger().info(
+                'Step 5: Turning 63 degrees CCW towards AprilTag 5...'
+            )
+            self.align_target_angle = math.radians(63.0)
+            self.align_direction = 1.0  # CCW
+            self.align_traveled_angle = 0.0
+            self.state = 'turn_63_ccw_to_tag5'
             return
 
         # Phase 18: Turn 63 degrees CCW towards AprilTag 5
