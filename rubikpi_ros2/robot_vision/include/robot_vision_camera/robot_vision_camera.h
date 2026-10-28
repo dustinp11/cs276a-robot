@@ -102,6 +102,7 @@ public:
   void fillCameraInfoMessage();
   void buildGStreamerPipeline();
   void startGStreamerPipeline();
+  void stopGStreamerPipeline();
   
   // Static callback function for GStreamer
   static GstFlowReturn processData(GstElement * sink, RobotVisionCamera* node);

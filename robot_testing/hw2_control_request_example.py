@@ -4,7 +4,10 @@ import time
 
 import rclpy
 from geometry_msgs.msg import Twist
-from hw2_interfaces.srv import GetRobotPose
+try:
+    from hw2_interfaces.srv import GetRobotPose
+except ImportError:
+    GetRobotPose = None
 
 from robot_testing.hw2_control import ControlNode
 

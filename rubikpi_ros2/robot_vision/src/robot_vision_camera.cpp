@@ -247,10 +247,12 @@ void RobotVisionCamera::prepareRemap() {
 RobotVisionCamera::~RobotVisionCamera(){
   if (bus) {
     gst_object_unref(bus);
+    bus = nullptr;
   }
   if (data.pipeline) {
     gst_element_set_state(data.pipeline, GST_STATE_NULL);
     gst_object_unref(data.pipeline);
+    data.pipeline = nullptr;
   }
 }
 
@@ -337,6 +339,7 @@ void RobotVisionCamera::startGStreamerPipeline(){
   if(ret == GST_STATE_CHANGE_FAILURE){
     RCLCPP_ERROR(this->get_logger(), "Unable to set the pipeline to the playing state.");
     gst_object_unref(data.pipeline);
+    data.pipeline = nullptr;
     return;
   }
   
@@ -344,9 +347,14 @@ void RobotVisionCamera::startGStreamerPipeline(){
   
   bus = gst_element_get_bus(data.pipeline);
 
-  // Wait until error or EOS
-  msg = gst_bus_timed_pop_filtered(bus, GST_CLOCK_TIME_NONE,
-      (GstMessageType)(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
+  // Poll bus with a 100ms timeout while rclcpp is running
+  while (rclcpp::ok()) {
+    msg = gst_bus_timed_pop_filtered(bus, 100 * GST_MSECOND,
+        (GstMessageType)(GST_MESSAGE_ERROR | GST_MESSAGE_EOS));
+    if (msg != nullptr) {
+      break;
+    }
+  }
 
   // Parse message
   if (msg != NULL) {
@@ -371,12 +379,25 @@ void RobotVisionCamera::startGStreamerPipeline(){
         break;
     }
     gst_message_unref(msg);
+    msg = nullptr;
+  }
+
+  stopGStreamerPipeline();
+}
+
+void RobotVisionCamera::stopGStreamerPipeline(){
+  if (data.pipeline) {
+    gst_element_set_state(data.pipeline, GST_STATE_NULL);
   }
 }
 
 /* Callback for appsink to parse the video stream and publish images. 
    Static function as it will be cast as a C CALLBACK function.*/
 GstFlowReturn RobotVisionCamera::processData(GstElement * sink, RobotVisionCamera* node){
+  if (!rclcpp::ok()) {
+    return GST_FLOW_FLUSHING;
+  }
+
   GstSample *sample;
   GstBuffer *buffer;
   GstMapInfo map_info;
@@ -479,7 +500,10 @@ int main(int argc, char *argv[]){
   executor.spin();
   
   // Cleanup
-  pipeline_thread.join();
+  node->stopGStreamerPipeline();
+  if (pipeline_thread.joinable()) {
+    pipeline_thread.join();
+  }
   rclcpp::shutdown();
   
   return 0;

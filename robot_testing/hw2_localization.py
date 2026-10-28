@@ -274,7 +274,11 @@ class LocalizationService:
     def __init__(self, node):
         from ament_index_python.packages import get_package_share_directory
         from apriltag_msgs.msg import AprilTagDetectionArray
-        from hw2_interfaces.srv import GetRobotPose
+        from geometry_msgs.msg import PoseStamped
+        try:
+            from hw2_interfaces.srv import GetRobotPose
+        except ImportError:
+            GetRobotPose = None
         from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
         from rclpy.time import Time
         from tf2_ros import Buffer, TransformException, TransformListener
@@ -297,15 +301,22 @@ class LocalizationService:
             node.get_parameter('max_pose_age_s').value,
             node.get_parameter('request_timeout_s').value,
         )
+        self.pose_pub = node.create_publisher(PoseStamped, '/robot_pose', 10)
         self.subscription = node.create_subscription(
             AprilTagDetectionArray, '/detections', self.on_detections, 1
         )
-        self.service_group = MutuallyExclusiveCallbackGroup()
-        self.service = node.create_service(
-            GetRobotPose, '/get_robot_pose', self.on_request,
-            callback_group=self.service_group,
-        )
-        node.get_logger().info('Ready: /get_robot_pose (poses are returned only on request)')
+        if GetRobotPose is not None:
+            self.service_group = MutuallyExclusiveCallbackGroup()
+            self.service = node.create_service(
+                GetRobotPose, '/get_robot_pose', self.on_request,
+                callback_group=self.service_group,
+            )
+            node.get_logger().info('Ready: /get_robot_pose service and /robot_pose publisher')
+        else:
+            self.service = None
+            node.get_logger().info('hw2_interfaces not found; publishing on /robot_pose topic.')
+
+        self.publish_timer = node.create_timer(0.1, self.publish_pose_tick)
 
     def on_detections(self, message):
         stamp = message.header.stamp
@@ -313,6 +324,34 @@ class LocalizationService:
                            for item in message.detections)
         self.provider.observe(Observation(stamp.sec*10**9 + stamp.nanosec,
                                           message.header.frame_id, detections))
+
+    def publish_pose_tick(self):
+        with self.provider._lock:
+            observation = self.provider._latest
+        if observation is None:
+            return
+        age = (self.provider.now_ns() - observation.stamp_ns) / 1e9
+        if not (observation.stamp_ns > 0 and 0 <= age <= self.provider.max_age_s):
+            return
+        try:
+            estimate = self.provider.estimator.estimate(observation, self.lookup)
+            msg = self.create_pose_message(estimate)
+            self.pose_pub.publish(msg)
+        except Exception:
+            pass
+
+    def create_pose_message(self, estimate):
+        from geometry_msgs.msg import PoseStamped
+        msg = PoseStamped()
+        msg.header.frame_id = 'map'
+        msg.header.stamp.sec = estimate.stamp_ns // 10**9
+        msg.header.stamp.nanosec = estimate.stamp_ns % 10**9
+        msg.pose.position.x = float(estimate.x)
+        msg.pose.position.y = float(estimate.y)
+        msg.pose.position.z = 0.0
+        msg.pose.orientation.z = math.sin(estimate.yaw / 2.)
+        msg.pose.orientation.w = math.cos(estimate.yaw / 2.)
+        return msg
 
     def lookup(self, tag_frame, observation):
         stamp = self.time_type(nanoseconds=observation.stamp_ns,
@@ -333,13 +372,7 @@ class LocalizationService:
             return response
         response.success = True
         response.message = 'Pose estimated from current landmark observations'
-        response.pose.header.frame_id = 'map'
-        response.pose.header.stamp.sec = estimate.stamp_ns // 10**9
-        response.pose.header.stamp.nanosec = estimate.stamp_ns % 10**9
-        response.pose.pose.position.x = estimate.x
-        response.pose.pose.position.y = estimate.y
-        response.pose.pose.orientation.z = math.sin(estimate.yaw / 2.)
-        response.pose.pose.orientation.w = math.cos(estimate.yaw / 2.)
+        response.pose = self.create_pose_message(estimate)
         response.tag_ids = list(estimate.tag_ids)
         return response
 
