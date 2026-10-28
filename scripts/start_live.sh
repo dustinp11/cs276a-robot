@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-camera_calibration="$script_dir/calibration/results/images_2026-10-26_classic/camera_parameter.yaml"
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/common.bash"
 
 usage() {
   cat <<EOF
@@ -50,15 +49,8 @@ if [[ ! "$tag_size" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]] ||
   exit 2
 fi
 
-if [[ ! -f "$camera_calibration" ]]; then
-  printf 'Camera calibration file not found: %s\n' "$camera_calibration" >&2
-  exit 1
-fi
-
-set +u
-source /opt/ros/jazzy/setup.bash
-source "$script_dir/rubikpi_ros2/install/setup.bash"
-set -u
+require_calibration
+source_vision
 
 params_file="$(mktemp)"
 cat >"$params_file" <<EOF
@@ -81,7 +73,7 @@ EOF
 camera_pid=
 detector_pid=
 logger_pid=
-detections_file="$script_dir/detections.txt"
+detections_file="$repo_root/detections.txt"
 cleanup() {
   trap - EXIT INT TERM
   for pid in "$logger_pid" "$detector_pid" "$camera_pid"; do

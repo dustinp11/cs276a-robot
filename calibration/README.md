@@ -4,16 +4,29 @@ Standalone HW2 calibration scripts. Full work log, setup, capture and calibratio
 output definitions, and hardware checks are in [hw2_agents.md](../../hw2_agents.md).
 Start there. No movement modules are imported or modified.
 
+For offline calibration, install dependencies in a virtual environment:
+
+```sh
+python3 -m venv calibration/.venv
+calibration/.venv/bin/python -m pip install -r calibration/requirements.txt
+```
+
+The calibration tools use the OpenCV 4 API; requirements exclude OpenCV 5.
+Use the virtual environment's Python for the offline command below. ROS capture
+uses the robot's ROS Python environment through `scripts/capture_calibration.sh`.
+
 For an easy periodic ROS camera capture, leave the camera launch running in one terminal and
-run `./capture_calibration.sh` from the repository root in another. It saves 25 PNG images,
+run `./scripts/capture_calibration.sh` from the repository root in another. It saves 25 PNG images,
 at least 5 seconds apart, under `calibration/images/`. Move the calibration board between
 captures. Adjust the interval or count with, for example,
-`./capture_calibration.sh --interval 8 --count 20`.
+`./scripts/capture_calibration.sh --interval 8 --count 20`.
+Use `./scripts/run_camera.sh` for the raw camera stream during capture. See
+[scripts/README.md](../scripts/README.md) for setup and the live detection workflow.
 
 Calibrate the captured 7x7-inner-corner board and compare pinhole and fisheye models with:
 
 ```sh
-python3 calibration/calibrate.py \
+calibration/.venv/bin/python calibration/calibrate.py \
   --images calibration/images --columns 7 --rows 7 \
   --min-views 10 --output calibration/results/board_7x7
 ```

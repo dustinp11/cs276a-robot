@@ -26,6 +26,7 @@ setup(
     entry_points={
         'console_scripts': [
             'robot_test = robot_testing.robot_test:main',
+            'motor_control = robot_testing.motor_control:main',
             'velocity_mapping = robot_testing.velocity_mapping:main',
             'hw1_solution = robot_testing.hw1_solution:main',
         ],

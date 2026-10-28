@@ -38,8 +38,8 @@ The robot commands below assume the repository is available at
 
 Relevant files:
 
-- `run_camera.sh`: starts only the camera. The recommended workflow below uses
-  the camera launch directly; do not run this script at the same time as
+- `scripts/run_camera.sh`: starts only the raw camera. The recommended workflow below uses
+  `scripts/launch_camera.sh` for rectification; do not run these at the same time as
   another camera launch.
 - `rubikpi_ros2/robot_vision/launch/robot_vision_camera.launch.py`: camera
   launch file; defaults to 1280x720 at 10 fps and also launches
@@ -129,12 +129,13 @@ Important config behavior:
 ## Starting the system
 
 Run on the Rubik Pi, after the camera has cooled and only one person/process is
-using it. Source the ROS environment in every terminal.
+using it. The scripts source the ROS environment in each terminal. See
+[scripts/README.md](scripts/README.md) for all entry points and path overrides.
 
 ### Three-terminal workflow
 
-Use only this three-terminal workflow. Do not run `start_live.sh`,
-`run_camera.sh`, or any other camera launch at the same time. Let the camera
+Use only this three-terminal workflow. Do not run `scripts/start_live.sh`,
+`scripts/run_camera.sh`, or any other camera launch at the same time. Let the camera
 cool before testing if it has become hot.
 
 Before the first run, ensure the workspace copy of `apriltag_ros` is built.
@@ -155,25 +156,15 @@ The package prefix should resolve inside
 **Terminal 1 — camera with the latest calibration and rectification:**
 
 ```bash
-cd ~/robot_testing/rubikpi_ros2
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-
-ros2 launch robot_vision_camera robot_vision_camera.launch.py \
-  image_rectify:=true \
-  camera_parameter_path:=/home/ubuntu/robot_testing/calibration/results/images_2026-10-26_classic/camera_parameter.yaml
+cd ~/robot_testing
+./scripts/launch_camera.sh
 ```
 
 **Terminal 2 — detector:**
 
 ```bash
-cd ~/robot_testing/rubikpi_ros2
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-
-ros2 launch apriltag_ros apriltag_launch.py \
-  image_topic:=/camera/image_raw \
-  camera_info_topic:=/camera/camera_info
+cd ~/robot_testing
+./scripts/launch_apriltag.sh
 ```
 
 This uses the workspace's 36h11 config with IDs 0 and 1. Before relying on it,
@@ -192,9 +183,8 @@ Restart the detector after changing its configuration.
 **Terminal 3 — inspect detector messages:**
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source ~/robot_testing/rubikpi_ros2/install/setup.bash
-ros2 topic echo /detections
+cd ~/robot_testing
+./scripts/monitor_detections.sh
 ```
 
 An array containing a tag entry indicates a detection. An empty `detections`
@@ -247,7 +237,7 @@ cause:
 
 - At one point two `/robot_vision_camera` nodes were running concurrently.
   Their launch/node PIDs were manually stopped; later `pgrep` showed none
-  before a new `run_camera.sh` launch.
+  before a new `scripts/run_camera.sh` launch.
 - ROS graph checks showed `/apriltag`, camera, and Foxglove bridge nodes.
   `ros2 node info /apriltag` showed subscriptions to
   `/camera/image_raw` and `/camera/camera_info`, and a `/detections` publisher.
@@ -272,7 +262,7 @@ cause:
 ## Recommended next diagnostic sequence
 
 1. Let the camera cool. Start exactly one camera and AprilTag detector; verify
-   process count first. Do not start a second camera using `run_camera.sh`.
+   process count first. Do not start a second camera using `scripts/run_camera.sh`.
 2. Inspect the camera terminal for pipeline, calibration-loading, or
    rectification errors. Confirm the node reports the intended 1280x720 size
    and latest calibration path.
