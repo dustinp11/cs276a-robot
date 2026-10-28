@@ -1,23 +1,20 @@
-"""Waypoint tracking to (1, 0) using AprilTag z-distance and forward-only motion.
+"""Waypoint tracking to (1, 0) followed by 90-degree CCW turn from hw1_solution.
 
-Controls the robot to reach waypoint (1.0, 0.0) in map frame:
-1. Initial stationary check:
-   - Waits 5 seconds while stationary for the camera stream to stabilize.
-   - Reads AprilTag 0 z-distance (depth in front of camera).
-   - Tag 0 is located at x = 1.75 m; target distance at (1, 0) is z = 0.75 m.
-   - Computes planned drive distance (approx 1.0 m).
+Controls the robot in two sequential steps:
+1. Step 1: Forward-only navigation to (1.0, 0.0):
+   - Initial stationary check: waits 5 seconds for camera to stabilize, reads
+     AprilTag 0 z-distance (depth in front of camera).
+   - Tag 0 is at x = 1.75 m; target depth at (1, 0) is z = 0.75 m.
+   - Drives forward ONLY (angular.z strictly 0.0, no rotation).
+   - Once dead reckoning reaches target distance, halts and settles 5 seconds.
+   - Measures AprilTag 0 z-distance directly.
+   - If short of (1, 0) (z > 0.75 m + tolerance), moves forward by the difference.
+   - Repeats until tag z is within tolerance of 0.75 m.
 
-2. Forward motion:
-   - Drives forward ONLY (angular.z is strictly 0.0, no rotation).
-   - Uses dead reckoning to track forward progress.
-
-3. Stationary verification & adjustment:
-   - Once dead reckoning reaches the target distance, halts completely.
-   - Waits 5 seconds stationary for camera catchup.
-   - Measures AprilTag 0 z-distance directly from the tag.
-   - If the robot is short of (1, 0) (z > 0.75 m + tolerance), moves forward
-     by the remaining distance (z - 0.75 m).
-   - Repeats until tag z is within tolerance of 0.75 m, then concludes.
+2. Step 2: Turn 90 degrees CCW:
+   - Rotates in-place 90 degrees CCW using the calibrated dead reckoning rotation
+     control from hw1_solution (angular_speed_ccw = 2 * pi / 5.2 rad/s).
+   - Halts and ends navigation when the 90-degree turn is complete.
 """
 
 import json
@@ -91,6 +88,13 @@ class ControlNode(Node):
         self.target_z = self.tag0_x - self.target_x
         self.tolerance = 0.035  # 3.5 cm tolerance
         self.settle_time_s = 5.0  # 5s delay before polling localization for camera catchup
+
+        # Calibrated parameters from robot_test.py / hw1_solution
+        self.angular_speed_cw = 2.0 * math.pi / 4.5
+        self.angular_speed_ccw = 2.0 * math.pi / 5.2
+        self.angle_tolerance = 0.1
+        self.current_yaw = 0.0
+        self.target_yaw = math.pi / 2.0
 
         # Control and motion variables
         self.state = 'initial_settling'
@@ -178,8 +182,20 @@ class ControlNode(Node):
         except Exception:
             pass
 
+    def get_rotation_direction(self, heading_error):
+        """Calibrated rotational velocity from hw1_solution."""
+        if heading_error > 0:
+            return self.angular_speed_ccw
+        else:
+            return -self.angular_speed_cw
+
+    def update_dead_reckoning(self, linear_vel, angular_vel, dt):
+        """Propagate orientation estimate using dead reckoning from hw1_solution."""
+        self.current_yaw += angular_vel * dt
+        self.current_yaw = (self.current_yaw + math.pi) % (2.0 * math.pi) - math.pi
+
     def control_tick(self):
-        """Main periodic control loop executing forward-only navigation to (1, 0)."""
+        """Main periodic control loop executing forward navigation and 90-deg CCW turn."""
         now = self.get_clock().now()
         dt = (now - self.last_tick).nanoseconds / 1e9
         self.last_tick = now
@@ -264,10 +280,13 @@ class ControlNode(Node):
                 if abs(error) <= self.tolerance:
                     self.get_logger().info(
                         f'Waypoint (1, 0) reached within tolerance! '
-                        f'Final tag z = {z:.3f} m (error: {error:+.3f} m). Navigation complete.'
+                        f'Final tag z = {z:.3f} m (error: {error:+.3f} m). '
+                        f'Step 2: Turning 90 degrees CCW via hw1_solution rotation...'
                     )
                     self.stop_robot()
-                    self.state = 'done'
+                    self.current_yaw = 0.0
+                    self.target_yaw = math.pi / 2.0
+                    self.state = 'turning_90_ccw'
                 elif error > self.tolerance:
                     self.get_logger().info(
                         f'Robot is {error:.3f} m short of (1, 0). '
@@ -279,16 +298,40 @@ class ControlNode(Node):
                 else:
                     self.get_logger().info(
                         f'Robot reached (1, 0) (tag z={z:.3f} m <= {self.target_z:.3f} m). '
-                        f'Stopping at goal.'
+                        f'Step 2: Turning 90 degrees CCW via hw1_solution rotation...'
                     )
                     self.stop_robot()
-                    self.state = 'done'
+                    self.current_yaw = 0.0
+                    self.target_yaw = math.pi / 2.0
+                    self.state = 'turning_90_ccw'
                 return
 
             if time_stopped > (self.settle_time_s + 5.0):
                 self.get_logger().warn(
                     'AprilTag 0 not detected during settling check. Continuing to poll...'
                 )
+            return
+
+        # Phase 4: Turn 90 degrees CCW based on hw1_solution dead reckoning rotation
+        if self.state == 'turning_90_ccw':
+            heading_error = self.target_yaw - self.current_yaw
+            heading_error = (heading_error + math.pi) % (2.0 * math.pi) - math.pi
+
+            if abs(heading_error) < self.angle_tolerance:
+                self.stop_robot()
+                self.get_logger().info(
+                    f'Turned 90 degrees CCW (yaw={self.current_yaw:.3f} rad). '
+                    f'Navigation complete.'
+                )
+                self.state = 'done'
+                return
+
+            twist = Twist()
+            twist.linear.x = 0.0
+            twist.angular.z = float(self.get_rotation_direction(heading_error))
+            self.update_dead_reckoning(0.0, twist.angular.z, dt)
+            self.cmd_pub.publish(twist)
+            return
 
 
 def main(args=None):
