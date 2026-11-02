@@ -41,7 +41,7 @@ From the repository root, run one command per terminal:
 ```
 
 `launch_camera.sh` enables rectification using
-`calibration/results/images_2026-10-26_classic/camera_parameter.yaml`. Override it
+`config/camera_parameter.yaml`. Override it
 with `CAMERA_CALIBRATION=/absolute/path/to/camera_parameter.yaml`.
 The detector uses `rubikpi_ros2/apriltag_ros/cfg/tags_36h11.yaml`; check tag IDs and
 measured sizes there, then rebuild. All three commands forward additional
@@ -50,9 +50,9 @@ arguments to `ros2`, for example `./scripts/launch_camera.sh frame_rate:=5`.
 Alternatively, `./scripts/start_live.sh 36h11 0.165` starts the calibrated camera,
 detector, and logger together with an explicit family and measured tag size in
 meters. It appends non-empty detections to `detections.txt` at the repository root
-and stops its children on Ctrl-C. Use one camera workflow at a time. Consult the
-[hardware handoff](../APRILTAG_LIVE_DETECTION_HANDOFF.md) for known camera issues
-and the recommended three-terminal workflow.
+and stops its children on Ctrl-C. Use one camera workflow at a time.
+Generated detection and coordinate logs are ignored by Git. Keep experiment
+artifacts in the ignored `hw2_results/` directory for local analysis.
 
 ## HW1 waypoint navigation
 

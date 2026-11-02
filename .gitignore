@@ -7,3 +7,23 @@
 **/__pycache__/
 *.py[cod]
 .DS_Store
+
+# Local experiment data and archived reference material
+/hw2_results/
+/coordinate.txt
+/coordinates.txt
+/coords*.txt
+/detections.txt
+/first*.txt
+/second*.txt
+/third*.txt
+/new-*.txt
+/*_correction_audit.csv
+/*_correction_notes.md
+/*_plot.png
+/larger_april.png
+/smaller_april.png
+/APRILTAG_LIVE_DETECTION_HANDOFF.md
+/HW2_TEAM_INTERFACE.md
+/rubikpi_ros2/apriltag_ros/LIVE_DETECTION.md
+/re_calibrate/

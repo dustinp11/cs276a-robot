@@ -1,7 +1,7 @@
 # Shared paths and ROS setup for the Bash entry points in scripts/.
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 vision_workspace="$repo_root/rubikpi_ros2"
-camera_calibration="${CAMERA_CALIBRATION:-$repo_root/calibration/results/images_2026-10-26_classic/camera_parameter.yaml}"
+camera_calibration="${CAMERA_CALIBRATION:-$repo_root/config/camera_parameter.yaml}"
 
 source_setup() {
   if [[ ! -f "$1" ]]; then
