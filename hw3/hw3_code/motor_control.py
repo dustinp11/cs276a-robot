@@ -63,6 +63,7 @@ class MotorControllerNode(Node):
         
         # initialize serial connection
         self.robot = None
+        self.serial_lock = threading.Lock()
         self.init_serial()
         if self.robot is None:
             raise RuntimeError('Motor serial connection unavailable; refusing HW3 startup')
@@ -96,12 +97,18 @@ class MotorControllerNode(Node):
         
     def init_serial(self):
         """initialize serial connection"""
-        try:
-            self.robot = serial.Serial('/dev/ttyUSB0', 115200, timeout=0.1)
-            self.get_logger().info('Serial connection established on /dev/ttyUSB0')
-        except Exception as e:
-            self.get_logger().warn(f'Failed to establish serial connection: {str(e)}')
-            self.robot = None
+        with self.serial_lock:
+            try:
+                if self.robot and self.robot.is_open:
+                    self.robot.close()
+            except Exception:
+                pass
+            try:
+                self.robot = serial.Serial('/dev/ttyUSB0', 115200, timeout=0.1)
+                self.get_logger().info('Serial connection established on /dev/ttyUSB0')
+            except Exception as e:
+                self.get_logger().warn(f'Failed to establish serial connection: {str(e)}')
+                self.robot = None
     
     def motor_command_callback(self, msg):
         """receive motor commands from topic"""
@@ -157,31 +164,33 @@ class MotorControllerNode(Node):
             # check for timeout before sending
             self.check_timeout()
             
-            if self.robot:
-                try:
-                    # get current command safely
-                    with self.command_lock:
-                        current_command = self.motor_command.copy()
-                    
-                    command_str = json.dumps(current_command) + '\n'
-                    self.robot.write(command_str.encode('utf-8'))
-                    
-                except Exception as e:
-                    self.get_logger().error(f'Motor command serial write error: {str(e)}')
-                    self.init_serial()
+            try:
+                # get current command safely
+                with self.command_lock:
+                    current_command = self.motor_command.copy()
+                
+                command_str = json.dumps(current_command) + '\n'
+                with self.serial_lock:
+                    if self.robot:
+                        self.robot.write(command_str.encode('utf-8'))
+                
+            except Exception as e:
+                self.get_logger().error(f'Motor command serial write error: {str(e)}')
+                self.init_serial()
             time.sleep(0.05)  # 20Hz
     
     def send_imu_requests(self):
         """send IMU data requests to robot via serial at 50Hz"""
         while self.running and rclpy.ok():
-            if self.robot:
-                try:
-                    command_str = json.dumps(self.imu_request_command) + '\n'
-                    self.robot.write(command_str.encode('utf-8'))
-                    
-                except Exception as e:
-                    self.get_logger().error(f'IMU request serial write error: {str(e)}')
-                    # Don't reinit serial here to avoid conflict with motor thread
+            try:
+                command_str = json.dumps(self.imu_request_command) + '\n'
+                with self.serial_lock:
+                    if self.robot:
+                        self.robot.write(command_str.encode('utf-8'))
+                
+            except Exception as e:
+                self.get_logger().error(f'IMU request serial write error: {str(e)}')
+                # Don't reinit serial here to avoid conflict with motor thread
             time.sleep(0.02)  # 50Hz
     
     def receive_data(self):
@@ -266,19 +275,22 @@ class MotorControllerNode(Node):
         
         # Send stop command before closing (only if ROS context is still valid)
         try:
-            if self.robot and rclpy.ok():
-                stop_command = json.dumps({"T": 1, "L": 0.0, "R": 0.0}) + '\n'
-                self.robot.write(stop_command.encode('utf-8'))
-                self.get_logger().info('Robot stopped')
+            with self.serial_lock:
+                if self.robot and rclpy.ok():
+                    stop_command = json.dumps({"T": 1, "L": 0.0, "R": 0.0}) + '\n'
+                    self.robot.write(stop_command.encode('utf-8'))
+                    self.get_logger().info('Robot stopped')
         except Exception as e:
             # Ignore errors during shutdown as context may already be invalid
             pass
         
         # Close serial connection
         try:
-            if self.robot:
-                self.robot.close()
-                self.get_logger().info('Serial connection closed')
+            with self.serial_lock:
+                if self.robot:
+                    self.robot.close()
+                    self.robot = None
+                    self.get_logger().info('Serial connection closed')
         except Exception as e:
             pass
         super().destroy_node()

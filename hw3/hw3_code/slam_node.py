@@ -47,7 +47,6 @@ class SlamNode(Node):
         """Configure the EKF, raw-camera observations, and command-motion uncertainty."""
         v = self.values
         self.estimator = EkfSlam(gate_threshold=v['gate_threshold'])
-        self.drive_estimator = EkfSlam()
         self.adapter = ObservationAdapter(v['tag_size_m'], v['camera_xyz_m'], v['camera_rpy_deg'],
                                           v['range_std_m'], v['range_scale'], v['bearing_std_rad'],
                                           v['max_reprojection_px'])
@@ -198,7 +197,6 @@ class SlamNode(Node):
     def _predict_to(self, stamp):
         """Predict the persistent estimator through chronological applied-command history."""
         self.motion.propagate(self.estimator, self.estimator_time, stamp)
-        self.motion.propagate(self.drive_estimator, self.estimator_time, stamp)
         self.estimator_time = stamp
 
     def _apply_frame(self, stamp, observations):
@@ -219,7 +217,7 @@ class SlamNode(Node):
         if reason:
             self.reason = reason
             return 0., 0.
-        predicted = copy.deepcopy(self.drive_estimator)
+        predicted = copy.deepcopy(self.estimator)
         self.motion.propagate(predicted, self.estimator_time, now)
         self.reason = self.controller.stage
         command = self.controller.step(predicted.robot_pose)
