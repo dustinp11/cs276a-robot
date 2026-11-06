@@ -17,3 +17,7 @@ Synthetic projected corners are geometry fixtures, not hardware calibration.
 
 ROS topic/QoS integration, camera timing, actual motor response, and physical
 SLAM accuracy require on-robot validation. No standalone route simulation remains.
+
+Fixed-square phase checks confirm that route execution has no landmark inputs.
+Browser snapshot checks verify the displayed estimator state; the separate HTTP
+listener check is skipped if the environment denies local socket binding.

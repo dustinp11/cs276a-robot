@@ -150,3 +150,52 @@ def square_waypoints(side_ft=7.0, laps=1):
     vertices = [[side, 0., math.pi/2.], [side, side, math.pi],
                 [0., side, -math.pi/2.], [0., 0., 0.]]
     return vertices * laps
+
+
+class FixedSquareController:
+    """Drive four fixed-length legs and four left turns using command odometry only.
+
+    Landmark observations never gate or change this route. Physical accuracy still
+    depends on the motor speed/turn-rate calibration; this is not encoder feedback.
+    """
+
+    def __init__(self, side_ft=7.0, laps=1, settings=None):
+        """Set the commanded square dimensions and speeds without a landmark map."""
+        square_waypoints(side_ft, laps)
+        self.settings = settings or ControlSettings()
+        self.side_m, self.laps = side_ft*0.3048, laps
+        self.index, self.stage, self.origin = 0, 'drive', None
+
+    @property
+    def done(self):
+        """Return whether all four legs and left turns of each lap have completed."""
+        return self.index >= 4*self.laps
+
+    def step(self, pose):
+        """Return constant drive/left-turn commands from the command-odometry pose."""
+        if self.done or pose is None:
+            return 0., 0.
+        pose = np.asarray(pose, dtype=float)
+        if pose.shape != (3,) or not np.isfinite(pose).all():
+            return 0., 0.
+        if self.origin is None:
+            self.origin = pose.copy()
+        if self.stage == 'drive':
+            return self._drive(pose)
+        return self._left_turn(pose)
+
+    def _drive(self, pose):
+        """Finish a leg after the estimated commanded displacement reaches the side length."""
+        if np.linalg.norm(pose[:2]-self.origin[:2]) < self.side_m:
+            return self.settings.max_speed, 0.
+        self.stage, self.origin = 'turn_left', pose.copy()
+        return 0., 0.
+
+    def _left_turn(self, pose):
+        """Turn left approximately 90 degrees, then start the next fixed-length leg."""
+        progress = max(0., wrap_angle(pose[2]-self.origin[2]))
+        if progress < math.pi/2.:
+            return 0., self.settings.rotation_speed
+        self.index += 1
+        self.stage, self.origin = 'drive', pose.copy()
+        return 0., 0.

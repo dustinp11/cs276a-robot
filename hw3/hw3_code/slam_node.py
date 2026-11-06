@@ -21,7 +21,8 @@ from .observations import ObservationAdapter
 from .recording import RunRecorder
 from .settings import DEFAULTS, validate_parameters
 from .visualization import MapPublisher
-from .waypoint_control import ControlSettings, WaypointController, square_waypoints
+from .web_view import BrowserMap
+from .waypoint_control import ControlSettings, FixedSquareController
 
 
 class SlamNode(Node):
@@ -36,6 +37,8 @@ class SlamNode(Node):
         self._create_state()
         self.recorder = RunRecorder(self.values['output_directory'], self.values)
         self.visualization = MapPublisher(self, self.values['frame_id'])
+        self.browser = BrowserMap(self.values['web_host'], self.values['web_port'])
+        self.get_logger().info(f"Browser map: http://ROBOT_IP:{self.values['web_port']}/")
         self._create_interfaces()
         self.timer = self.create_timer(self.controller.settings.dt, self.tick)
         self.get_logger().info(f"Square side={self.values['square_side_ft']} ft; logs={self.recorder.directory}; empty map, Standard41h12")
@@ -44,14 +47,14 @@ class SlamNode(Node):
         """Configure the EKF, raw-camera observations, and command-motion uncertainty."""
         v = self.values
         self.estimator = EkfSlam(gate_threshold=v['gate_threshold'])
+        self.drive_estimator = EkfSlam()
         self.adapter = ObservationAdapter(v['tag_size_m'], v['camera_xyz_m'], v['camera_rpy_deg'],
                                           v['range_std_m'], v['range_scale'], v['bearing_std_rad'],
                                           v['max_reprojection_px'])
         self.motion = MotionHistory(v['distance_noise'], v['turn_noise'], v['idle_distance_noise'],
                                     v['idle_turn_noise'], v['command_hold_s'])
-        settings = ControlSettings(max_speed=v['max_speed_m_s'], rotation_speed=v['max_turn_rad_s'],
-                                   position_tolerance=v['position_tolerance_m'], yaw_tolerance=v['yaw_tolerance_rad'])
-        self.controller = WaypointController(square_waypoints(v['square_side_ft'], v['laps']), settings)
+        settings = ControlSettings(max_speed=v['max_speed_m_s'], rotation_speed=v['max_turn_rad_s'])
+        self.controller = FixedSquareController(v['square_side_ft'], v['laps'], settings)
 
     def _create_state(self):
         """Initialize lifecycle and observation queues without assuming a landmark count."""
@@ -60,7 +63,9 @@ class SlamNode(Node):
         self.armed, self.fault = self.values['auto_start'], None
         self.started_wall, self.last_tick_wall = time.monotonic(), time.monotonic()
         self.last_ros_time, self.last_publish, self.last_lap = None, 0., 0
-        self.reason = 'waiting for motion stream and calibrated camera observations'
+        self.reason = 'waiting for motor motion stream'
+        self.logged_reason = None
+        self.vision_problem = None
         self.completed_recorded = False
 
     def _create_interfaces(self):
@@ -80,20 +85,28 @@ class SlamNode(Node):
     def on_camera(self, message):
         """Use raw pinhole CameraInfo only at the configured calibration resolution."""
         if (message.width, message.height) != (self.values['image_width'], self.values['image_height']):
-            self.fail('Camera resolution differs from configured calibration resolution')
+            self._vision_warning('Camera resolution differs from configured calibration resolution')
             return
         if message.distortion_model not in ('plumb_bob', 'rational_polynomial'):
-            self.fail('Unsupported raw camera distortion model')
+            self._vision_warning('Unsupported raw camera distortion model')
             return
         try:
             first = self.adapter.matrix is None
+            self.vision_problem = None
             self.adapter.set_camera(message.k, message.d, message.header.frame_id)
             if first:
                 self.recorder.write('camera_calibration', self.now_seconds(), frame=message.header.frame_id,
                                     width=message.width, height=message.height, matrix=list(message.k),
                                     distortion=list(message.d), distortion_model=message.distortion_model)
         except ValueError as error:
-            self.fail(str(error))
+            self._vision_warning(str(error))
+
+    def _vision_warning(self, reason):
+        """Disable invalid camera observations without preventing the fixed square drive."""
+        self.adapter.matrix = None
+        if reason != self.vision_problem:
+            self.vision_problem = reason
+            self.get_logger().warning(f'Mapping unavailable: {reason}; fixed square drive is independent')
 
     def on_motion(self, message):
         """Record the mapper's applied-model velocity, never treating it as encoder data."""
@@ -185,6 +198,7 @@ class SlamNode(Node):
     def _predict_to(self, stamp):
         """Predict the persistent estimator through chronological applied-command history."""
         self.motion.propagate(self.estimator, self.estimator_time, stamp)
+        self.motion.propagate(self.drive_estimator, self.estimator_time, stamp)
         self.estimator_time = stamp
 
     def _apply_frame(self, stamp, observations):
@@ -205,7 +219,7 @@ class SlamNode(Node):
         if reason:
             self.reason = reason
             return 0., 0.
-        predicted = copy.deepcopy(self.estimator)
+        predicted = copy.deepcopy(self.drive_estimator)
         self.motion.propagate(predicted, self.estimator_time, now)
         self.reason = self.controller.stage
         command = self.controller.step(predicted.robot_pose)
@@ -213,7 +227,7 @@ class SlamNode(Node):
         return command
 
     def _pause_reason(self, now, wall):
-        """Require fresh motion and initial landmark observations before autonomous movement."""
+        """Require motor communication and startup readiness; vision never gates the route."""
         if self.fault:
             return self.fault
         if self.controller.done:
@@ -227,10 +241,6 @@ class SlamNode(Node):
             return 'waiting for applied-motion heartbeat'
         if self.estimator_time is None or wall-self.started_wall < self.values['startup_wait_s']:
             return 'waiting for startup'
-        if self.seen_frames < self.values['startup_observations']:
-            return 'waiting for initial landmark observations'
-        if self.last_vision is None or now-self.last_vision > self.values['max_vision_age_s']:
-            return 'paused: no recent accepted landmark observations'
         return None
 
     def _record_progress(self, now):
@@ -253,9 +263,14 @@ class SlamNode(Node):
         if self.estimator_time is not None:
             self.recorder.snapshot(self.estimator, self.estimator_time, lap=self.last_lap, event='periodic')
             self.visualization.publish(self.estimator, Time(seconds=self.estimator_time).to_msg())
+            age = None if self.last_vision is None else max(0., now-self.last_vision)
+            self.browser.update(self.estimator, self.estimator_time, self.reason, self.last_lap, age, self.skipped_frames)
         status = String()
         status.data = f'{self.reason}; landmarks={len(self.estimator.landmark_ids)}; lap={self.last_lap}; skipped_frames={self.skipped_frames}'
         self.status_pub.publish(status)
+        if self.reason != self.logged_reason:
+            self.get_logger().info(status.data)
+            self.logged_reason = self.reason
 
     def send_command(self, linear, angular):
         """Publish an HW3-only velocity command and log its ROS timestamp."""
@@ -293,6 +308,7 @@ class SlamNode(Node):
         if self.estimator_time is not None:
             self.recorder.snapshot(self.estimator, self.estimator_time, lap=self.last_lap, event='shutdown')
         self.recorder.close()
+        self.browser.close()
         super().destroy_node()
 
 

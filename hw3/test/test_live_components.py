@@ -4,6 +4,8 @@ import json
 import math
 from pathlib import Path
 import tempfile
+from urllib.error import HTTPError
+from urllib.request import urlopen
 import unittest
 import xml.etree.ElementTree as ET
 
@@ -18,7 +20,8 @@ from hw3_code.observations import ObservationAdapter, tag_corners
 from hw3_code.plot_run import compare_landmarks, export
 from hw3_code.recording import RunRecorder
 from hw3_code.settings import DEFAULTS, validate_parameters
-from hw3_code.waypoint_control import WaypointController, square_waypoints
+from hw3_code.web_view import BrowserMap
+from hw3_code.waypoint_control import FixedSquareController, WaypointController, square_waypoints
 
 
 class LiveComponentTests(unittest.TestCase):
@@ -121,6 +124,62 @@ class LiveComponentTests(unittest.TestCase):
         self.assertLess(model.map_command(0., -.8)[3], 0.)
         self.assertEqual(model.map_command(0., 0.), (0., 0., 0., 0.))
         self.assertEqual(model.map_command(float('nan'), 0.), (0., 0., 0., 0.))
+
+    def test_fixed_square_drives_without_landmark_input(self):
+        """Each literal leg/turn endpoint advances the route without any vision interface."""
+        controller = FixedSquareController()
+        corners = [[2.1336, 0., 0.], [2.1336, 2.1336, math.pi/2.],
+                   [0., 2.1336, math.pi], [0., 0., -math.pi/2.]]
+        pose = np.zeros(3)
+        for number, corner in enumerate(corners):
+            self.assertEqual(controller.step(pose), (controller.settings.max_speed, 0.))
+            self.assertEqual(controller.step(corner), (0., 0.))
+            self.assertEqual(controller.step(corner), (0., controller.settings.rotation_speed))
+            pose = np.array(corner)
+            pose[2] += math.pi/2.
+            self.assertEqual(controller.step(pose), (0., 0.))
+            self.assertEqual(controller.index, number+1)
+        self.assertTrue(controller.done)
+        self.assertEqual(controller.step(pose), (0., 0.))
+
+    def test_browser_snapshot_without_network(self):
+        """The viewer exposes estimator poses/covariances and does not invent landmarks."""
+        import threading
+        viewer = BrowserMap.__new__(BrowserMap)
+        viewer.lock = threading.Lock()
+        viewer.data = {'trajectory': []}
+        slam = EkfSlam()
+        viewer.update(slam, 1., 'drive', 0, None, 0)
+        self.assertEqual(viewer.data['landmarks'], [])
+        self.assertEqual(viewer.data['pose'], [0., 0., 0.])
+        slam.observe(('41h12', 9), 2., 0., np.diag([.01, .001]))
+        viewer.update(slam, 2., 'turn_left', 0, .1, 0)
+        self.assertEqual(viewer.data['landmarks'][0]['id'], '41h12:9')
+        self.assertEqual(len(viewer.data['trajectory']), 2)
+        json.dumps(viewer.data, allow_nan=False)
+
+    def test_browser_map_http_and_state(self):
+        """Serve only the map page and real estimator snapshot, with no file access."""
+        try:
+            viewer = BrowserMap('127.0.0.1', 0)
+        except PermissionError:
+            self.skipTest('This environment does not allow local socket listeners')
+        address = f'http://127.0.0.1:{viewer.server.server_port}'
+        try:
+            slam = EkfSlam()
+            viewer.update(slam, 1., 'drive', 0, None, 0)
+            with urlopen(address+'/state.json', timeout=2.) as response:
+                data = json.load(response)
+            self.assertEqual(data['landmarks'], [])
+            self.assertEqual(data['pose'], [0., 0., 0.])
+            self.assertEqual(data['status'], 'drive')
+            with urlopen(address, timeout=2.) as response:
+                self.assertIn('HW3 live robot map', response.read().decode())
+            with self.assertRaises(HTTPError) as error:
+                urlopen(address+'/etc/passwd', timeout=2.)
+            self.assertEqual(error.exception.code, 404)
+        finally:
+            viewer.close()
 
     def test_parameter_validation(self):
         """Reject invalid route/noise settings and permit zero corrected-bit tolerance."""

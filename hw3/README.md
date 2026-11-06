@@ -25,11 +25,12 @@ raw camera + CameraInfo → AprilTag corners → distortion-aware PnP
 EKF posterior → estimated trajectory + landmark/covariance visualization + run log
 ```
 
-The controller uses the reference solution's coordinate-based turn/drive/turn
-structure, with proportional turns near the target heading. It does not steer
-toward particular tag IDs. Default forward speed is 0.15 m/s; position/yaw
-acceptance tolerances are 0.10 m and 0.10 rad. These are configurable, not accuracy
-claims.
+The default driver commands four **7 ft straight segments and left 90° turns**.
+It uses a separate command-odometry estimate for route progress, so tag detections
+and SLAM corrections never block or redirect the square. EKF-SLAM continues in
+parallel to estimate the trajectory and landmarks. Forward speed defaults to
+0.15 m/s. Physical dimensions still depend on the surface-specific speed/turn
+calibration; commanding 7 ft does not establish a measured 7 ft traveled distance.
 
 ## Pull, build, and run on the robot
 
@@ -59,9 +60,8 @@ bash hw3/scripts/run.sh
 bash hw3/scripts/run.sh laps:=3
 ```
 
-The default launch **arms autonomous movement**. It waits for the applied-motion
-heartbeat, valid calibration, at least three accepted observation frames, and a
-short startup delay before driving. To map/view while stationary first:
+The default launch **arms autonomous movement**. It waits only for the motor-motion
+heartbeat and a short startup delay before driving. **No tag detections are needed.** To map/view while stationary first:
 
 ```bash
 bash hw3/scripts/run.sh auto_start:=false
@@ -77,9 +77,8 @@ ros2 service call /hw3/start std_srvs/srv/Trigger '{}'
 
 Ctrl-C shuts down the launch. Faults and clock/timing failures stop motion and
 require a new run. A completed square remains stopped while logging/visualizing
-until shutdown. If accepted vision is absent for more than 8 seconds, the mission
-pauses until accepted observations return. Completion is based on the estimated
-pose; it is not independent proof of physical waypoint accuracy.
+until shutdown. Missing/absent vision does not pause the route. Completion is based
+on command odometry; it is not independent proof of physical waypoint accuracy.
 
 ### Route placement and physical settings
 
@@ -132,7 +131,36 @@ Before interpreting metric results, verify these settings against the robot:
 - Noise settings are provisional tuning values, not newly measured covariance.
   Fit/check them using actual stationary observations and movement logs.
 
-## Live visualization and trajectory tracking
+## View the robot from your Mac (no graphical desktop required)
+
+The launch serves a read-only browser map on the Rubik Pi at port **8080**. Leave
+the robot launch running, and find the Pi's network address in its SSH terminal:
+
+```bash
+hostname -I
+```
+
+On your Mac, open **`http://ROBOT_IP:8080/`** in Safari or Chrome using the Pi address
+reachable from the Mac. The page shows the estimated robot trajectory/heading,
+landmark IDs/positions, 95% covariance ellipses, and connection/vision status.
+No ROS or RViz installation is needed on the Mac. Both devices must be on a
+network where the Mac can reach the Pi. If direct access is unavailable, forward
+it through your existing SSH access from a Mac terminal:
+
+```bash
+ssh -N -L 8080:127.0.0.1:8080 ubuntu@ROBOT_IP
+```
+
+Then open **`http://localhost:8080/`** on the Mac. The page's Pause display button
+only pauses drawing; use `/hw3/stop` or Ctrl-C in the robot launch to stop motion.
+If port 8080 is occupied, launch with `web_port:=8081` and use that port instead.
+The viewer serves only its HTML page and estimator state, not arbitrary robot files.
+
+An empty map means no landmarks have been accepted yet. The displayed blue path
+then comes from command dead reckoning; the viewer never invents landmarks or
+labels a planned route as a measured trajectory.
+
+## Optional RViz visualization
 
 The node publishes these estimates at 2 Hz in fixed frame **`hw3_map`**:
 
@@ -153,8 +181,10 @@ On a machine with RViz2, ROS discovery to the robot, and the HW3 overlay sourced
 rviz2 -d "$(ros2 pkg prefix --share hw3_code)/config/hw3.rviz"
 ```
 
-On a robot with a graphical session, `rviz:=true` starts the same view as part of
-launch. For manual setup, choose fixed frame `hw3_map`, add Path
+RViz can run directly on the Rubik Pi if `ros-jazzy-rviz2` is installed and an
+Ubuntu graphical session is visible on an attached monitor or through remote
+desktop. Plain SSH from a Mac does not display its windows. On a robot with that
+graphical session, `rviz:=true` starts the same view as part of launch. For manual setup, choose fixed frame `hw3_map`, add Path
 `/hw3/trajectory`, and add MarkerArray `/hw3/landmarks`. All markers/path points
 already use the fixed frame; no world-frame transform is required. Publishers are
 transient-local so a newly opened viewer can receive the latest map and path.
@@ -219,8 +249,8 @@ ground-truth overlay, missing/spurious landmark reporting, and average landmark 
   turn-rate estimate and command expiry, rather than pretending requested angular
   velocity is the measured physical turn rate.
 - The persistent estimator runs 0.35 s behind ROS time, applying accepted observations
-  at capture time and then propagating through saved commands. A temporary predicted
-  copy supplies the current control pose. Duplicate/too-late frames are discarded
+  at capture time and then propagating through saved commands. A second estimate integrates commands without visual correction for fixed-route
+  progress; its temporary predicted copy supplies the current drive pose. Duplicate/too-late frames are discarded
   and counted; increase `vision_delay_s` if actual detector latency exceeds the buffer.
 - Initial pose `(0,0,0)` with zero covariance chooses the local reference frame.
   No measured world pose is supplied. Maps and covariances are approximate Gaussian
@@ -228,7 +258,9 @@ ground-truth overlay, missing/spurious landmark reporting, and average landmark 
 
 ## Verification and remaining assignment work
 
-Nineteen local numerical/component checks passed: EKF derivatives/covariance,
+Twenty-one local numerical/component checks passed (one additional localhost HTTP
+listener check was skipped because the development environment denies socket
+listeners): EKF derivatives/covariance,
 landmark discovery/reobservation, distorted-camera geometry, timestamped command
 expiry, square dimensions, and log/map exports. Run them from the repository root:
 
@@ -237,7 +269,8 @@ PYTHONPATH=hw3 python3 -m unittest discover -s hw3/test -p 'test_*.py' -v
 ```
 
 ROS is unavailable on the development Mac, so a real ROS build/launch, camera,
-serial connection, surface-specific motor response, and physical trajectory have **not** been tested.
+serial connection, browser HTTP access, surface-specific motor response, and
+physical trajectory have **not** been tested on the robot.
 Run logs/status provide the evidence for the next iteration. HW2 source is unchanged.
 
 This implementation covers the requested square experiment. The assignment's

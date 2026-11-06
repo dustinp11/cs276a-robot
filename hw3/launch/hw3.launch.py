@@ -39,7 +39,7 @@ def generate_launch_description():
 def _arguments(camera_path):
     """Expose experiment settings while keeping physical dimensions in explicit units."""
     defaults = {'side_ft': '7.0', 'laps': '1', 'tag_size_m': '0.172', 'auto_start': 'true',
-                'frame_rate': '10', 'rviz': 'false', 'output_directory': '~/hw3_runs',
+                'frame_rate': '10', 'web_port': '8080', 'rviz': 'false', 'output_directory': '~/hw3_runs',
                 'camera_parameter_path': camera_path, 'turn_input': '0.6', 'motor_limit': '0.6'}
     return [DeclareLaunchArgument(name, default_value=value) for name, value in defaults.items()]
 
@@ -69,7 +69,8 @@ def _detector():
 
 def _slam_overrides():
     """Convert launch strings to typed estimator/controller parameters."""
-    return {'square_side_ft': ParameterValue(LaunchConfiguration('side_ft'), value_type=float),
+    return {'web_port': ParameterValue(LaunchConfiguration('web_port'), value_type=int),
+            'square_side_ft': ParameterValue(LaunchConfiguration('side_ft'), value_type=float),
             'laps': ParameterValue(LaunchConfiguration('laps'), value_type=int),
             'tag_size_m': ParameterValue(LaunchConfiguration('tag_size_m'), value_type=float),
             'auto_start': ParameterValue(LaunchConfiguration('auto_start'), value_type=bool),
