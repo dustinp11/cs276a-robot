@@ -153,48 +153,59 @@ def square_waypoints(side_ft=7.0, laps=1):
 
 
 class FixedSquareController:
-    """Execute a fixed square from integrated commands, independently of visual pose jumps.
+    """Run a calibrated timed square, without pose, landmarks, or motion-history inputs."""
 
-    Progress is [total forward distance (m), total signed yaw (rad)] integrated
-    from the motor mapper's applied-command estimates. It is not encoder feedback.
-    """
-
-    def __init__(self, side_ft=7.0, laps=1, settings=None):
-        """Set four fixed-length legs and four left quarter-turns per lap."""
+    def __init__(self, side_ft=7.0, laps=1, settings=None, turn_time_s=0.48, settle_time_s=1.0):
+        """Time straight legs from calibrated speed and left turns from measured turn time."""
         square_waypoints(side_ft, laps)
+        if not all(math.isfinite(value) and value > 0 for value in (turn_time_s, settle_time_s)):
+            raise ValueError('Turn and settle durations must be positive')
         self.settings = settings or ControlSettings()
-        self.side_m, self.laps = side_ft*0.3048, laps
-        self.index, self.stage, self.origin = 0, 'drive', None
+        self.drive_time_s = side_ft*0.3048/self.settings.max_speed
+        self.turn_time_s, self.settle_time_s, self.laps = turn_time_s, settle_time_s, laps
+        self.index, self.stage, self.elapsed = 0, 'drive', 0.
+        self.last_time, self.running = None, False
 
     @property
     def done(self):
-        """Return whether all legs and left turns have completed."""
+        """Return whether four timed legs and left turns per lap have completed."""
         return self.index >= 4*self.laps
 
-    def step(self, progress):
-        """Return commands from cumulative commanded [distance_m, yaw_rad], not EKF pose."""
-        if self.done or progress is None:
+    def step(self, now, enabled=True):
+        """Return a timed command using monotonic seconds; freeze the clock when paused."""
+        if not math.isfinite(now) or (self.last_time is not None and now < self.last_time):
+            raise ValueError('Controller clock must be finite and monotonic')
+        if self.running and self.last_time is not None:
+            self.elapsed += now-self.last_time
+        self.last_time, self.running = now, enabled
+        if self.done or not enabled:
             return 0., 0.
-        progress = np.asarray(progress, dtype=float)
-        if progress.shape != (2,) or not np.isfinite(progress).all():
-            return 0., 0.
-        if self.origin is None:
-            self.origin = progress.copy()
+        if self.elapsed >= self._duration()-1e-9:
+            self._advance()
+        return self._command()
+
+    def _duration(self):
+        """Return the active stage duration, including explicit stops around each turn."""
         if self.stage == 'drive':
-            return self._drive(progress)
-        return self._left_turn(progress)
+            return self.drive_time_s
+        if self.stage == 'turn_left':
+            return self.turn_time_s
+        return self.settle_time_s
 
-    def _drive(self, progress):
-        """Require a full commanded side length, then stop before the left-turn phase."""
-        if progress[0]-self.origin[0] < self.side_m-1e-9:
+    def _advance(self):
+        """Advance one stage only, so delayed callbacks cannot skip an entire physical turn."""
+        transitions = {'drive': 'stop_before_turn', 'stop_before_turn': 'turn_left',
+                       'turn_left': 'stop_after_turn', 'stop_after_turn': 'drive'}
+        if self.stage == 'stop_after_turn':
+            self.index += 1
+        self.stage, self.elapsed = transitions[self.stage], 0.
+
+    def _command(self):
+        """Issue forward, opposing-wheel turn, or zero commands for the selected stage."""
+        if self.done:
+            return 0., 0.
+        if self.stage == 'drive':
             return self.settings.max_speed, 0.
-        self.stage, self.origin = 'turn_left', progress.copy()
-        return 0., 0.
-
-    def _left_turn(self, progress):
-        """Require an actual interval of opposing wheel commands before resuming forward."""
-        if progress[1]-self.origin[1] < math.pi/2.-1e-9:
+        if self.stage == 'turn_left':
             return 0., self.settings.rotation_speed
-        self.index += 1
-        self.stage, self.origin = 'drive', progress.copy()
         return 0., 0.

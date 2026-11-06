@@ -14,7 +14,7 @@ DEFAULTS = {
     'vision_delay_s': 0.35,
     'motion_timeout_s': 0.20, 'command_hold_s': 0.15,
     'max_speed_m_s': 0.567333, 'max_turn_rad_s': 0.8,
-    'startup_wait_s': 2.0,
+    'startup_wait_s': 2.0, 'left_turn_time_s': 0.48, 'corner_settle_s': 1.0,
     'max_run_s': 900.0,
 }
 

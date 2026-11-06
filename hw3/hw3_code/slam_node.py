@@ -52,7 +52,8 @@ class SlamNode(Node):
         self.motion = MotionHistory(v['distance_noise'], v['turn_noise'], v['idle_distance_noise'],
                                     v['idle_turn_noise'], v['command_hold_s'])
         settings = ControlSettings(max_speed=v['max_speed_m_s'], rotation_speed=v['max_turn_rad_s'])
-        self.controller = FixedSquareController(v['square_side_ft'], v['laps'], settings)
+        self.controller = FixedSquareController(v['square_side_ft'], v['laps'], settings,
+                                                v['left_turn_time_s'], v['corner_settle_s'])
 
     def _create_state(self):
         """Initialize lifecycle and observation queues without assuming a landmark count."""
@@ -65,8 +66,7 @@ class SlamNode(Node):
         self.logged_reason = None
         self.vision_problem = None
         self.completed_recorded = False
-        self.route_progress, self.route_time = [0., 0.], None
-        self.last_phase = None
+        self.last_phase, self.last_wheel_mode = None, None
 
     def _create_interfaces(self):
         """Subscribe to HW3-only inputs and expose command, status, start, and stop interfaces."""
@@ -118,15 +118,19 @@ class SlamNode(Node):
         if self.motion.add(stamp, message.twist.linear.x, message.twist.angular.z):
             if self.estimator_time is None:
                 self.estimator_time = stamp
-                self.route_time = stamp
                 self.recorder.write('origin', stamp, frame=self.values['frame_id'])
             self.recorder.write('applied_motion', stamp, linear=message.twist.linear.x, angular=message.twist.angular.z)
 
     def on_motor_commands(self, message):
-        """Log emitted wheel inputs so a skipped turn can be distinguished from wheel stall."""
-        if len(message.data) >= 2 and all(math.isfinite(value) for value in message.data[:2]):
-            self.recorder.write('motor_commands', self.now_seconds(),
-                                left=float(message.data[0]), right=float(message.data[1]))
+        """Log wheel requests and print direction changes for on-robot turn diagnosis."""
+        if len(message.data) < 2 or not all(math.isfinite(value) for value in message.data[:2]):
+            return
+        left, right = map(float, message.data[:2])
+        self.recorder.write('motor_commands', self.now_seconds(), left=left, right=right)
+        mode = 'left turn' if left < 0 < right else 'forward' if left > 0 and right > 0 else 'stop/other'
+        if mode != self.last_wheel_mode:
+            self.last_wheel_mode = mode
+            self.get_logger().info(f'Wheel request: {mode}; L={left:.3f}, R={right:.3f}')
 
     def on_detections(self, message):
         """Convert each fresh Standard41h12 frame once and queue it by capture timestamp."""
@@ -178,7 +182,6 @@ class SlamNode(Node):
             self.fail('Control timing gap or ROS clock reset; restart this run')
         self.last_tick_wall, self.last_ros_time = wall, now
         try:
-            self._advance_route_motion(now)
             self._advance_estimation(now)
             command = self._control(now, wall)
             self.send_command(*command)
@@ -187,23 +190,15 @@ class SlamNode(Node):
             self.fail(f'Estimation/control error: {error}')
             self.send_command(0., 0.)
 
-    def _advance_route_motion(self, now):
-        """Accumulate dispatched command motion without incorporating EKF pose corrections."""
-        if self.route_time is None:
-            return
-        distance, turn = self.motion.totals(self.route_time, now)
-        self.route_progress[0] += distance
-        self.route_progress[1] += turn
-        self.route_time = now
-
     def _log_phase(self, now):
-        """Record every corner transition with independent drive/turn progress."""
+        """Record each timed corner stage and its configured physical command duration."""
         phase = (self.controller.index, self.controller.stage)
         if phase != self.last_phase:
             self.last_phase = phase
             self.recorder.write('route_phase', now, side=self.controller.index+1,
-                                stage=self.controller.stage, progress=self.route_progress.copy())
-            self.get_logger().info(f'Square: {self.reason}; command motion={self.route_progress}')
+                                stage=self.controller.stage, elapsed_s=self.controller.elapsed,
+                                drive_time_s=self.controller.drive_time_s, turn_time_s=self.controller.turn_time_s)
+            self.get_logger().info(f'Square: {self.reason}; drive={self.controller.drive_time_s:.3f}s; left turn={self.controller.turn_time_s:.4f}s')
 
     def _advance_estimation(self, now):
         """Apply observations at capture time, then advance to the fixed-delay horizon."""
@@ -240,12 +235,12 @@ class SlamNode(Node):
             self.seen_frames += 1
 
     def _control(self, now, wall):
-        """Execute the fixed route from command motion; EKF corrections only affect the map."""
+        """Execute a timed square; neither SLAM nor command integration controls stage completion."""
         reason = self._pause_reason(now, wall)
         if reason:
             self.reason = reason
-            return 0., 0.
-        command = self.controller.step(self.route_progress)
+            return self.controller.step(wall, enabled=False)
+        command = self.controller.step(wall)
         self.reason = ('complete' if self.controller.done else
                        f'{self.controller.stage}; side={self.controller.index+1}')
         self._log_phase(now)
@@ -265,7 +260,7 @@ class SlamNode(Node):
             return 'paused by operator'
         if not self.motion.samples or not 0 <= now-self.motion.samples[-1][0] <= self.values['motion_timeout_s']:
             return 'waiting for applied-motion heartbeat'
-        if self.estimator_time is None or wall-self.started_wall < self.values['startup_wait_s']:
+        if wall-self.started_wall < self.values['startup_wait_s']:
             return 'waiting for startup'
         return None
 
@@ -324,6 +319,7 @@ class SlamNode(Node):
     def on_stop(self, request, response):
         """Pause immediately while continuing to estimate, log, and visualize."""
         self.armed = False
+        self.controller.step(time.monotonic(), enabled=False)
         self.send_command(0., 0.)
         response.success, response.message = True, 'Paused'
         return response

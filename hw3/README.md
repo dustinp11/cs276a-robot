@@ -16,13 +16,13 @@ applied-command motion ───────────────────
           │                                            ↓
           │                                 estimated path, map, covariance
           ↓
-fixed 7 ft / left 90° phase progress → motor requests → our motor mapping
+timed 7 ft drive / 90° left turn → motor requests → our motor mapping
 ```
 
 
 The default driver commands four **7 ft straight segments and left 90° turns**.
-It uses integrated commanded distance/yaw for route progress, so tag detections
-and SLAM corrections never block or redirect the square. EKF-SLAM continues in
+It uses a monotonic clock with calibrated drive/turn durations. Tag detections,
+SLAM pose corrections, and integrated motion never decide stage completion. EKF-SLAM continues in
 parallel to estimate the trajectory and landmarks. Forward speed defaults to
 0.567333 m/s. Physical dimensions still depend on the surface-specific speed/turn
 calibration; commanding 7 ft does not establish a measured 7 ft traveled distance.
@@ -73,7 +73,7 @@ ros2 service call /hw3/start std_srvs/srv/Trigger '{}'
 Ctrl-C shuts down the launch. Faults and clock/timing failures stop motion and
 require a new run. A completed square remains stopped while logging/visualizing
 until shutdown. Missing/absent vision does not pause the route. Completion is based
-on command odometry; it is not independent proof of physical waypoint accuracy.
+on calibrated timing; it is not independent proof of physical waypoint accuracy.
 
 ### Route placement and physical settings
 
@@ -107,8 +107,10 @@ Before interpreting metric results, verify these settings against the robot:
 - Motor commands use **our** `robot_testing/velocity_mapping.py` equations: wheel
   base 0.127 m, linear deadzone 0.08, linear slope 1.772915625, angular slope 1e6.
 - Turn input and driver limit use the user-confirmed **±0.5** and **3.75 seconds
-  per revolution**, giving `2π/3.75` rad/s. A nominal 90° turn is 0.9375 s, with
-  stopping quantized by command/update intervals. The previous 0.6 defaults in
+  per revolution**, giving `2π/3.75` rad/s for motion prediction. The timed turn
+  command is now overridden to **0.48 s** at the user's request; stopping is
+  quantized by command/update intervals. This override does not recalibrate the
+  EKF motion model or establish the measured turn angle. The previous 0.6 defaults in
   the merged branch have been replaced with this confirmed calibration pair.
 - Pure turns send continuous opposing wheel inputs. Because the angular slope is
   1e6, changing requested angular velocity barely changes motor power. Changing
@@ -240,9 +242,8 @@ ground-truth overlay, missing/spurious landmark reporting, and average landmark 
   turn-rate estimate and command expiry, rather than pretending requested angular
   velocity is the measured physical turn rate.
 - The persistent estimator runs 0.35 s behind ROS time, applying observations at
-  capture time and then propagating through saved commands. Route progress separately
-  integrates commanded distance/yaw and never uses visual pose changes to conclude
-  that a leg or turn was executed. Duplicate/too-late frames are discarded and
+  capture time and then propagating through saved commands. Route stages are timed independently using a monotonic clock. Neither visual
+  pose changes nor integrated motion determine whether a stage has finished. Duplicate/too-late frames are discarded and
   counted; increase `vision_delay_s` if detector latency exceeds the buffer.
 - Initial pose `(0,0,0)` with zero covariance chooses the local reference frame.
   No measured world pose is supplied. Maps and covariances are approximate Gaussian
@@ -250,7 +251,7 @@ ground-truth overlay, missing/spurious landmark reporting, and average landmark 
 
 ## Verification and remaining assignment work
 
-Twenty-three local numerical/component checks passed (one additional localhost HTTP
+Twenty-four local numerical/component checks passed (one additional localhost HTTP
 listener check was skipped because the development environment denies socket
 listeners): EKF derivatives/covariance,
 landmark discovery/reobservation, distorted-camera geometry, timestamped command
@@ -269,23 +270,27 @@ This implementation covers the requested square experiment. The assignment's
 octagon experiment, physical ground-truth measurements, comparative results,
 report, video, and final code ZIP still need to be completed.
 
-### Turn-skipping regression fix
+### Hardcoded timed square
 
-A visually corrected EKF heading can jump even when no physical turn has occurred.
-Feeding that heading into fixed-square phase logic could falsely complete the
-turn and resume forward motion. Fixed-route progress now integrates only the
-mapper's applied-command history. The controller requires a full commanded 7 ft
-leg followed by a full commanded quarter-turn before advancing. EKF-SLAM still
-produces the displayed/recorded trajectory and map.
+Route execution uses only calibrated timing, independently of all pose and motion
+history updates. At the default speed, each of four cycles is:
 
-The `route_phase`, `command`, and `motor_commands` records show each phase and
-emitted left/right wheel input. If these show opposing inputs throughout a turn
-but the robot stays straight, the remaining issue is physical motor response,
-serial delivery, or calibration; command feedback cannot detect wheel stall.
+1. Forward at 0.567333 m/s for `2.1336 / 0.567333 ≈ 3.76` seconds (motor inputs 0.4/0.4).
+2. Stop for 1 second.
+3. Request a left turn for **0.48 seconds** (wheel inputs approximately **-0.5/+0.5**).
+4. Stop for 1 second.
 
-Forward speed now defaults to **0.567333 m/s**, the measured speed at motor input
-**0.4** in our original `robot_test.py` calibration. This is about 1.62 times the
-previous 0.35 m/s setting, and 3.78 times the initial 0.15 m/s setting. Both wheels
-receive approximately 0.4 motor input, below the unchanged 0.5 driver limit.
-A seven-foot leg takes about **3.76 seconds** at the calibrated nominal speed,
-before stopping/turning overhead. Use `speed_m_s:=VALUE` to override it at launch.
+After four cycles, stop. Pausing freezes the active stage timer. Actual command
+lengths are quantized by the 20 Hz timer; physical accuracy depends on calibration.
+`left_turn_time_s` and `corner_settle_s` in `config/hw3.yaml` hold the turn and stop
+intervals. No heading correction or pose jump can skip a turn. A delayed callback
+advances only one stage, so the following physical turn is still issued for its
+full configured duration.
+
+The launch terminal prints stage changes and `Wheel request: left turn; L=-0.500,
+R=0.500` when those inputs are emitted. These are software requests, not encoder
+measurements. If the requests appear but the wheels do not turn, the remaining
+issue is motor response or serial delivery rather than route completion logic.
+
+EKF-SLAM continues to estimate and display the trajectory/map. Commands and motion
+history remain logged for estimation and analysis, but do not control stage timing.

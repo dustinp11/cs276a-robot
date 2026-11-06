@@ -132,30 +132,56 @@ class LiveComponentTests(unittest.TestCase):
         self.assertEqual(model.map_command(float('nan'), 0.), (0., 0., 0., 0.))
 
     def test_fixed_square_drives_without_landmark_input(self):
-        """Complete four legs only after each required quarter-turn has been commanded."""
+        """Four timed drive/stop/turn/stop cycles complete without pose or motion updates."""
         controller = FixedSquareController()
-        progress = np.zeros(2)
+        now = 0.
+        self.assertAlmostEqual(controller.drive_time_s, 2.1336/.567333)
+        self.assertAlmostEqual(controller.turn_time_s, .48)
         for number in range(4):
-            self.assertEqual(controller.step(progress), (controller.settings.max_speed, 0.))
-            progress[0] += 2.1336
-            self.assertEqual(controller.step(progress), (0., 0.))
-            self.assertEqual(controller.step(progress), (0., controller.settings.rotation_speed))
-            progress[1] += math.pi/2.
-            self.assertEqual(controller.step(progress), (0., 0.))
+            self.assertEqual(controller.step(now), (controller.settings.max_speed, 0.))
+            now += controller.drive_time_s
+            self.assertEqual(controller.step(now), (0., 0.))
+            now += controller.settle_time_s
+            turn = controller.step(now)
+            self.assertEqual(turn, (0., controller.settings.rotation_speed))
+            left, right, _, _ = MotorModel(MOTOR_DEFAULTS).map_command(*turn)
+            self.assertLess(left, 0.)
+            self.assertGreater(right, 0.)
+            now += controller.turn_time_s
+            self.assertEqual(controller.step(now), (0., 0.))
+            now += controller.settle_time_s
+            command = controller.step(now)
             self.assertEqual(controller.index, number+1)
         self.assertTrue(controller.done)
-        self.assertEqual(controller.step(progress), (0., 0.))
+        self.assertEqual(command, (0., 0.))
 
     def test_turn_cannot_be_skipped_after_first_leg(self):
-        """The first pause must lead to sustained left commands, never immediate forward."""
+        """Even a large delayed callback cannot skip the stop and full timed turn."""
         controller = FixedSquareController()
-        controller.step([0., 0.])
-        self.assertEqual(controller.step([2.1336, 0.]), (0., 0.))
-        for turn in (0., .05, .4, 1.0, math.pi/2.-.001):
-            self.assertEqual(controller.step([2.1336, turn]), (0., controller.settings.rotation_speed))
-            self.assertEqual(controller.index, 0)
-        self.assertEqual(controller.step([2.1336, math.pi/2.]), (0., 0.))
-        self.assertEqual(controller.step([2.1336, math.pi/2.]), (controller.settings.max_speed, 0.))
+        controller.step(0.)
+        self.assertEqual(controller.step(100.), (0., 0.))
+        self.assertEqual(controller.stage, 'stop_before_turn')
+        started = 100.+controller.settle_time_s
+        self.assertEqual(controller.step(started), (0., controller.settings.rotation_speed))
+        self.assertEqual(controller.step(started+.47), (0., controller.settings.rotation_speed))
+        self.assertEqual(controller.index, 0)
+        self.assertEqual(controller.step(started+.48), (0., 0.))
+        self.assertEqual(controller.stage, 'stop_after_turn')
+
+    def test_pause_does_not_consume_turn_time(self):
+        """Pausing during the turn freezes its timer until the operator resumes."""
+        controller = FixedSquareController()
+        controller.step(0.)
+        now = controller.drive_time_s
+        controller.step(now)
+        now += controller.settle_time_s
+        controller.step(now)
+        self.assertEqual(controller.step(now+.2, enabled=False), (0., 0.))
+        resumed = now+100.
+        self.assertEqual(controller.step(resumed), (0., controller.settings.rotation_speed))
+        self.assertAlmostEqual(controller.elapsed, .2)
+        self.assertEqual(controller.step(resumed+.28), (0., 0.))
+        self.assertEqual(controller.stage, 'stop_after_turn')
 
     def test_route_motion_tracks_turn_commands_and_expiry(self):
         """Only the duration of commanded angular motion counts toward turn completion."""
