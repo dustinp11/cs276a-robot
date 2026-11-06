@@ -20,9 +20,12 @@ def generate_launch_description():
     camera = _camera()
     detector = _detector()
     driver = Node(package='hw3_code', executable='motor_control', name='hw3_motor_control',
-                  output='screen', remappings=[('motor_commands', '/hw3/motor_commands')])
+                  output='screen', parameters=[config, {'motor_command_limit': ParameterValue(LaunchConfiguration('motor_limit'), value_type=float)}],
+                  remappings=[('motor_commands', '/hw3/motor_commands')])
     mapper = Node(package='hw3_code', executable='velocity_mapping', name='hw3_velocity_mapping',
-                  output='screen', parameters=[config])
+                  output='screen', parameters=[config, {
+                      'turn_motor_input': ParameterValue(LaunchConfiguration('turn_input'), value_type=float),
+                      'motor_command_limit': ParameterValue(LaunchConfiguration('motor_limit'), value_type=float)}])
     slam = Node(package='hw3_code', executable='slam', name='hw3_slam', output='screen',
                 parameters=[config, _slam_overrides()])
     rviz = Node(package='rviz2', executable='rviz2', condition=IfCondition(LaunchConfiguration('rviz')),
@@ -37,7 +40,7 @@ def _arguments(camera_path):
     """Expose experiment settings while keeping physical dimensions in explicit units."""
     defaults = {'side_ft': '7.0', 'laps': '1', 'tag_size_m': '0.172', 'auto_start': 'true',
                 'frame_rate': '10', 'rviz': 'false', 'output_directory': '~/hw3_runs',
-                'camera_parameter_path': camera_path}
+                'camera_parameter_path': camera_path, 'turn_input': '0.6', 'motor_limit': '0.6'}
     return [DeclareLaunchArgument(name, default_value=value) for name, value in defaults.items()]
 
 

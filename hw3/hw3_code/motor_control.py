@@ -46,6 +46,9 @@ def euler_to_quaternion(roll, pitch, yaw):
 class MotorControllerNode(Node):
     def __init__(self):
         super().__init__('motor_controller_node')
+        self.motor_command_limit = float(self.declare_parameter('motor_command_limit', 0.6).value)
+        if not math.isfinite(self.motor_command_limit) or self.motor_command_limit <= 0:
+            raise ValueError('motor_command_limit must be finite and positive')
         
         # create subscription to motor commands
         self.subscription = self.create_subscription(
@@ -111,8 +114,8 @@ class MotorControllerNode(Node):
             R = float(msg.data[1])
             
             # clip values to valid range
-            L = np.clip(L, -0.5, 0.5)
-            R = np.clip(R, -0.5, 0.5)
+            L = np.clip(L, -self.motor_command_limit, self.motor_command_limit)
+            R = np.clip(R, -self.motor_command_limit, self.motor_command_limit)
             
             # update command with thread safety
             with self.command_lock:

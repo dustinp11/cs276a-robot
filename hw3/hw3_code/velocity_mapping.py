@@ -12,7 +12,7 @@ from .motor_model import MOTOR_DEFAULTS, MotorModel
 
 
 class VelocityToMotorNode(Node):
-    """Use the inherited straight model and a nominal full-rate pulse-density turn model."""
+    """Use our wheel mapping with surface-specific turning input and command reporting."""
 
     def __init__(self):
         """Connect HW3-only topics and a 20 Hz command heartbeat."""

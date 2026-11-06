@@ -110,11 +110,25 @@ Before interpreting metric results, verify these settings against the robot:
   RPY copied from our HW2 configuration. Confirm the camera origin/angles. RPY is
   the body-aligned camera mount rotation; the optical-axis conversion is applied
   separately (optical z forward, x right, y down).
-- Straight motor response uses our existing deadzone/slope model. Turn handling
-  pulses motor input ±0.5 with a nominal full turn rate of 2π/3.75 rad/s, inherited
-  from HW2's turn-time setting. **Remeasure CW and CCW rates on the actual surface.**
-  Pulse-density turning permits smaller average yaw commands; short-pulse response
-  is not established by a full-revolution measurement alone.
+- Motor commands use **our** `robot_testing/velocity_mapping.py` equations: wheel
+  base 0.127 m, linear deadzone 0.08, linear slope 1.772915625, and angular slope
+  1e6. The custom pulse-density turn behavior has been removed. For this surface,
+  HW3's turn input and motor-driver limit default to **0.6** instead of 0.5.
+- Pure turns send continuous opposing wheel inputs. Because our angular slope is
+  1e6, changing the requested angular velocity barely changes motor power. Use
+  `turn_input` to change turning effort and `motor_limit` to permit it through the
+  driver. Keep `turn_input` at or below `motor_limit`. Straight-drive mapping is
+  unchanged; the controller still limits forward speed to 0.15 m/s.
+- The nominal turn-rate estimate remains 2π/3.75 rad/s from the earlier HW2 setting.
+  It is **not calibrated for the new surface or the stronger 0.6 input**. Remeasure
+  a complete rotation in each direction and set `turn_rate_ccw = 2π / CCW_seconds`
+  and `turn_rate_cw = 2π / CW_seconds` in the mapper section of `config/hw3.yaml`.
+  Incorrect rates bias command-based prediction even when the wheels turn properly.
+
+  ```bash
+  bash hw3/scripts/run.sh turn_input:=0.6 motor_limit:=0.6
+  ```
+
 - Noise settings are provisional tuning values, not newly measured covariance.
   Fit/check them using actual stationary observations and movement logs.
 
@@ -197,13 +211,13 @@ ground-truth overlay, missing/spurious landmark reporting, and average landmark 
 - Range standard deviation starts as `range_std_m + range_scale * range²`; bearing
   standard deviation is separately configured. These are starting models to validate.
 - Motion prediction uses **command-based dead reckoning**, not measured wheel odometry.
-  The mapper reports the nominal velocity corresponding to each dispatched pulse/
-  straight command. Encoder feedback is unavailable in the supplied interface;
+  The mapper reports the nominal velocity corresponding to each dispatched motor
+  command, using separate configurable clockwise/counterclockwise turn-rate estimates. Encoder feedback is unavailable in the supplied interface;
   IMU gyro units are not established, so no unverified IMU data is fused.
 - Prediction input variances are `distance_noise²*abs(distance) + idle_distance_noise²*dt`
-  and the analogous turn expression. The reported command history includes turn
-  pulses and expiry, rather than pretending a small turn request was continuously
-  executed at exactly its requested rate.
+  and the analogous turn expression. The reported command history includes the fixed-input
+  turn-rate estimate and command expiry, rather than pretending requested angular
+  velocity is the measured physical turn rate.
 - The persistent estimator runs 0.35 s behind ROS time, applying accepted observations
   at capture time and then propagating through saved commands. A temporary predicted
   copy supplies the current control pose. Duplicate/too-late frames are discarded
@@ -223,7 +237,7 @@ PYTHONPATH=hw3 python3 -m unittest discover -s hw3/test -p 'test_*.py' -v
 ```
 
 ROS is unavailable on the development Mac, so a real ROS build/launch, camera,
-serial connection, pulse response, and physical trajectory have **not** been tested.
+serial connection, surface-specific motor response, and physical trajectory have **not** been tested.
 Run logs/status provide the evidence for the next iteration. HW2 source is unchanged.
 
 This implementation covers the requested square experiment. The assignment's

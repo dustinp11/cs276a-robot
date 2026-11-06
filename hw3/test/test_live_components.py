@@ -104,20 +104,23 @@ class LiveComponentTests(unittest.TestCase):
         self.assertEqual(result['missing_ids'], [['41h12', 2]])
         self.assertEqual(result['spurious_ids'], [['41h12', 1]])
 
-    def test_motor_mapping_and_nominal_turn_rate(self):
-        """Match requested mean turn rate arithmetically without claiming physical response."""
+    def test_our_mapping_and_adjustable_turn_input(self):
+        """Preserve our straight mapping and send stronger continuous inputs for turns."""
         model = MotorModel(MOTOR_DEFAULTS)
         left, right, linear, angular = model.map_command(.15, 0.)
+        self.assertAlmostEqual(left, .08+.15/1.772915625)
         self.assertEqual(left, right)
         self.assertAlmostEqual(linear, .15)
         self.assertEqual(angular, 0.)
-        turns = [model.map_command(0., .4) for _ in range(1000)]
-        mean_rate = sum(item[3] for item in turns)/len(turns)
-        self.assertLess(abs(mean_rate-.4), MOTOR_DEFAULTS['turn_rate_ccw']/1000.)
-        self.assertTrue(all(abs(value) <= .5 for item in turns for value in item[:2]))
+        for requested in (.1, .8):
+            left, right, linear, angular = model.map_command(0., requested)
+            self.assertAlmostEqual(left, -(.6+.127/2.*requested/1e6))
+            self.assertAlmostEqual(right, .6+.127/2.*requested/1e6)
+            self.assertEqual(linear, 0.)
+            self.assertEqual(angular, MOTOR_DEFAULTS['turn_rate_ccw'])
+        self.assertLess(model.map_command(0., -.8)[3], 0.)
         self.assertEqual(model.map_command(0., 0.), (0., 0., 0., 0.))
         self.assertEqual(model.map_command(float('nan'), 0.), (0., 0., 0., 0.))
-        self.assertEqual(model.map_command(.1, .1), (0., 0., 0., 0.))
 
     def test_parameter_validation(self):
         """Reject invalid route/noise settings and permit zero corrected-bit tolerance."""
