@@ -1,0 +1,47 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Fixed Frame: hw3_map
+    Frame Rate: 20
+    Background Color: 32; 32; 32
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid (meters)
+      Enabled: true
+      Cell Size: 0.5
+      Plane Cell Count: 20
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/Path
+      Name: Estimated trajectory
+      Enabled: true
+      Topic:
+        Value: /hw3/trajectory
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        Depth: 1
+      Color: 70; 160; 255
+      Line Style: Lines
+      Line Width: 0.03
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Estimated landmarks and 95 percent covariance
+      Enabled: true
+      Topic:
+        Value: /hw3/landmarks
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        Depth: 1
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Top-down
+      Target Frame: <Fixed Frame>
+      Scale: 100
+      Angle: 0
+      X: 1
+      Y: 1
+Window Geometry:
+  Width: 1100
+  Height: 800

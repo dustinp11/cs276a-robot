@@ -1,0 +1,50 @@
+hw3_slam:
+  ros__parameters:
+    web_host: 0.0.0.0
+    web_port: 8080
+    square_side_ft: 7.0
+    laps: 1
+    tag_size_m: 0.172
+    auto_start: true
+    frame_id: hw3_map
+    output_directory: ~/hw3_runs
+    # copied mount geometry from our HW2 configuration; verify on the actual robot
+    camera_xyz_m: [0.0, 0.0, 0.2]
+    camera_rpy_deg: [0.0, 0.0, 0.0]
+    image_width: 1280
+    image_height: 720
+    # starting noise settings, not measured calibration results
+    range_std_m: 0.03
+    range_scale: 0.02
+    bearing_std_rad: 0.025
+    max_reprojection_px: 3.0
+    min_decision_margin: 20.0
+    max_hamming: 1
+    max_range_m: 5.0
+    gate_threshold: 9.210340371976184
+    distance_noise: 0.15
+    turn_noise: 0.20
+    idle_distance_noise: 0.002
+    idle_turn_noise: 0.005
+    vision_delay_s: 0.35
+    motion_timeout_s: 0.20
+    command_hold_s: 0.15
+    max_speed_m_s: 0.15
+    max_turn_rad_s: 0.8
+    startup_wait_s: 2.0
+    max_run_s: 900.0
+hw3_velocity_mapping:
+  ros__parameters:
+    linear_deadzone: 0.08
+    linear_slope: 1.772915625
+    wheel_base_m: 0.127
+    turn_motor_input: 0.6
+    angular_slope: 1000000.0
+    motor_command_limit: 0.6
+    # nominal full turn rate from HW2's 3.75 s/revolution setting; remeasure CW/CCW
+    turn_rate_ccw: 1.6755160819145563
+    turn_rate_cw: 1.6755160819145563
+    command_timeout_s: 0.2
+hw3_motor_control:
+  ros__parameters:
+    motor_command_limit: 0.6
