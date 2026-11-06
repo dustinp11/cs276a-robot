@@ -26,8 +26,21 @@ class MotionHistory:
 
     def propagate(self, estimator, start, end):
         """Predict across command changes and expiry, using short midpoint increments."""
+        for linear, angular, duration in self.segments(start, end):
+            self._segment(estimator, linear, angular, duration)
+
+    def totals(self, start, end):
+        """Integrate commanded distance/yaw independently of EKF measurement corrections."""
+        distance, turn = 0., 0.
+        for linear, angular, duration in self.segments(start, end):
+            distance += linear*duration
+            turn += angular*duration
+        return distance, turn
+
+    def segments(self, start, end):
+        """Yield held-command intervals, including zero motion after command expiry."""
         if end < start:
-            raise ValueError('Cannot predict backwards')
+            raise ValueError('Cannot integrate backwards')
         samples = self.samples
         boundaries = sorted({start, end} | {s[0] for s in samples if start < s[0] < end}
                             | {s[0]+self.timeout for s in samples if start < s[0]+self.timeout < end})
@@ -37,7 +50,7 @@ class MotionHistory:
                 index += 1
             valid = samples and samples[index][0] <= left + 1e-9 and left < samples[index][0]+self.timeout-1e-9
             linear, angular = samples[index][1:] if valid else (0., 0.)
-            self._segment(estimator, linear, angular, right-left)
+            yield linear, angular, right-left
 
     def _segment(self, estimator, linear, angular, duration):
         """Bound model discretization error and map variance rates into each increment."""

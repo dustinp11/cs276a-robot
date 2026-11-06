@@ -29,7 +29,7 @@ hw3_slam:
     vision_delay_s: 0.35
     motion_timeout_s: 0.20
     command_hold_s: 0.15
-    max_speed_m_s: 0.15
+    max_speed_m_s: 0.567333
     max_turn_rad_s: 0.8
     startup_wait_s: 2.0
     max_run_s: 900.0
@@ -38,13 +38,13 @@ hw3_velocity_mapping:
     linear_deadzone: 0.08
     linear_slope: 1.772915625
     wheel_base_m: 0.127
-    turn_motor_input: 0.6
+    turn_motor_input: 0.5
     angular_slope: 1000000.0
-    motor_command_limit: 0.6
-    # nominal full turn rate from HW2's 3.75 s/revolution setting; remeasure CW/CCW
+    motor_command_limit: 0.5
+    # user-confirmed: 3.75 s/revolution at motor input 0.5
     turn_rate_ccw: 1.6755160819145563
     turn_rate_cw: 1.6755160819145563
     command_timeout_s: 0.2
 hw3_motor_control:
   ros__parameters:
-    motor_command_limit: 0.6
+    motor_command_limit: 0.5

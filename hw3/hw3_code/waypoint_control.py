@@ -23,7 +23,7 @@ class ControlSettings:
     kp: float = 0.8
     ki: float = 0.01
     kd: float = 0.005
-    max_speed: float = 0.15
+    max_speed: float = 0.567333
     rotation_speed: float = 0.8
     position_tolerance: float = 0.10
     yaw_tolerance: float = 0.1
@@ -153,14 +153,14 @@ def square_waypoints(side_ft=7.0, laps=1):
 
 
 class FixedSquareController:
-    """Drive four fixed-length legs and four left turns using command odometry only.
+    """Execute a fixed square from integrated commands, independently of visual pose jumps.
 
-    Landmark observations never gate or change this route. Physical accuracy still
-    depends on the motor speed/turn-rate calibration; this is not encoder feedback.
+    Progress is [total forward distance (m), total signed yaw (rad)] integrated
+    from the motor mapper's applied-command estimates. It is not encoder feedback.
     """
 
     def __init__(self, side_ft=7.0, laps=1, settings=None):
-        """Set the commanded square dimensions and speeds without a landmark map."""
+        """Set four fixed-length legs and four left quarter-turns per lap."""
         square_waypoints(side_ft, laps)
         self.settings = settings or ControlSettings()
         self.side_m, self.laps = side_ft*0.3048, laps
@@ -168,34 +168,33 @@ class FixedSquareController:
 
     @property
     def done(self):
-        """Return whether all four legs and left turns of each lap have completed."""
+        """Return whether all legs and left turns have completed."""
         return self.index >= 4*self.laps
 
-    def step(self, pose):
-        """Return constant drive/left-turn commands from the command-odometry pose."""
-        if self.done or pose is None:
+    def step(self, progress):
+        """Return commands from cumulative commanded [distance_m, yaw_rad], not EKF pose."""
+        if self.done or progress is None:
             return 0., 0.
-        pose = np.asarray(pose, dtype=float)
-        if pose.shape != (3,) or not np.isfinite(pose).all():
+        progress = np.asarray(progress, dtype=float)
+        if progress.shape != (2,) or not np.isfinite(progress).all():
             return 0., 0.
         if self.origin is None:
-            self.origin = pose.copy()
+            self.origin = progress.copy()
         if self.stage == 'drive':
-            return self._drive(pose)
-        return self._left_turn(pose)
+            return self._drive(progress)
+        return self._left_turn(progress)
 
-    def _drive(self, pose):
-        """Finish a leg after the estimated commanded displacement reaches the side length."""
-        if np.linalg.norm(pose[:2]-self.origin[:2]) < self.side_m:
+    def _drive(self, progress):
+        """Require a full commanded side length, then stop before the left-turn phase."""
+        if progress[0]-self.origin[0] < self.side_m-1e-9:
             return self.settings.max_speed, 0.
-        self.stage, self.origin = 'turn_left', pose.copy()
+        self.stage, self.origin = 'turn_left', progress.copy()
         return 0., 0.
 
-    def _left_turn(self, pose):
-        """Turn left approximately 90 degrees, then start the next fixed-length leg."""
-        progress = max(0., wrap_angle(pose[2]-self.origin[2]))
-        if progress < math.pi/2.:
+    def _left_turn(self, progress):
+        """Require an actual interval of opposing wheel commands before resuming forward."""
+        if progress[1]-self.origin[1] < math.pi/2.-1e-9:
             return 0., self.settings.rotation_speed
         self.index += 1
-        self.stage, self.origin = 'drive', pose.copy()
+        self.stage, self.origin = 'drive', progress.copy()
         return 0., 0.

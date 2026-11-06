@@ -46,7 +46,7 @@ def euler_to_quaternion(roll, pitch, yaw):
 class MotorControllerNode(Node):
     def __init__(self):
         super().__init__('motor_controller_node')
-        self.motor_command_limit = float(self.declare_parameter('motor_command_limit', 0.6).value)
+        self.motor_command_limit = float(self.declare_parameter('motor_command_limit', 0.5).value)
         if not math.isfinite(self.motor_command_limit) or self.motor_command_limit <= 0:
             raise ValueError('motor_command_limit must be finite and positive')
         

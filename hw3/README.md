@@ -10,26 +10,21 @@ The standalone controller simulator and its simulation tests have been removed.
 ## What runs
 
 ```text
-raw camera + CameraInfo → AprilTag corners → distortion-aware PnP
-                                             ↓ robot-frame range/bearing
-                                     delayed-vision EKF-SLAM
-                                       ↓ predicted current pose
-                                     square waypoint control
-                                             ↓ /hw3/cmd_vel
-                                     HW3 velocity mapping
-                                       ↓               ↓
-                                motor commands   applied-command model
-                                       ↓               ↓
-                                  motor driver      EKF prediction
-
-EKF posterior → estimated trajectory + landmark/covariance visualization + run log
+raw camera + CameraInfo → AprilTag corners → calibrated range/bearing
+                                                       ↓
+applied-command motion ────────────────────────────→ EKF-SLAM
+          │                                            ↓
+          │                                 estimated path, map, covariance
+          ↓
+fixed 7 ft / left 90° phase progress → motor requests → our motor mapping
 ```
 
+
 The default driver commands four **7 ft straight segments and left 90° turns**.
-It uses a separate command-odometry estimate for route progress, so tag detections
+It uses integrated commanded distance/yaw for route progress, so tag detections
 and SLAM corrections never block or redirect the square. EKF-SLAM continues in
 parallel to estimate the trajectory and landmarks. Forward speed defaults to
-0.15 m/s. Physical dimensions still depend on the surface-specific speed/turn
+0.567333 m/s. Physical dimensions still depend on the surface-specific speed/turn
 calibration; commanding 7 ft does not establish a measured 7 ft traveled distance.
 
 ## Pull, build, and run on the robot
@@ -110,22 +105,18 @@ Before interpreting metric results, verify these settings against the robot:
   the body-aligned camera mount rotation; the optical-axis conversion is applied
   separately (optical z forward, x right, y down).
 - Motor commands use **our** `robot_testing/velocity_mapping.py` equations: wheel
-  base 0.127 m, linear deadzone 0.08, linear slope 1.772915625, and angular slope
-  1e6. The custom pulse-density turn behavior has been removed. For this surface,
-  HW3's turn input and motor-driver limit default to **0.6** instead of 0.5.
-- Pure turns send continuous opposing wheel inputs. Because our angular slope is
-  1e6, changing the requested angular velocity barely changes motor power. Use
-  `turn_input` to change turning effort and `motor_limit` to permit it through the
-  driver. Keep `turn_input` at or below `motor_limit`. Straight-drive mapping is
-  unchanged; the controller still limits forward speed to 0.15 m/s.
-- The nominal turn-rate estimate remains 2π/3.75 rad/s from the earlier HW2 setting.
-  It is **not calibrated for the new surface or the stronger 0.6 input**. Remeasure
-  a complete rotation in each direction and set `turn_rate_ccw = 2π / CCW_seconds`
-  and `turn_rate_cw = 2π / CW_seconds` in the mapper section of `config/hw3.yaml`.
-  Incorrect rates bias command-based prediction even when the wheels turn properly.
+  base 0.127 m, linear deadzone 0.08, linear slope 1.772915625, angular slope 1e6.
+- Turn input and driver limit use the user-confirmed **±0.5** and **3.75 seconds
+  per revolution**, giving `2π/3.75` rad/s. A nominal 90° turn is 0.9375 s, with
+  stopping quantized by command/update intervals. The previous 0.6 defaults in
+  the merged branch have been replaced with this confirmed calibration pair.
+- Pure turns send continuous opposing wheel inputs. Because the angular slope is
+  1e6, changing requested angular velocity barely changes motor power. Changing
+  `turn_input` requires corresponding turn-rate calibration. Straight-drive
+  mapping is unchanged; the forward-speed default is **0.567333 m/s**, corresponding to calibrated motor input 0.4.
 
   ```bash
-  bash hw3/scripts/run.sh turn_input:=0.6 motor_limit:=0.6
+  bash hw3/scripts/run.sh speed_m_s:=0.567333
   ```
 
 - Noise settings are provisional tuning values, not newly measured covariance.
@@ -202,7 +193,7 @@ Each run writes a unique directory under `~/hw3_runs/`, printed at startup:
 
 - `parameters.json`: estimator/controller settings used.
 - `run.jsonl`: timestamped estimated states, **full joint covariance**, landmark-ID
-  order, observation/gate decisions, commands, applied-model motion, calibration,
+  order, observation/gate decisions, commands (including emitted wheel inputs), applied-model motion, calibration,
   lap-completion snapshots, and faults.
 
 At each completed lap the full map/covariance is saved. Periodic estimates continue
@@ -248,17 +239,18 @@ ground-truth overlay, missing/spurious landmark reporting, and average landmark 
   and the analogous turn expression. The reported command history includes the fixed-input
   turn-rate estimate and command expiry, rather than pretending requested angular
   velocity is the measured physical turn rate.
-- The persistent estimator runs 0.35 s behind ROS time, applying accepted observations
-  at capture time and then propagating through saved commands. A second estimate integrates commands without visual correction for fixed-route
-  progress; its temporary predicted copy supplies the current drive pose. Duplicate/too-late frames are discarded
-  and counted; increase `vision_delay_s` if actual detector latency exceeds the buffer.
+- The persistent estimator runs 0.35 s behind ROS time, applying observations at
+  capture time and then propagating through saved commands. Route progress separately
+  integrates commanded distance/yaw and never uses visual pose changes to conclude
+  that a leg or turn was executed. Duplicate/too-late frames are discarded and
+  counted; increase `vision_delay_s` if detector latency exceeds the buffer.
 - Initial pose `(0,0,0)` with zero covariance chooses the local reference frame.
   No measured world pose is supplied. Maps and covariances are approximate Gaussian
   EKF estimates; false IDs, poor geometry, or bad calibration can still corrupt them.
 
 ## Verification and remaining assignment work
 
-Twenty-one local numerical/component checks passed (one additional localhost HTTP
+Twenty-three local numerical/component checks passed (one additional localhost HTTP
 listener check was skipped because the development environment denies socket
 listeners): EKF derivatives/covariance,
 landmark discovery/reobservation, distorted-camera geometry, timestamped command
@@ -276,3 +268,24 @@ Run logs/status provide the evidence for the next iteration. HW2 source is uncha
 This implementation covers the requested square experiment. The assignment's
 octagon experiment, physical ground-truth measurements, comparative results,
 report, video, and final code ZIP still need to be completed.
+
+### Turn-skipping regression fix
+
+A visually corrected EKF heading can jump even when no physical turn has occurred.
+Feeding that heading into fixed-square phase logic could falsely complete the
+turn and resume forward motion. Fixed-route progress now integrates only the
+mapper's applied-command history. The controller requires a full commanded 7 ft
+leg followed by a full commanded quarter-turn before advancing. EKF-SLAM still
+produces the displayed/recorded trajectory and map.
+
+The `route_phase`, `command`, and `motor_commands` records show each phase and
+emitted left/right wheel input. If these show opposing inputs throughout a turn
+but the robot stays straight, the remaining issue is physical motor response,
+serial delivery, or calibration; command feedback cannot detect wheel stall.
+
+Forward speed now defaults to **0.567333 m/s**, the measured speed at motor input
+**0.4** in our original `robot_test.py` calibration. This is about 1.62 times the
+previous 0.35 m/s setting, and 3.78 times the initial 0.15 m/s setting. Both wheels
+receive approximately 0.4 motor input, below the unchanged 0.5 driver limit.
+A seven-foot leg takes about **3.76 seconds** at the calibrated nominal speed,
+before stopping/turning overhead. Use `speed_m_s:=VALUE` to override it at launch.

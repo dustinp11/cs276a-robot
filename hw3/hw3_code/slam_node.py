@@ -1,6 +1,5 @@
 """Run live, delayed-vision EKF-SLAM and a 7 ft square without a known landmark map."""
 
-import copy
 import math
 import time
 
@@ -12,7 +11,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo
-from std_msgs.msg import String
+from std_msgs.msg import Float32MultiArray, String
 from std_srvs.srv import Trigger
 
 from .ekf_slam import EkfSlam
@@ -66,6 +65,8 @@ class SlamNode(Node):
         self.logged_reason = None
         self.vision_problem = None
         self.completed_recorded = False
+        self.route_progress, self.route_time = [0., 0.], None
+        self.last_phase = None
 
     def _create_interfaces(self):
         """Subscribe to HW3-only inputs and expose command, status, start, and stop interfaces."""
@@ -73,6 +74,7 @@ class SlamNode(Node):
         self.status_pub = self.create_publisher(String, '/hw3/status', 1)
         self.camera_sub = self.create_subscription(CameraInfo, '/hw3/camera_info', self.on_camera, qos_profile_sensor_data)
         self.detection_sub = self.create_subscription(AprilTagDetectionArray, '/hw3/detections', self.on_detections, 10)
+        self.motor_sub = self.create_subscription(Float32MultiArray, '/hw3/motor_commands', self.on_motor_commands, 50)
         self.motion_sub = self.create_subscription(TwistStamped, '/hw3/applied_motion', self.on_motion, 50)
         self.start_service = self.create_service(Trigger, '/hw3/start', self.on_start)
         self.stop_service = self.create_service(Trigger, '/hw3/stop', self.on_stop)
@@ -116,8 +118,15 @@ class SlamNode(Node):
         if self.motion.add(stamp, message.twist.linear.x, message.twist.angular.z):
             if self.estimator_time is None:
                 self.estimator_time = stamp
+                self.route_time = stamp
                 self.recorder.write('origin', stamp, frame=self.values['frame_id'])
             self.recorder.write('applied_motion', stamp, linear=message.twist.linear.x, angular=message.twist.angular.z)
+
+    def on_motor_commands(self, message):
+        """Log emitted wheel inputs so a skipped turn can be distinguished from wheel stall."""
+        if len(message.data) >= 2 and all(math.isfinite(value) for value in message.data[:2]):
+            self.recorder.write('motor_commands', self.now_seconds(),
+                                left=float(message.data[0]), right=float(message.data[1]))
 
     def on_detections(self, message):
         """Convert each fresh Standard41h12 frame once and queue it by capture timestamp."""
@@ -169,6 +178,7 @@ class SlamNode(Node):
             self.fail('Control timing gap or ROS clock reset; restart this run')
         self.last_tick_wall, self.last_ros_time = wall, now
         try:
+            self._advance_route_motion(now)
             self._advance_estimation(now)
             command = self._control(now, wall)
             self.send_command(*command)
@@ -176,6 +186,24 @@ class SlamNode(Node):
         except Exception as error:
             self.fail(f'Estimation/control error: {error}')
             self.send_command(0., 0.)
+
+    def _advance_route_motion(self, now):
+        """Accumulate dispatched command motion without incorporating EKF pose corrections."""
+        if self.route_time is None:
+            return
+        distance, turn = self.motion.totals(self.route_time, now)
+        self.route_progress[0] += distance
+        self.route_progress[1] += turn
+        self.route_time = now
+
+    def _log_phase(self, now):
+        """Record every corner transition with independent drive/turn progress."""
+        phase = (self.controller.index, self.controller.stage)
+        if phase != self.last_phase:
+            self.last_phase = phase
+            self.recorder.write('route_phase', now, side=self.controller.index+1,
+                                stage=self.controller.stage, progress=self.route_progress.copy())
+            self.get_logger().info(f'Square: {self.reason}; command motion={self.route_progress}')
 
     def _advance_estimation(self, now):
         """Apply observations at capture time, then advance to the fixed-delay horizon."""
@@ -212,15 +240,15 @@ class SlamNode(Node):
             self.seen_frames += 1
 
     def _control(self, now, wall):
-        """Use predicted current pose; pause when inputs disappear or the run is disarmed."""
+        """Execute the fixed route from command motion; EKF corrections only affect the map."""
         reason = self._pause_reason(now, wall)
         if reason:
             self.reason = reason
             return 0., 0.
-        predicted = copy.deepcopy(self.estimator)
-        self.motion.propagate(predicted, self.estimator_time, now)
-        self.reason = self.controller.stage
-        command = self.controller.step(predicted.robot_pose)
+        command = self.controller.step(self.route_progress)
+        self.reason = ('complete' if self.controller.done else
+                       f'{self.controller.stage}; side={self.controller.index+1}')
+        self._log_phase(now)
         self._record_progress(now)
         return command
 
@@ -275,7 +303,8 @@ class SlamNode(Node):
         message = Twist()
         message.linear.x, message.angular.z = float(linear), float(angular)
         self.command_pub.publish(message)
-        self.recorder.write('command', self.now_seconds(), linear=float(linear), angular=float(angular))
+        self.recorder.write('command', self.now_seconds(), linear=float(linear), angular=float(angular),
+                            stage=self.controller.stage, side=self.controller.index+1)
 
     def fail(self, reason):
         """Latch a fault so a numerical/timing failure cannot silently resume motion."""

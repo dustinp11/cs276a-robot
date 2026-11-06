@@ -4,7 +4,7 @@ import math
 
 MOTOR_DEFAULTS = {
     'wheel_base_m': 0.127, 'linear_deadzone': 0.08, 'linear_slope': 1.772915625,
-    'turn_motor_input': 0.6, 'angular_slope': 1e6, 'motor_command_limit': 0.6,
+    'turn_motor_input': 0.5, 'angular_slope': 1e6, 'motor_command_limit': 0.5,
     'turn_rate_ccw': 1.6755160819145563, 'turn_rate_cw': 1.6755160819145563,
     'command_timeout_s': 0.2,
 }
@@ -14,7 +14,7 @@ class MotorModel:
     """Preserve our differential-drive mapping; report nominal motion separately."""
 
     def __init__(self, values):
-        """Validate mapping parameters; turn rates are estimates until remeasured."""
+        """Use the confirmed motor input 0.5 and 3.75-second full-turn timing."""
         self.values = dict(values)
         if any(not math.isfinite(value) or value <= 0 for value in self.values.values()):
             raise ValueError('Motor model values must be finite and positive')

@@ -21,7 +21,7 @@ from hw3_code.plot_run import compare_landmarks, export
 from hw3_code.recording import RunRecorder
 from hw3_code.settings import DEFAULTS, validate_parameters
 from hw3_code.web_view import BrowserMap
-from hw3_code.waypoint_control import FixedSquareController, WaypointController, square_waypoints
+from hw3_code.waypoint_control import ControlSettings, FixedSquareController, WaypointController, square_waypoints
 
 
 class LiveComponentTests(unittest.TestCase):
@@ -108,17 +108,23 @@ class LiveComponentTests(unittest.TestCase):
         self.assertEqual(result['spurious_ids'], [['41h12', 1]])
 
     def test_our_mapping_and_adjustable_turn_input(self):
-        """Preserve our straight mapping and send stronger continuous inputs for turns."""
+        """Preserve our mapping with the confirmed 0.5 turning input."""
         model = MotorModel(MOTOR_DEFAULTS)
         left, right, linear, angular = model.map_command(.15, 0.)
         self.assertAlmostEqual(left, .08+.15/1.772915625)
         self.assertEqual(left, right)
         self.assertAlmostEqual(linear, .15)
         self.assertEqual(angular, 0.)
+        self.assertEqual(ControlSettings().max_speed, .567333)
+        self.assertAlmostEqual(model.map_command(.35, 0.)[2], .35)
+        faster = model.map_command(ControlSettings().max_speed, 0.)
+        self.assertAlmostEqual(faster[0], .4)
+        self.assertAlmostEqual(faster[1], .4)
+        self.assertAlmostEqual(faster[2], .567333)
         for requested in (.1, .8):
             left, right, linear, angular = model.map_command(0., requested)
-            self.assertAlmostEqual(left, -(.6+.127/2.*requested/1e6))
-            self.assertAlmostEqual(right, .6+.127/2.*requested/1e6)
+            self.assertAlmostEqual(left, -(.5+.127/2.*requested/1e6))
+            self.assertAlmostEqual(right, .5+.127/2.*requested/1e6)
             self.assertEqual(linear, 0.)
             self.assertEqual(angular, MOTOR_DEFAULTS['turn_rate_ccw'])
         self.assertLess(model.map_command(0., -.8)[3], 0.)
@@ -126,21 +132,42 @@ class LiveComponentTests(unittest.TestCase):
         self.assertEqual(model.map_command(float('nan'), 0.), (0., 0., 0., 0.))
 
     def test_fixed_square_drives_without_landmark_input(self):
-        """Each literal leg/turn endpoint advances the route without any vision interface."""
+        """Complete four legs only after each required quarter-turn has been commanded."""
         controller = FixedSquareController()
-        corners = [[2.1336, 0., 0.], [2.1336, 2.1336, math.pi/2.],
-                   [0., 2.1336, math.pi], [0., 0., -math.pi/2.]]
-        pose = np.zeros(3)
-        for number, corner in enumerate(corners):
-            self.assertEqual(controller.step(pose), (controller.settings.max_speed, 0.))
-            self.assertEqual(controller.step(corner), (0., 0.))
-            self.assertEqual(controller.step(corner), (0., controller.settings.rotation_speed))
-            pose = np.array(corner)
-            pose[2] += math.pi/2.
-            self.assertEqual(controller.step(pose), (0., 0.))
+        progress = np.zeros(2)
+        for number in range(4):
+            self.assertEqual(controller.step(progress), (controller.settings.max_speed, 0.))
+            progress[0] += 2.1336
+            self.assertEqual(controller.step(progress), (0., 0.))
+            self.assertEqual(controller.step(progress), (0., controller.settings.rotation_speed))
+            progress[1] += math.pi/2.
+            self.assertEqual(controller.step(progress), (0., 0.))
             self.assertEqual(controller.index, number+1)
         self.assertTrue(controller.done)
-        self.assertEqual(controller.step(pose), (0., 0.))
+        self.assertEqual(controller.step(progress), (0., 0.))
+
+    def test_turn_cannot_be_skipped_after_first_leg(self):
+        """The first pause must lead to sustained left commands, never immediate forward."""
+        controller = FixedSquareController()
+        controller.step([0., 0.])
+        self.assertEqual(controller.step([2.1336, 0.]), (0., 0.))
+        for turn in (0., .05, .4, 1.0, math.pi/2.-.001):
+            self.assertEqual(controller.step([2.1336, turn]), (0., controller.settings.rotation_speed))
+            self.assertEqual(controller.index, 0)
+        self.assertEqual(controller.step([2.1336, math.pi/2.]), (0., 0.))
+        self.assertEqual(controller.step([2.1336, math.pi/2.]), (controller.settings.max_speed, 0.))
+
+    def test_route_motion_tracks_turn_commands_and_expiry(self):
+        """Only the duration of commanded angular motion counts toward turn completion."""
+        history = MotionHistory(.15, .2, .002, .005, timeout=.15)
+        rate = 2*math.pi/3.75
+        history.add(1., 0., rate)
+        history.add(1.1, 0., rate)
+        history.add(1.2, 0., 0.)
+        distance, angle = history.totals(1., 2.)
+        self.assertAlmostEqual(distance, 0.)
+        self.assertAlmostEqual(angle, rate*.2)
+        self.assertLess(angle, math.pi/2.)
 
     def test_browser_snapshot_without_network(self):
         """The viewer exposes estimator poses/covariances and does not invent landmarks."""
