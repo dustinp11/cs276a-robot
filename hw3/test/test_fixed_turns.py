@@ -64,14 +64,14 @@ class TestFixedTurns(unittest.TestCase):
         self.assertAlmostEqual(ccw.angular_radps * 1.0, math.pi / 2)
         self.assertAlmostEqual(cw.angular_radps * 1.0, -math.pi / 2)
 
-    def test_measured_asymmetric_corner_pulse_lasts_point_nine_seconds(self):
+    def test_measured_asymmetric_corner_pulse_lasts_point_nine_five_seconds(self):
         """Exercise the shortened initial turn at the 20 Hz control frequency.
 
         Args:
             None.
 
         Returns:
-            None. Confirms 0.9 seconds of [-0.40, +0.37] and an honest 81-degree prediction.
+            None. Confirms 0.95 seconds of [-0.40, +0.37] and an honest 85.5-degree prediction.
         """
         calibration = TurnCalibration(-0.40, 0.37, 0.37, -0.37, math.pi / 2, math.pi / 2)
         mapper = VelocityMapper(calibration)
@@ -89,8 +89,8 @@ class TestFixedTurns(unittest.TestCase):
                 self.assertAlmostEqual(motors.angular_radps, math.pi / 2)
             if cmd.state == NavigationState.CORNER_PAUSE:
                 break
-        self.assertEqual(moving_ticks, 18)
-        self.assertAlmostEqual(nav.corner_used, math.radians(81))
+        self.assertEqual(moving_ticks, 19)
+        self.assertAlmostEqual(nav.corner_used, math.radians(85.5))
 
     def test_turn_calibration_rejects_wrong_direction_signs(self):
         for motors in [(0.4, 0.37, 0.4, -0.4), (-0.4, -0.37, 0.4, -0.4),
@@ -295,10 +295,11 @@ class TestFixedTurns(unittest.TestCase):
         origin, heading, target = nav.leg_origin, nav._heading(), nav.target
         self.assertEqual(nav.step(2.5).linear_v_mps, 0)
         self.assertFalse(nav.midpoint_done)
-        nav.update_ekf_pose(0.75, 0.2, 0.1, 0.01, 0.01, 3)
+        estimated_progress = nav.square_size_m / 2 - 0.16
+        nav.update_ekf_pose(estimated_progress, 0.2, 0.1, 0.01, 0.01, 3)
         cmd = nav.step(3)
         self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
-        self.assertAlmostEqual(nav.midpoint_progress_m, 0.75)
+        self.assertAlmostEqual(nav.midpoint_progress_m, estimated_progress)
         self.assertAlmostEqual(nav.midpoint_remaining_m, nav.square_size_m / 2 + 0.10)
         self.assertEqual((nav.leg_origin, nav._heading(), nav.target), (origin, heading, target))
         cmd = nav.step(3.05)
@@ -607,21 +608,21 @@ class TestFixedTurns(unittest.TestCase):
         self.assertEqual(cmd.angular_omega_radps, 0)
         self.assertEqual(nav.state, NavigationState.DRIVING)
 
-    def test_false_near_complete_ekf_midpoint_retains_about_three_feet(self):
+    def test_false_near_complete_ekf_midpoint_retains_about_half_a_side(self):
         """Reproduce the reported short second half and constrain the EKF's authority.
 
         Args:
             None.
 
         Returns:
-            None. Checks a 1.77 m EKF estimate cannot reduce the remainder to 5 cm.
+            None. Checks a 1.47 m EKF estimate cannot reduce the remainder to 5 cm.
         """
         nav = self.at_midpoint()
-        nav.update_ekf_pose(1.77, 0, 0, 0.01, 0.01, 3)
+        nav.update_ekf_pose(1.47, 0, 0, 0.01, 0.01, 3)
         nav.step(3)
-        self.assertAlmostEqual(nav.midpoint_progress_m, 1.77)
+        self.assertAlmostEqual(nav.midpoint_progress_m, 1.47)
         self.assertAlmostEqual(nav.progress_correction_m, 0.10)
-        self.assertAlmostEqual(nav.midpoint_remaining_m, 0.8144)
+        self.assertAlmostEqual(nav.midpoint_remaining_m, 0.662)
         self.assertGreater(nav.step(3.05).linear_v_mps, 0)
         self.assertEqual(nav.state, NavigationState.DRIVING)
 
@@ -822,8 +823,8 @@ class TestFixedMapper(unittest.TestCase):
             self.assertEqual((command.left, command.right, command.linear_mps, command.angular_radps),
                              (0, 0, 0, 0))
 
-    def test_measured_speed_matches_nominal_three_foot_command_time(self):
-        """Verify measured speed matches nominal three foot command time.
+    def test_measured_speed_matches_nominal_half_side_command_time(self):
+        """Verify measured speed matches nominal 2.5 foot command time.
 
         Args:
             None.
@@ -843,8 +844,8 @@ class TestFixedMapper(unittest.TestCase):
             if nav.state == NavigationState.MIDPOINT_PAUSE:
                 break
         self.assertEqual(nav.state, NavigationState.MIDPOINT_PAUSE)
-        self.assertAlmostEqual(commanded_distance, 0.9144, delta=0.203 * 0.05)
-        self.assertAlmostEqual(0.9144 / nav.forward.speed_mps, 4.5044334975)
+        self.assertAlmostEqual(commanded_distance, 0.762, delta=0.203 * 0.05)
+        self.assertAlmostEqual(0.762 / nav.forward.speed_mps, 3.7536945813)
 
     def test_mapper_publishes_actual_calibrated_speed_for_ekf(self):
         """The applied command must describe the measured motor pair, not the request.

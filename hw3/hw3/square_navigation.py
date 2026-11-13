@@ -52,11 +52,11 @@ class NavigationOutput:
 
 
 class SquareNavigator:
-    """Execute six-foot legs using tag displacement and fixed initial-frame headings."""
+    """Execute configured-length legs using tag displacement and fixed initial-frame headings."""
 
     FEET_TO_METERS = 0.3048
 
-    def __init__(self, square_size_ft=6.0, waypoint_tolerance_m=0.01,
+    def __init__(self, square_size_ft=5.0, waypoint_tolerance_m=0.01,
                  heading_tolerance_rad=0.12, pose_timeout_s=0.60,
                  max_pos_uncertainty_m=0.40, max_heading_uncertainty_rad=0.40,
                  turn_calibration=None, turn_pulse_rad=math.pi / 12,
@@ -146,7 +146,7 @@ class SquareNavigator:
         if self.state != NavigationState.IDLE:
             return False, 'Mission already started; reset/relaunch for a new run.'
         self.is_active, self.state = True, NavigationState.WAITING_FOR_POSE
-        return True, 'Starting first six-foot leg; no prior tags required.'
+        return True, 'Starting first leg; no prior tags required.'
 
     def stop(self, reason='Manual stop requested'):
         """Latch a terminal stop; ordinary start requests cannot resume motion."""

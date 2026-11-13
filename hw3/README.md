@@ -35,8 +35,8 @@ forward_calibration:
   speed_mps: 0.203
 ```
 
-Nominal travel times are **4.504 seconds for 3 feet** and **9.009 seconds for
-6 feet**, excluding pauses and estimator-based remaining-distance corrections.
+Nominal travel times are **3.754 seconds for 2.5 feet** and **7.507 seconds for
+5 feet**, excluding pauses and estimator-based remaining-distance corrections.
 The controller samples commands at 20 Hz, so stopping is quantized to a control
 interval. Distance acceptance is now 0.01 m in the prediction, rather than the
 previous 0.10 m shortfall allowance; this is not a physical accuracy guarantee.
@@ -70,7 +70,7 @@ source /opt/ros/jazzy/setup.bash
 source rubikpi_ros2/install/setup.bash
 source install/setup.bash
 ros2 launch hw3 hw3_navigation.launch.py \
-  params_file:="$(pwd)/hw3/config/hw3_params.yaml" square_size_ft:=6.0
+  params_file:="$(pwd)/hw3/config/hw3_params.yaml" square_size_ft:=5.0
 ```
 
 The launch includes the camera and tag36h11 detector. It installs the existing
@@ -99,19 +99,19 @@ encoder measurements. Manual visual-only mode retains its VO prediction source.
 
 The square now uses the following phases on each of four sides:
 
-`DRIVE first 3 ft → MIDPOINT_PAUSE → DRIVE remainder → STOPPING → TURNING 90° → CORNER_PAUSE → optional CORRECTING → next side`
+`DRIVE first 2.5 ft → MIDPOINT_PAUSE → DRIVE remainder → STOPPING → TURNING 90° → CORNER_PAUSE → optional CORRECTING → next side`
 
 - Every leg starts and continues without requiring any visible or previously
   mapped tag. Missing/stale EKF messages use calibrated command prediction;
   high covariance does not block the mission.
-- Drive a nominal first 3 feet (0.9144 m, half the configured side length),
+- Drive a nominal first 2.5 feet (0.762 m, half the configured side length),
   then stop for `navigation.midpoint_pause_s` (default 3.0 seconds). Callbacks
   remain active during the pause so delayed images and EKF updates can arrive.
 - At pause completion, project a fresh, sufficiently confident post-stop EKF
   position onto the original side axis. Compare it with nominal traveled distance
   and clamp the adjustment to `navigation.midpoint_max_correction_m` (default
   +/-0.10 m, capped at one quarter of a side for smaller squares). The remainder
-  stays approximately 3 feet +/-10 cm; a bad estimate cannot reduce it to 5 cm.
+  stays approximately 2.5 feet +/-10 cm; a bad estimate cannot reduce it to 5 cm.
 - Freeze this one adjustment for the second half and integrate the measured
   0.203 m/s command from there. Continuous tag/EKF progress cannot override that
   distance plan. EKF and relative-tag estimates remain recorded for comparison,
@@ -119,9 +119,9 @@ The square now uses the following phases on each of four sides:
 - Missing, stale, or uncertain EKF data use zero distance adjustment. The pause
   always ends after its fixed duration, and no tag observation is required.
 - Stop for three seconds, then apply one initial left-turn pulse for
-  `navigation.corner_turn_duration_s` (default 0.9 seconds) using the measured
+  `navigation.corner_turn_duration_s` (default 0.95 seconds) using the measured
   fixed CCW inputs. This shorter pulse aims to reduce physical overshoot. The
-  stored rate still predicts 81° for 0.9 seconds; the EKF and logs do not pretend
+  stored rate still predicts 85.5° for 0.95 seconds; the EKF and logs do not pretend
   it measured 90°. There is no 360° scan. Duration has control-tick quantization.
 - Stop for another `navigation.turn_settle_s` (default 3 seconds), allowing delayed
   camera observations to arrive. A missing observation never extends this pause.
@@ -447,17 +447,17 @@ ros2 run hw3 publish_map --landmarks hw3_results/ekf_slam_landmarks.csv --trajec
 ```
 This continually broadcasts the static `map` frame and publishes all landmarks, tag IDs, covariance ellipses, and trajectory points so you can open RViz anytime (`rviz2`) and inspect the map!
 
-### 3.10 Closed-Loop Square Navigation (6 ft x 6 ft)
+### 3.10 Closed-Loop Square Navigation (5 ft x 5 ft)
 
-The `square_navigation_node` drives four 6 ft legs with initial-frame headings,
+The `square_navigation_node` drives four 5 ft legs with initial-frame headings,
 direct quarter-turns and optional visual corrections as described above. Ideal corners are shown
 below; actual leg origins come from the current post-turn pose, so the controller
 does not fabricate a corrected corner or guarantee physical closure:
 - Waypoints:
   - WP0: `(0, 0)` ft [0.000, 0.000] m — Origin / Start
-  - WP1: `(6, 0)` ft [1.8288, 0.0000] m — Bottom-right (+X)
-  - WP2: `(6, 6)` ft [1.8288, 1.8288] m — Top-right (+X, +Y)
-  - WP3: `(0, 6)` ft [0.0000, 1.8288] m — Top-left (+Y)
+  - WP1: `(5, 0)` ft [1.5240, 0.0000] m — Bottom-right (+X)
+  - WP2: `(5, 5)` ft [1.5240, 1.5240] m — Top-right (+X, +Y)
+  - WP3: `(0, 5)` ft [0.0000, 1.5240] m — Top-left (+Y)
   - WP4: `(0, 0)` ft [0.0000, 0.0000] m — Return to start
 
 Launch all nodes (EKF-SLAM + motor hardware + navigation controller in IDLE mode):
