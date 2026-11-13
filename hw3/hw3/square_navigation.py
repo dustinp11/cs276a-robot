@@ -74,9 +74,9 @@ class SquareNavigator:
         square_size_ft: float = 7.0,
         max_linear_v_mps: float = 0.20,
         min_linear_v_mps: float = 0.05,
-        angular_velocity_ccw_radps: float = 1.77,  # Calibrated: 360 deg in 3.55s (motor [-0.43, 0.43])
-        angular_velocity_cw_radps: float = 1.75,   # Calibrated: 360 deg in 3.59s (motor [0.4, -0.4])
-        max_angular_omega_radps: float = 1.77,
+        angular_velocity_ccw_radps: float = 1.2566,  # Calibrated: 360 deg in 5.0s (motor [-0.35, 0.35])
+        angular_velocity_cw_radps: float = 1.3090,   # Calibrated: 360 deg in 4.8s (motor [0.35, -0.35])
+        max_angular_omega_radps: float = 1.31,
         min_angular_omega_radps: float = 0.20,
         linear_kp: float = 0.60,
         angular_kp: float = 1.20,

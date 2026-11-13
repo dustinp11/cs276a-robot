@@ -22,12 +22,12 @@ class VelocityToMotorNode(Node):
         self.right_angular_deadzone = 0.22
         self.right_angular_slope = 15.0
 
-        # Calibrated parameters: turn in place using motor input [-0.43, 0.43] (CCW) and [0.4, -0.4] (CW)
-        # Measured 360 deg turn times: CCW = 3.55s (1.7699 rad/s), CW = 3.59s (1.7502 rad/s)
-        self.ccw_turn_left_cmd = -0.43
-        self.ccw_turn_right_cmd = 0.43
-        self.cw_turn_left_cmd = 0.40
-        self.cw_turn_right_cmd = -0.40
+        # Calibrated parameters: turn in place using motor input [-0.35, 0.35] (CCW) and [0.35, -0.35] (CW)
+        # Measured 360 deg turn times: CCW = 5.0s (1.2566 rad/s), CW = 4.8s (1.3090 rad/s)
+        self.ccw_turn_left_cmd = -0.35
+        self.ccw_turn_right_cmd = 0.35
+        self.cw_turn_left_cmd = 0.35
+        self.cw_turn_right_cmd = -0.35
 
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.motor_pub = self.create_publisher(Float32MultiArray, '/motor_commands', 10)
@@ -53,11 +53,11 @@ class VelocityToMotorNode(Node):
             right_cmd = self._map_with_deadzone(v_right, self.right_linear_deadzone, self.right_linear_slope)
         elif ang != 0.0:
             if ang > 0.0:
-                # CCW turn in place: calibrated [-0.43, 0.43] (360 deg in 3.55s)
+                # CCW turn in place: calibrated [-0.35, 0.35] (360 deg in 5.0s)
                 left_cmd = self.ccw_turn_left_cmd
                 right_cmd = self.ccw_turn_right_cmd
             else:
-                # CW turn in place: calibrated [0.4, -0.4] (360 deg in 3.59s)
+                # CW turn in place: calibrated [0.35, -0.35] (360 deg in 4.8s)
                 left_cmd = self.cw_turn_left_cmd
                 right_cmd = self.cw_turn_right_cmd
         else:
