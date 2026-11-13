@@ -72,7 +72,7 @@ encoder measurements. Manual visual-only mode retains its VO prediction source.
 
 The square now uses the following phases on each of four sides:
 
-`DRIVE first 3 ft → MIDPOINT_PAUSE → DRIVE remainder → STOPPING → SCANNING → LOCALIZING → ALIGNING → next side`
+`DRIVE first 3 ft → MIDPOINT_PAUSE → DRIVE remainder → STOPPING → TURNING 90° → CORNER_PAUSE → optional CORRECTING → next side`
 
 - Every leg starts and continues without requiring any visible or previously
   mapped tag. Missing/stale EKF messages use calibrated command prediction;
@@ -91,27 +91,35 @@ The square now uses the following phases on each of four sides:
   During the remainder, calibrated command travel and any usable relative-tag
   displacement provide distance feedback. Maximum speed remains 0.12 m/s and
   angular commands remain zero. The existing total-leg command budget still
-  advances to the scan if the distance estimate stays frozen.
-- Stop and settle for one second, then scan in eight nominal CCW 45° stages,
-  stopping for 0.5 seconds after each stage, including the eighth. Configure
-  `navigation.scan_step_rad` and `navigation.scan_pause_s` for the camera.
-  The 20-second scan deadline includes turning and all pauses. Stage angles
-  remain command predictions, not measured physical rotations.
-- After the scan, settle for one second to accept optional vision updates.
-  `LOCALIZING` is a finite settle phase, not a wait for tags or tag count.
-- Align to initial heading + 90°, 180°, 270°, then 360° after the final side.
-  Navigation predicts heading from calibrated applied turn commands and accepts
-  sufficiently confident EKF corrections while recent tag updates are available.
-  Alignment uses stopped pulses of at most 15 nominal degrees. It continues
-  best effort when its bounded correction budget or deadline expires, logging
-  that fallback rather than claiming visual verification. No mid-side pivots.
+  advances to the corner turn if the distance estimate stays frozen.
+- Stop for one second, then command a single continuous nominal 90° left turn
+  using the measured CCW rate. There is no 360° scan. The nominal quarter-turn
+  takes 0.8875 seconds at the current calibration, with control-tick quantization.
+- Stop for another `navigation.turn_settle_s` (default 1 second), allowing delayed
+  camera observations to arrive. A missing observation never extends this pause.
+- Prefer the same tag's face-normal orientation before and after turning to
+  measure actual relative yaw change and correct that rotation toward 90°,
+  independently of any bias in the prior global heading. Tag orientations are transformed from
+  camera optical coordinates into robot-base coordinates. This comparison uses
+  no estimated global tag position. Reject likely PnP face flips and inconsistent
+  matched-tag changes. Only images captured after stopping can correct the turn.
+- If no usable same-tag comparison exists, a fresh known-tag EKF correction may
+  provide the next absolute side-heading error. If neither is available, continue
+  from calibrated turn prediction without any extra corrective spin.
+- Optional corrections use the measured fixed CW/CCW inputs and total at most
+  `navigation.corner_correction_limit_rad` (default 15 nominal degrees), in at most
+  `navigation.corner_max_corrections` pulses (default 2). Pause after each pulse
+  before considering another observation. Timer quantization may add up to one
+  control interval of motion. Noisy map estimates cannot authorize repeated spins.
+- Side targets remain anchored to initial heading + 90°, 180°, 270°, and 360°.
+  Four quarter-turns finish the lap facing approximately the initial direction.
 
 The complete four-side sequence can finish with zero detections. Missing tags,
 high covariance, and lack of visual stability never by themselves stop it.
 There is no autonomous wall-distance stop. Clearance is recorded in the CSV
 only; a supervising human uses `/stop_navigation` or Ctrl-C to stop motion.
-Missing/stale EKF messages also do not abort the mission. A scan deadline ends
-the scan and proceeds to alignment rather than stopping the entire square.
+Missing/stale EKF messages also do not abort the mission. A corner deadline ends
+the current turn and proceeds to the camera pause rather than aborting the square.
 The motor driver's command watchdog and shutdown stop remain unchanged.
 
 Wall-plane intersection from visible tags remains a diagnostic measurement in
@@ -122,16 +130,16 @@ The EKF uses higher-uncertainty command prediction plus gated tag observations.
 Command covariance grows with elapsed time rather than shrinking with callback
 frequency. Vision updates require fresh images, exact-time TF, 36h11 family, and
 configured margin/hamming/range checks; stale latest-TF fallback is disabled.
-The relative-travel check still depends on EKF yaw, and all scan/alignment motor
+The relative-travel check still depends on EKF yaw, and all turn/correction motor
 rates remain subject to acceleration, battery, and surface error. Test a short
-leg and scan/alignment before another full lap; hardware validation is pending.
+leg and turn/correction before another full lap; hardware validation is pending.
 
 For recording/debugging, include the applied commands as well as outputs:
 
 ```bash
 ros2 bag record /cmd_vel /cmd_vel_applied /motor_commands \
   /ekf_slam/pose /ekf_slam/trajectory /ekf_slam/landmarks \
-  /ekf_slam/vision_feedback /detections /tf /tf_static -o hw3_results/scan_square
+  /ekf_slam/vision_feedback /detections /tf /tf_static -o hw3_results/direct_turn_square
 ```
 
 Local synthetic checks (no ROS or hardware): `python3 hw3/run_tests.py`.
@@ -409,8 +417,8 @@ This continually broadcasts the static `map` frame and publishes all landmarks, 
 ### 3.10 Closed-Loop Square Navigation (6 ft x 6 ft)
 
 The `square_navigation_node` drives four 6 ft legs with initial-frame headings,
-full scans, and optional visual corrections as described above. Ideal corners are shown
-below; actual leg origins come from the current post-scan pose, so the controller
+direct quarter-turns and optional visual corrections as described above. Ideal corners are shown
+below; actual leg origins come from the current post-turn pose, so the controller
 does not fabricate a corrected corner or guarantee physical closure:
 - Waypoints:
   - WP0: `(0, 0)` ft [0.000, 0.000] m — Origin / Start
@@ -460,8 +468,8 @@ ros2 service call /stop_navigation std_srvs/srv/Trigger
 4. **Lighting & Motion Blur**: Fast manual movements or low lighting may cause AprilTag detection drops, temporarily pausing VO.
 
 Navigation CSV adds `vision_age_s`, `visual_progress_m`, `ekf_progress_m`,
-`forward_clearance_m`, `scan_nominal_rad`, `navigation_heading_rad`,
+`forward_clearance_m`, `corner_nominal_rad`, `corner_correction_rad`, `corner_feedback_source`, `corner_residual_rad`, `navigation_heading_rad`,
 `midpoint_progress_m`, `midpoint_remaining_m`, and `midpoint_source` to the existing columns. These
 record visual freshness, competing travel estimates, wall clearance, and timed
-scan prediction, navigation heading, and midpoint correction separately. Navigation heading can be
+corner prediction, optional correction, navigation heading, and midpoint correction separately. Navigation heading can be
 model-predicted while the EKF pose remains uncertain. EKF landmark and trajectory CSV formats are unchanged.

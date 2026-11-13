@@ -1,7 +1,7 @@
 """ROS 2 Navigation Node for Closed-Loop Square Trajectory.
 
 Consumes estimated robot pose from /ekf_slam/pose and commands /cmd_vel
-using fixed-heading six-foot legs with corner scans and visual verification.
+using fixed-heading six-foot legs, midpoint pauses, and direct quarter-turns.
 """
 
 import csv
@@ -220,7 +220,7 @@ class SquareNavigationNode(Node):
                     'state',
                     'status_message',
                     'vision_age_s', 'visual_progress_m', 'ekf_progress_m',
-                    'forward_clearance_m', 'scan_nominal_rad', 'navigation_heading_rad',
+                    'forward_clearance_m', 'corner_nominal_rad', 'corner_correction_rad', 'corner_feedback_source', 'corner_residual_rad', 'navigation_heading_rad',
                     'midpoint_progress_m', 'midpoint_remaining_m', 'midpoint_source',
                 ])
             self.csv_initialized = True
@@ -281,15 +281,16 @@ class SquareNavigationNode(Node):
             stamp = float(data['stamp_s'])
             tags = [[int(tag), float(x), float(y)] for tag, x, y in data['tags']]
             known_ids = [int(tag) for tag in data['known_ids']]
+            tag_yaws = [[int(tag), float(yaw)] for tag, yaw in data.get('tag_yaws', [])]
             clearance = data['forward_clearance_m']
-            values = [stamp] + [float(v) for tag in tags for v in tag]
+            values = [stamp] + [float(v) for tag in tags + tag_yaws for v in tag]
             if clearance is not None:
                 values.append(float(clearance))
             if not all(math.isfinite(v) for v in values):
                 return
             if any(tag < 0 for tag in known_ids) or any(tag[0] < 0 for tag in tags):
                 return
-            self.navigator.update_vision(stamp, tags, known_ids, clearance)
+            self.navigator.update_vision(stamp, tags, known_ids, clearance, tag_yaws)
         except (ValueError, TypeError, KeyError, OverflowError):
             self.get_logger().warn('Ignoring malformed vision feedback')
 
@@ -426,7 +427,10 @@ class SquareNavigationNode(Node):
                         self.navigator.vision.progress,
                         self.navigator._ekf_progress() if self.navigator.latest_slam_pose else '',
                         self.navigator.vision.clearance,
-                        self.navigator.scan_used,
+                        self.navigator.corner_used,
+                        self.navigator.correction_used,
+                        self.navigator.corner_source,
+                        self.navigator.corner_residual,
                         self.navigator.navigation_yaw,
                         self.navigator.midpoint_progress_m,
                         self.navigator.midpoint_remaining_m,
@@ -446,7 +450,7 @@ class SquareNavigationNode(Node):
             None.
         """
         # 5. log periodically to terminal if active
-        if output.state in (NavigationState.DRIVING, NavigationState.ALIGNING, NavigationState.SCANNING):
+        if output.state in (NavigationState.DRIVING, NavigationState.TURNING, NavigationState.CORRECTING):
             self.get_logger().info(
                 f"[WP{output.waypoint_index}] dist={output.distance_error_m:.2f}m, "
                 f"head_err={math.degrees(output.heading_error_rad):.1f}°, "

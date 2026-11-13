@@ -109,11 +109,10 @@
       turn_settle_s: 1.0           # stopped time for vision after each pulse
       # no surveyed wall coordinates are used; distances are from robot center
       vision_timeout_s: 1.0
-      alignment_timeout_s: 18.0
+      corner_timeout_s: 18.0
+      corner_correction_limit_rad: 0.2617993877991494  # 15 degrees total optional correction
+      corner_max_corrections: 2
       drive_budget_factor: 1.25
-      scan_timeout_s: 20.0
-      scan_step_rad: 0.7853981633974483  # 45 nominal degrees per stage
-      scan_pause_s: 0.5                 # stopped time after every stage
       midpoint_pause_s: 1.0             # camera-processing pause halfway through each side
       control_frequency_hz: 20.0      # Closed-loop control loop frequency (Hz)
       auto_start: false               # Require explicit start command

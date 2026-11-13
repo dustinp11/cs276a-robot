@@ -49,7 +49,7 @@ from hw3.coordinates import (
 from hw3.data_recorder import export_landmarks_csv, export_trajectory_csv
 from hw3.ekf_slam import EkfSlam
 from hw3.visual_odometry import VisualMotionEstimator
-from hw3.vision_navigation import forward_wall_clearance
+from hw3.vision_navigation import forward_wall_clearance, tag_normal_yaw
 
 
 class EkfSlamNode(Node):
@@ -490,14 +490,17 @@ class EkfSlamNode(Node):
         Returns:
             None. Publishes a JSON String; clearance is from robot center in meters.
         """
-        tags, clearances = [], []
+        tags, clearances, tag_yaws = [], [], []
         for det in detections:
             base_tag = self.extrinsics.camera_to_base_transform(det['t_cam_tag'])
             tags.append([int(det['id']), float(base_tag[0, 3]), float(base_tag[1, 3])])
+            yaw = tag_normal_yaw(base_tag)
+            if yaw is not None:
+                tag_yaws.append([int(det['id']), yaw])
             clearance = forward_wall_clearance(base_tag)
             if clearance is not None:
                 clearances.append(clearance)
-        payload = {'stamp_s': stamp_s, 'tags': tags, 'known_ids': known_ids,
+        payload = {'stamp_s': stamp_s, 'tags': tags, 'known_ids': known_ids, 'tag_yaws': tag_yaws,
                    'forward_clearance_m': min(clearances) if clearances else None}
         self.vision_pub.publish(String(data=json.dumps(payload, allow_nan=False)))
 

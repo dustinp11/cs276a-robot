@@ -1,4 +1,4 @@
-"""Four fixed-heading legs with corner scans and fresh visual verification."""
+"""Four fixed-heading legs with direct quarter-turns and optional visual corrections."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -6,7 +6,7 @@ import math
 
 from .coordinates import wrap_angle
 from .turn_calibration import TurnCalibration
-from .vision_navigation import NavigationPolicy, VisualFeedback
+from .vision_navigation import NavigationPolicy, VisualFeedback, relative_tag_turn
 
 
 class NavigationState(Enum):
@@ -16,9 +16,9 @@ class NavigationState(Enum):
     DRIVING = 'DRIVING'
     MIDPOINT_PAUSE = 'MIDPOINT_PAUSE'
     STOPPING = 'STOPPING'
-    SCANNING = 'SCANNING'
-    LOCALIZING = 'LOCALIZING'
-    ALIGNING = 'ALIGNING'
+    TURNING = 'TURNING'
+    CORNER_PAUSE = 'CORNER_PAUSE'
+    CORRECTING = 'CORRECTING'
     STOPPED = 'STOPPED'
     COMPLETED = 'COMPLETED'
 
@@ -129,13 +129,16 @@ class SquareNavigator:
         self.origin_latched = False
         self.x0_slam = self.y0_slam = self.theta0_slam = 0.0
         self.leg_origin, self.target = (0.0, 0.0), (self.square_size_m, 0.0)
-        self.progress = self.drive_used = self.scan_used = 0.0
-        self.scan_stage_index, self.scan_ready_at = 0, 0.0
+        self.progress = self.drive_used = 0.0
+        self.corner_used = self.correction_used = self.correction_signed = 0.0
+        self.corner_reference, self.corner_source = {}, 'prediction'
+        self.corner_residual = None
+        self.corner_start_heading = self.correction_goal = 0.0
+        self.correction_count = 0
         self.last_command, self.last_tick = (0.0, 0.0), None
         self.phase_started = None
         self.navigation_yaw, self.heading_time = 0.0, -math.inf
         self.navigation_x = self.navigation_y = 0.0
-        self.turn = None
         self._reset_midpoint()
         self.vision = VisualFeedback(self.policy)
 
@@ -189,10 +192,10 @@ class SquareNavigator:
         c, s = math.cos(self.theta0_slam), math.sin(self.theta0_slam)
         return c * dx + s * dy, -s * dx + c * dy, wrap_angle(theta_slam - self.theta0_slam)
 
-    def update_vision(self, stamp, tags, known_ids, clearance):
+    def update_vision(self, stamp, tags, known_ids, clearance, tag_yaws=None):
         """Pass timestamped base-frame observations to the independent vision tracker."""
         self.vision.update(stamp, tags, known_ids, clearance,
-                           self._best_pose(), self._ekf_progress())
+                           self._best_pose(), self._ekf_progress(), tag_yaws)
 
     def _heading(self):
         """Return the absolute SLAM heading anchored to the initial robot direction."""
@@ -242,8 +245,11 @@ class SquareNavigator:
         self.navigation_y += self.last_command[0] * heading_dt * math.sin(self.navigation_yaw)
         self.navigation_yaw = wrap_angle(self.navigation_yaw + self.last_command[1] * heading_dt)
         self.drive_used += abs(self.last_command[0]) * dt
-        if self.state == NavigationState.SCANNING:
-            self.scan_used += abs(self.last_command[1]) * dt
+        if self.state == NavigationState.TURNING:
+            self.corner_used += abs(self.last_command[1]) * dt
+        elif self.state == NavigationState.CORRECTING:
+            self.correction_used += abs(self.last_command[1]) * dt
+            self.correction_signed += self.last_command[1] * dt
         self.last_tick = now
 
     def _output(self, message, linear=0.0, angular=0.0):
@@ -275,8 +281,9 @@ class SquareNavigator:
                     NavigationState.DRIVING: self._drive,
                     NavigationState.MIDPOINT_PAUSE: self._midpoint_pause,
                     NavigationState.STOPPING: self._settle,
-                    NavigationState.SCANNING: self._scan, NavigationState.LOCALIZING: self._localize,
-                    NavigationState.ALIGNING: self._align}
+                    NavigationState.TURNING: self._turn_corner,
+                    NavigationState.CORNER_PAUSE: self._corner_pause,
+                    NavigationState.CORRECTING: self._correct_corner}
         return handlers[self.state](now)
 
     def _wait_for_start(self, now):
@@ -367,148 +374,108 @@ class SquareNavigator:
         budget_reached = self.drive_used >= self.policy.drive_budget_factor * self.square_size_m
         if remaining <= self.waypoint_tolerance_m or budget_reached:
             self._transition(NavigationState.STOPPING, now)
-            return self._output('Leg travel target or nominal budget reached; stopping before scan')
+            return self._output('Leg travel target or nominal budget reached; stopping before quarter-turn')
         return self._output('Driving remaining distance on unchanged side heading',
                             linear=self._forward_speed(remaining))
 
     def _settle(self, now):
-        """Stop for settling, then begin one bounded nominal full-turn scan."""
+        """Stop before capturing optional tag references and beginning a direct left turn."""
         if now - self.phase_started >= self.turn_settle_s:
-            self.scan_used = 0.0
-            self.scan_stage_index, self.scan_ready_at = 0, now
-            self._transition(NavigationState.SCANNING, now)
-        return self._output('Stopped before full-turn scan')
+            self._begin_corner(now)
+        return self._output('Stopped before direct 90-degree left turn')
 
-    def _scan(self, now):
-        """Alternate bounded nominal turn stages with stopped camera-acquisition pauses.
-
-        Args:
-            now: Current ROS controller time in seconds.
-
-        Returns:
-            NavigationOutput for a stage, camera pause, timeout, or stopped completion.
-            Stage angles are command predictions, not measured physical rotation.
-        """
-        if now - self.phase_started > self.policy.scan_timeout_s:
-            self._transition(NavigationState.LOCALIZING, now)
-            return self._output('Scan deadline reached; continuing to alignment')
-        if now < self.scan_ready_at:
-            return self._output('Scan paused; allowing camera frames to arrive')
-        if self.scan_stage_index >= math.ceil(2 * math.pi / self.policy.scan_step_rad):
-            self._transition(NavigationState.LOCALIZING, now)
-            return self._output('Staged 360 scan complete; settling with optional vision updates')
-        goal = min(2 * math.pi, (self.scan_stage_index + 1) * self.policy.scan_step_rad)
-        if self.scan_used >= goal:
-            return self._pause_scan_stage(now)
-        return self._output('Scan stage: fixed-rate turn', angular=self.turn_calibration.rate(1))
-
-    def _pause_scan_stage(self, now):
-        """Stop after each stage, including the last, before accepting another phase."""
-        self.scan_stage_index += 1
-        self.scan_ready_at = now + self.policy.scan_pause_s
-        return self._output(f'Scan stage {self.scan_stage_index} complete; stopped for camera')
-
-    def _localize(self, now):
-        """Settle for a fixed duration, accepting optional vision without requiring tags."""
-        if now - self.phase_started < self.turn_settle_s:
-            return self._output('Post-scan settle; tag observations are optional')
-        self.side_index += 1
-        self.turn = None
-        self._transition(NavigationState.ALIGNING, now)
-        return self._output('Aligning to next absolute side heading using the best available estimate')
-
-    def _align(self, now):
-        """Align with calibrated prediction and optional visual heading corrections.
+    def _begin_corner(self, now):
+        """Anchor one direct quarter-turn without requiring a visible landmark.
 
         Args:
             now: ROS controller time in seconds.
 
         Returns:
-            NavigationOutput. Absent tags never block a leg; exhausted correction
-            budgets continue best effort without claiming visual verification.
+            None. Captures optional stopped tag normals and resets correction budgets.
         """
-        if now - self.phase_started > self.policy.alignment_timeout_s:
-            return self._finish_alignment(now, 'Alignment timeout; continuing best effort')
-        if self.turn is None:
-            self.turn = FixedTurnPulse(self.turn_calibration, abs(self._heading_error()),
-                                       self.turn_pulse_rad, self.turn_settle_s)
-        omega, message = self.turn.step(now, self._heading_error(), self.heading_tolerance_rad)
-        if self.turn.exhausted:
-            return self._finish_alignment(now, 'Alignment correction budget exhausted; continuing best effort')
-        if self.turn.done and omega == 0 and abs(self._heading_error()) <= self.heading_tolerance_rad:
-            return self._finish_alignment(now, 'Aligned by best available heading; vision optional')
-        return self._output(message, angular=omega)
+        self.corner_start_heading = self.navigation_yaw
+        self.corner_reference = {}
+        if self.vision.yaw_stamp >= self.phase_started and now - self.vision.yaw_stamp <= self.policy.vision_timeout_s:
+            self.corner_reference = dict(self.vision.tag_yaws)
+        self.corner_used = self.correction_used = self.correction_signed = 0.0
+        self.correction_count = 0
+        self.corner_source = 'calibrated turn prediction'
+        self.corner_residual = None
+        self.side_index += 1
+        self._transition(NavigationState.TURNING, now)
 
-    def _finish_alignment(self, now, message):
-        """Finish four sides or begin the next leg without requiring a visible tag."""
-        self.turn = None
-        if self.side_index == 4:
-            self.state, self.is_active = NavigationState.COMPLETED, False
-            return self._output('Four legs and scans complete. ' + message)
-        self.current_wp_idx = self.side_index + 1
-        self._begin_leg(now)
-        return self._output(message)
+    def _turn_corner(self, now):
+        """Command a nominal 90-degree left turn, independently of the learned map."""
+        if self.corner_used >= math.pi / 2 or now - self.phase_started >= self.policy.corner_timeout_s:
+            self._transition(NavigationState.CORNER_PAUSE, now)
+            return self._output('Quarter-turn finished; stopped for camera processing')
+        return self._output('Direct nominal 90-degree left turn', angular=self.turn_calibration.rate(1))
 
-
-class FixedTurnPulse:
-    """Fixed-rate pivot pulses bounded by elapsed time and total commanded angle.
-
-    The angle budget is an open-loop bound, not a measured rotation. Feedback
-    may finish a turn, but cannot authorize unlimited spinning. Units: rad, s.
-    """
-
-    def __init__(self, calibration, target_angle, pulse_rad, settle_s):
-        self.calibration = calibration
-        self.pulse_rad, self.settle_s = pulse_rad, settle_s
-        self.budget = min(math.pi, target_angle + math.radians(30))
-        self.used = self.omega = 0.0
-        self.deadline = self.ready_at = 0.0
-        self.last_time = None
-        self.done = self.exhausted = False
-
-    def _account(self, now):
-        """Account once for the last held command, bounded by the motor watchdog."""
-        if self.last_time is not None:
-            dt = max(0.0, min(now - self.last_time, 0.15))
-            self.used += abs(self.omega) * dt
-        self.last_time = now
-
-    def pause(self, now):
-        """Stop a pulse and settle while preserving the consumed turn budget."""
-        self._account(now)
-        self.omega = 0.0
-        self.ready_at = now + self.settle_s
-
-    def step(self, now, error, tolerance):
-        """Return a fixed rate or zero; never restart before the stopped settle ends."""
-        self._account(now)
-        if self.omega and (now >= self.deadline or abs(error) <= tolerance):
-            self.pause(now)
-        if self.omega:
-            return self.omega, 'Fixed-rate turn pulse'
-        if now < self.ready_at:
-            return 0.0, 'Stopped; waiting for heading to settle'
-        return self._next_pulse(now, error, tolerance)
-
-    def _next_pulse(self, now, error, tolerance):
-        """Accept alignment or issue a pulse whose duration fits the remaining budget.
+    def _corner_error(self, now):
+        """Prefer relative tag orientation, then optional fresh EKF heading corrections.
 
         Args:
-            now: Current controller time in seconds in the same clock domain as pose stamps.
-            error: Signed heading error to the target, in radians.
-            tolerance: Absolute heading tolerance, in radians.
+            now: ROS controller time in seconds after a stopped acquisition interval.
 
         Returns:
-            (yaw_rate_radps, status); zero rate when aligned or the budget is exhausted.
+            Signed residual in radians, or None without useful vision. A same-tag
+            comparison corrects relative rotation to 90 degrees; EKF fallback
+            corrects the absolute side heading.
+            Missing or stale observations never authorize extra corrective rotation.
         """
-        if abs(error) <= tolerance:
-            self.done = True
-            return 0.0, 'Turn finished; stopped'
-        remaining = self.budget - self.used
-        if remaining <= tolerance:
-            self.exhausted = True
-            return 0.0, 'Turn angle budget exhausted'
-        self.omega = self.calibration.rate(error)
-        angle = min(abs(error), self.pulse_rad, remaining)
-        self.deadline = now + angle / abs(self.omega)
-        return self.omega, 'Starting fixed-rate turn pulse'
+        if self.vision.yaw_stamp >= self.phase_started and now - self.vision.yaw_stamp <= self.policy.vision_timeout_s:
+            measured = relative_tag_turn(self.corner_reference, self.vision.tag_yaws,
+                                         self.corner_used + self.correction_signed)
+            if measured is not None:
+                self.navigation_yaw = wrap_angle(self.corner_start_heading + measured)
+                self.heading_time, self.corner_source = now, 'same-tag face orientation'
+                return wrap_angle(math.pi / 2 - measured)
+        if (self.vision.valid_stamp >= self.phase_started and self.vision.fresh(now)
+                and -0.05 <= now - self.latest_pose_stamp_s <= self.pose_timeout_s
+                and self._uncertainty_ok()):
+            self.navigation_yaw = self.latest_slam_pose[2]
+            self.heading_time, self.corner_source = now, 'EKF with post-turn tag updates'
+            return self._heading_error()
+        self.corner_source = 'calibrated turn prediction; no post-turn visual correction'
+        return None
+
+    def _corner_pause(self, now):
+        """Wait a fixed camera interval, then correct briefly or continue without tags.
+
+        Args:
+            now: Current ROS controller time in seconds.
+
+        Returns:
+            Stopped NavigationOutput. Corrections share a small total nominal angle
+            budget and a maximum count; neither missing tags nor noisy feedback block a leg.
+        """
+        if now - self.phase_started < self.turn_settle_s:
+            return self._output('Corner pause; allowing optional camera observations to arrive')
+        error = self._corner_error(now)
+        self.corner_residual = error
+        remaining = self.policy.corner_correction_limit_rad - self.correction_used
+        if (error is None or abs(error) <= self.heading_tolerance_rad or remaining <= 0
+                or self.correction_count >= self.policy.corner_max_corrections):
+            return self._finish_corner(now)
+        self.correction_goal = self.correction_used + min(abs(error), self.turn_pulse_rad, remaining)
+        self.correction_omega = self.turn_calibration.rate(error)
+        self.correction_count += 1
+        self._transition(NavigationState.CORRECTING, now)
+        return self._output('Optional bounded corner correction selected')
+
+    def _correct_corner(self, now):
+        """Apply one fixed-rate correction, then stop for another optional observation."""
+        if self.correction_used >= self.correction_goal or now - self.phase_started >= self.policy.corner_timeout_s:
+            self._transition(NavigationState.CORNER_PAUSE, now)
+            return self._output('Corner correction finished; stopped for camera processing')
+        return self._output('Bounded corner correction from ' + self.corner_source,
+                            angular=self.correction_omega)
+
+    def _finish_corner(self, now):
+        """Finish the lap or advance to the next side; visual feedback is always optional."""
+        if self.side_index == 4:
+            self.state, self.is_active = NavigationState.COMPLETED, False
+            return self._output('Four sides complete; final corner used ' + self.corner_source)
+        self.current_wp_idx = self.side_index + 1
+        self._begin_leg(now)
+        return self._output('Next side ready; corner used ' + self.corner_source)

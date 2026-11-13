@@ -12,9 +12,9 @@ import numpy as np
 
 from hw3.turn_calibration import TurnCalibration
 from hw3.velocity_mapping import VelocityMapper
-from hw3.vision_navigation import NavigationPolicy, VisualFeedback, forward_wall_clearance
+from hw3.vision_navigation import NavigationPolicy, VisualFeedback, forward_wall_clearance, tag_normal_yaw, relative_tag_turn
 from hw3.ekf_slam import EkfSlam
-from hw3.square_navigation import FixedTurnPulse, NavigationState, SquareNavigator
+from hw3.square_navigation import NavigationState, SquareNavigator
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -72,28 +72,8 @@ class TestFixedTurns(unittest.TestCase):
         nav = SquareNavigator()
         self.assertFalse(nav.start()[0])
 
-    def test_pulse_stops_and_settles_before_restarting(self):
-        pulse = FixedTurnPulse(self.calibration, math.pi / 2, 0.3, 1.0)
-        self.assertEqual(pulse.step(1.0, math.pi / 2, 0.1)[0], 0.6)
-        self.assertEqual(pulse.step(1.5, math.pi / 2, 0.1)[0], 0)
-        self.assertEqual(pulse.step(2.4, math.pi / 2, 0.1)[0], 0)
-        self.assertEqual(pulse.step(2.5, math.pi / 2, 0.1)[0], 0.6)
 
-    def test_frozen_heading_cannot_command_a_full_revolution(self):
-        pulse = FixedTurnPulse(self.calibration, math.pi / 2, math.pi / 6, 0.1)
-        for tick in range(300):
-            pulse.step(1 + tick * 0.05, math.pi / 2, 0.1)
-            if pulse.exhausted:
-                break
-        self.assertTrue(pulse.exhausted)
-        self.assertLess(pulse.used, math.radians(125))
 
-    def test_feedback_stops_before_pulse_deadline(self):
-        pulse = FixedTurnPulse(self.calibration, 1.0, 0.5, 0.2)
-        pulse.step(1.0, 1.0, 0.1)
-        self.assertEqual(pulse.step(1.1, 0.01, 0.1)[0], 0)
-        self.assertEqual(pulse.step(1.4, 0.01, 0.1)[0], 0)
-        self.assertTrue(pulse.done)
 
     def feed_vision(self, nav, now, pose, clearance=None):
         """Supply two fixed synthetic landmarks in the moving robot base frame."""
@@ -103,8 +83,8 @@ class TestFixedTurns(unittest.TestCase):
                 for tag, tx, ty in [(1, 5.0, 4.0), (3, -2.0, 3.0)]]
         nav.update_vision(now, tags, [1, 3], clearance)
 
-    def test_first_leg_requires_no_tags_and_reaches_scan_with_uncertain_pose(self):
-        """An empty map cannot block the bounded first leg or its following scan.
+    def test_first_leg_requires_no_tags_and_reaches_turn_with_uncertain_pose(self):
+        """An empty map cannot block the bounded first leg or its following turn.
 
         Args:
             None.
@@ -121,9 +101,9 @@ class TestFixedTurns(unittest.TestCase):
             if tick == 0:
                 self.assertGreater(cmd.linear_v_mps, 0)
                 self.assertEqual(cmd.angular_omega_radps, 0)
-            if cmd.state == NavigationState.SCANNING:
+            if cmd.state == NavigationState.TURNING:
                 break
-        self.assertEqual(nav.state, NavigationState.SCANNING, nav.stop_reason)
+        self.assertEqual(nav.state, NavigationState.TURNING, nav.stop_reason)
         self.assertAlmostEqual(nav.drive_used, nav.square_size_m, delta=0.11)
         self.assertGreater(nav.step(now + 0.05).angular_omega_radps, 0)
         self.assertEqual(nav.vision.valid_stamp, -math.inf)
@@ -136,8 +116,8 @@ class TestFixedTurns(unittest.TestCase):
         self.assertEqual(nav.vision.clearance, 0.3)
         self.assertTrue(nav.is_active)
 
-    def test_square_has_four_scans_and_fixed_headings(self):
-        """Simulate four visually observed legs and scans, including the final heading.
+    def test_square_has_four_direct_turns_and_fixed_headings(self):
+        """Simulate four visually observed legs and corners, including the final heading.
 
         Args:
             None.
@@ -148,13 +128,13 @@ class TestFixedTurns(unittest.TestCase):
         nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
         nav.start()
         x = y = yaw = 0.0
-        states, previous, scans = set(), None, 0
+        states, previous, corners = set(), None, 0
         for tick in range(6000):
             now = 1 + tick * 0.05
             nav.update_ekf_pose(x, y, yaw, 0.01, 0.01, now)
             self.feed_vision(nav, now, (x, y, yaw))
             cmd = nav.step(now)
-            scans += int(cmd.state == NavigationState.SCANNING and previous != cmd.state)
+            corners += int(cmd.state == NavigationState.TURNING and previous != cmd.state)
             previous = cmd.state
             states.add(cmd.state)
             self.assertFalse(cmd.linear_v_mps and cmd.angular_omega_radps)
@@ -164,29 +144,29 @@ class TestFixedTurns(unittest.TestCase):
             if not nav.is_active:
                 break
         self.assertEqual(nav.state, NavigationState.COMPLETED, nav.stop_reason)
-        self.assertEqual(scans, 4)
-        self.assertIn(NavigationState.LOCALIZING, states)
+        self.assertEqual(corners, 4)
+        self.assertIn(NavigationState.CORNER_PAUSE, states)
         self.assertLess(abs(math.atan2(math.sin(yaw), math.cos(yaw))), nav.heading_tolerance_rad)
         self.assertLess(math.hypot(x, y), 0.4)
 
     def test_complete_square_with_no_tags_and_unreliable_ekf(self):
-        """Run all four sides and scans without any visual observations.
+        """Run all four sides and corners without any visual observations.
 
         Args:
             None.
 
         Returns:
-            None. Verifies completion, no tag waits, four scans, and nominal command closure.
+            None. Verifies completion, no tag waits, four corners, and nominal command closure.
         """
         nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
         nav.start()
         x = y = yaw = 0.0
-        scans, previous = 0, None
+        corners, previous = 0, None
         for tick in range(8000):
             now = 1 + tick * 0.05
             nav.update_ekf_pose(0, 0, 0, 10, 10, now)
             cmd = nav.step(now)
-            scans += int(cmd.state == NavigationState.SCANNING and previous != cmd.state)
+            corners += int(cmd.state == NavigationState.TURNING and previous != cmd.state)
             previous = cmd.state
             self.assertFalse(cmd.linear_v_mps and cmd.angular_omega_radps)
             x += cmd.linear_v_mps * math.cos(yaw) * 0.05
@@ -195,18 +175,11 @@ class TestFixedTurns(unittest.TestCase):
             if not nav.is_active:
                 break
         self.assertEqual(nav.state, NavigationState.COMPLETED, nav.stop_reason)
-        self.assertEqual(scans, 4)
+        self.assertEqual(corners, 4)
         self.assertEqual(nav.vision.valid_stamp, -math.inf)
         self.assertLess(math.hypot(x, y), 0.4)
         self.assertLess(abs(math.atan2(math.sin(yaw), math.cos(yaw))), nav.heading_tolerance_rad)
 
-    def test_one_known_tag_can_correct_heading_without_a_tag_count_gate(self):
-        nav = self.prepared(NavigationState.ALIGNING)
-        nav.side_index = 1
-        nav.update_vision(1, [[7, 2, 0]], [7], None)
-        nav.update_ekf_pose(0, 0, math.pi / 2, 0.01, 0.01, 1.05)
-        self.assertAlmostEqual(nav.navigation_yaw, math.pi / 2)
-        self.assertEqual(nav.step(1.05).state, NavigationState.DRIVING)
 
     def test_entire_square_without_ekf_or_camera_messages(self):
         """Missing sensors cannot block the supervised command-predicted mission.
@@ -215,25 +188,25 @@ class TestFixedTurns(unittest.TestCase):
             None.
 
         Returns:
-            None. Verifies all four legs and scans finish with no sensor callbacks.
+            None. Verifies all four legs and corners finish with no sensor callbacks.
         """
         nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
         nav.start()
-        scans, midpoints, previous = 0, 0, None
+        corners, midpoints, previous = 0, 0, None
         for tick in range(8000):
             cmd = nav.step(1 + tick * 0.05)
-            scans += int(cmd.state == NavigationState.SCANNING and previous != cmd.state)
+            corners += int(cmd.state == NavigationState.TURNING and previous != cmd.state)
             midpoints += int(cmd.state == NavigationState.MIDPOINT_PAUSE and previous != cmd.state)
             previous = cmd.state
             if not nav.is_active:
                 break
         self.assertEqual(nav.state, NavigationState.COMPLETED)
-        self.assertEqual(scans, 4)
+        self.assertEqual(corners, 4)
         self.assertEqual(midpoints, 4)
         self.assertIsNone(nav.latest_slam_pose)
 
     def test_manual_stop_still_cancels_motion(self):
-        nav = self.prepared(NavigationState.SCANNING)
+        nav = self.prepared(NavigationState.TURNING)
         nav.step(1.05)
         nav.stop('Supervisor stop')
         cmd = nav.step(1.1)
@@ -317,125 +290,146 @@ class TestFixedTurns(unittest.TestCase):
         self.assertFalse(nav.is_active)
 
     def prepared(self, state):
-        """Create an active controller with a known initial pose and requested phase."""
+        """Create an active controller for one focused phase check.
+
+        Args:
+            state: NavigationState to enter after initializing a zero pose.
+
+        Returns:
+            SquareNavigator with measured test rates and optional corner state.
+        """
         nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
         nav.start()
         nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, 1)
         nav._transition(state, 1)
+        if state == NavigationState.TURNING:
+            nav._begin_corner(1)
         if state == NavigationState.DRIVING:
             nav.midpoint_done = True
         return nav
 
-    def test_stale_pose_does_not_abort_scan(self):
-        nav = self.prepared(NavigationState.SCANNING)
+    def test_stale_pose_does_not_abort_turn(self):
+        nav = self.prepared(NavigationState.TURNING)
         self.assertGreater(nav.step(1.05).angular_omega_radps, 0)
         self.assertGreater(nav.step(2).angular_omega_radps, 0)
-        self.assertEqual(nav.state, NavigationState.SCANNING)
+        self.assertEqual(nav.state, NavigationState.TURNING)
         self.assertTrue(nav.is_active)
 
-    def test_inconsistent_visual_heading_has_bounded_best_effort_alignment(self):
-        """Conflicting heading feedback cannot block the next leg indefinitely.
+
+
+
+
+    def test_corner_is_one_nominal_quarter_turn_then_camera_pause(self):
+        """Command one continuous quarter-turn without tags or intermediate scan stages.
 
         Args:
             None.
 
         Returns:
-            None. Verifies bounded correction angle and explicit prediction-only continuation.
+            None. Verifies approximately 90 degrees, a stopped pause, and continuation.
         """
-        nav = self.prepared(NavigationState.ALIGNING)
-        nav.side_index = 1
-        for tick in range(500):
-            now = 1 + tick * 0.05
-            nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, now)
-            self.feed_vision(nav, now, (0, 0, 0))
-            result = nav.step(now)
-            if nav.state == NavigationState.DRIVING:
-                break
-        self.assertEqual(nav.state, NavigationState.DRIVING)
-        self.assertEqual(result.angular_omega_radps, 0)
-        self.assertIn('best effort', result.status_message)
-
-    def test_scan_has_eight_45_degree_stages_and_half_second_pauses(self):
-        """Check the actual scan commands at the robot's nominal 20 Hz control rate.
-
-        Args:
-            None.
-
-        Returns:
-            None. Verifies eight bounded turns, eight pauses, and final stopped completion.
-        """
-        nav = self.prepared(NavigationState.SCANNING)
-        nav.turn_calibration = TurnCalibration(0.43, 0.4, 2 * math.pi / 3.55, 2 * math.pi / 3.59)
-        previous, angle, pause_start = 0.0, 0.0, None
-        angles, pauses = [], []
-        for tick in range(400):
+        nav = self.prepared(NavigationState.TURNING)
+        nav.turn_settle_s = 1.0
+        previous = angle = 0.0
+        stopped_at = None
+        for tick in range(150):
             now = 1 + tick * 0.05
             angle += previous * 0.05
-            nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, now)
-            command = nav.step(now)
-            omega = command.angular_omega_radps
-            self.assertEqual(command.linear_v_mps, 0)
-            if previous and not omega:
-                angles.append(angle)
-                angle, pause_start = 0.0, now
-            if pause_start is not None and (omega or command.state == NavigationState.LOCALIZING):
-                pauses.append(now - pause_start)
-                pause_start = None
-            previous = omega
-            if command.state == NavigationState.LOCALIZING:
-                break
-        self.assertEqual(nav.state, NavigationState.LOCALIZING)
-        self.assertEqual(len(angles), 8)
-        self.assertEqual(len(pauses), 8)
-        self.assertTrue(all(pause >= 0.5 - 1e-8 for pause in pauses))
-        self.assertTrue(all(abs(value - math.pi / 4) <= nav.turn_calibration.ccw_radps * 0.05
-                            for value in angles))
-        self.assertLessEqual(sum(angles), 2 * math.pi + nav.turn_calibration.ccw_radps * 0.05)
-
-    def test_scan_timeout_proceeds_to_alignment_instead_of_aborting_square(self):
-        """A scan deadline during a camera pause ends only the scan phase.
-
-        Args:
-            None.
-
-        Returns:
-            None. Verifies a stopped phase transition and an active continuing mission.
-        """
-        nav = self.prepared(NavigationState.SCANNING)
-        nav.policy = NavigationPolicy(scan_timeout_s=1.5)
-        for tick in range(40):
-            now = 1 + tick * 0.05
-            command = nav.step(now)
-            if nav.state == NavigationState.LOCALIZING:
-                break
-        self.assertGreaterEqual(nav.scan_stage_index, 1)
-        self.assertEqual(nav.state, NavigationState.LOCALIZING)
-        self.assertTrue(nav.is_active)
-        self.assertEqual(command.angular_omega_radps, 0)
-        self.assertIn('deadline', command.status_message)
-
-    def test_scan_and_alignment_continue_without_vision(self):
-        """A tag-free scan proceeds through finite settling and calibrated alignment.
-
-        Args:
-            None.
-
-        Returns:
-            None. Checks that absent observations never prevent the second side.
-        """
-        nav = self.prepared(NavigationState.SCANNING)
-        for tick in range(800):
-            now = 1 + tick * 0.05
-            nav.update_ekf_pose(0, 0, 0, 10, 10, now)
             cmd = nav.step(now)
-            if nav.state == NavigationState.DRIVING:
+            if cmd.state == NavigationState.CORNER_PAUSE and stopped_at is None:
+                stopped_at = now
+            if cmd.state == NavigationState.CORNER_PAUSE:
+                self.assertEqual(cmd.angular_omega_radps, 0)
+            previous = cmd.angular_omega_radps
+            if cmd.state == NavigationState.DRIVING:
                 break
-        self.assertEqual(nav.state, NavigationState.DRIVING, nav.stop_reason)
-        self.assertEqual(nav.side_index, 1)
-        self.assertLess(nav.scan_used, 2 * math.pi + 0.04)
+        self.assertEqual(nav.state, NavigationState.DRIVING)
+        self.assertAlmostEqual(angle, math.pi / 2, delta=self.calibration.ccw_radps * 0.05)
+        self.assertGreaterEqual(now - stopped_at, 1.0 - 1e-8)
+        self.assertEqual(nav.correction_count, 0)
+
+    def test_same_tag_orientation_corrects_without_a_learned_map(self):
+        """A shared tag measures turn error independently of global landmark positions.
+
+        Args:
+            None.
+
+        Returns:
+            None. Confirms an 80-degree observation selects a bounded left correction.
+        """
+        nav = self.prepared(NavigationState.STOPPING)
+        nav.navigation_yaw = 0.5  # deliberately biased global heading
+        nav.update_vision(2, [[7, 2, 1]], [], None, [[7, -0.4]])
+        nav._begin_corner(2)
+        nav.corner_used = math.pi / 2
+        nav._transition(NavigationState.CORNER_PAUSE, 3)
+        nav.update_vision(3.2, [[7, 1, -2]], [], None, [[7, -0.4 - math.radians(80)]])
+        cmd = nav.step(3.2)
+        self.assertEqual(cmd.state, NavigationState.CORRECTING)
+        self.assertGreater(nav.correction_omega, 0)
+        self.assertAlmostEqual(nav.correction_goal, math.radians(10))
+        self.assertEqual(nav.corner_source, 'same-tag face orientation')
         self.assertEqual(nav.vision.valid_stamp, -math.inf)
-        nav.update_ekf_pose(0, 0, 0, 10, 10, now + 0.05)
-        self.assertGreater(nav.step(now + 0.05).linear_v_mps, 0)
+        for tick in range(40):
+            now = 3.25 + tick * 0.05
+            if nav.state == NavigationState.CORNER_PAUSE:
+                angle = math.radians(80) + nav.correction_signed
+                nav.update_vision(now, [[7, 1, -2]], [], None, [[7, -0.4 - angle]])
+            cmd = nav.step(now)
+            if cmd.state == NavigationState.DRIVING:
+                break
+        self.assertEqual(nav.state, NavigationState.DRIVING)
+        self.assertEqual(nav.correction_count, 1)
+        self.assertEqual(nav.corner_source, 'same-tag face orientation')
+
+    def test_changed_tag_without_map_feedback_does_not_trigger_correction(self):
+        nav = self.prepared(NavigationState.STOPPING)
+        nav.update_vision(2, [[7, 2, 1]], [], None, [[7, -0.4]])
+        nav._begin_corner(2)
+        nav._transition(NavigationState.CORNER_PAUSE, 3)
+        nav.update_vision(3.2, [[9, 2, 1]], [], None, [[9, -1.8]])
+        self.assertEqual(nav.step(3.2).state, NavigationState.DRIVING)
+        self.assertEqual(nav.correction_count, 0)
+
+    def test_pre_turn_image_cannot_authorize_post_turn_correction(self):
+        nav = self.prepared(NavigationState.STOPPING)
+        nav.update_vision(2, [[7, 2, 1]], [], None, [[7, -0.4]])
+        nav._begin_corner(2)
+        nav.corner_used = math.pi / 2
+        nav._transition(NavigationState.CORNER_PAUSE, 3)
+        self.assertEqual(nav.step(3.2).state, NavigationState.DRIVING)
+        self.assertEqual(nav.correction_count, 0)
+
+    def test_bad_map_corrections_cannot_cause_repeated_spinning(self):
+        """Persistent misleading visual heading consumes only the small correction budget.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks bounded added rotation and automatic next-side continuation.
+        """
+        nav = self.prepared(NavigationState.TURNING)
+        nav.corner_used = math.pi / 2
+        nav._transition(NavigationState.CORNER_PAUSE, 1)
+        for tick in range(150):
+            now = 1 + tick * 0.05
+            self.feed_vision(nav, now, (0, 0, 0))
+            nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, now)
+            cmd = nav.step(now)
+            if cmd.state == NavigationState.DRIVING:
+                break
+        self.assertEqual(nav.state, NavigationState.DRIVING)
+        self.assertLessEqual(nav.correction_used,
+                             nav.policy.corner_correction_limit_rad + self.calibration.ccw_radps * 0.05)
+        self.assertLessEqual(nav.correction_count, nav.policy.corner_max_corrections)
+
+    def test_manual_stop_during_correction_prevents_more_motion(self):
+        nav = self.prepared(NavigationState.CORRECTING)
+        nav.correction_goal, nav.correction_omega = 0.2, 0.6
+        self.assertGreater(nav.step(1).angular_omega_radps, 0)
+        nav.stop('Supervisor stop')
+        self.assertEqual(nav.step(1.05).angular_omega_radps, 0)
 
     def test_known_tag_wall_distance_does_not_stop_or_pivot(self):
         nav = self.prepared(NavigationState.DRIVING)
@@ -469,7 +463,7 @@ class TestFixedTurns(unittest.TestCase):
             None.
 
         Returns:
-            None. Verifies a bounded leg followed by the next scan phase.
+            None. Verifies a bounded leg followed by the next turn phase.
         """
         nav = self.prepared(NavigationState.DRIVING)
         nav.side_index = 1
@@ -528,7 +522,7 @@ class TestVisionGeometry(unittest.TestCase):
         published = []
         method = load_method('hw3/hw3/nodes/ekf_slam_node.py', 'EkfSlamNode',
                              '_publish_vision_feedback', {'json': json, 'String': Record,
-                             'forward_wall_clearance': forward_wall_clearance})
+                             'forward_wall_clearance': forward_wall_clearance, 'tag_normal_yaw': tag_normal_yaw})
         transform = np.eye(4)
         transform[2, 3] = 0.4
         node = Record(extrinsics=CameraExtrinsics(), vision_pub=Record(publish=published.append))
@@ -537,6 +531,7 @@ class TestVisionGeometry(unittest.TestCase):
         self.assertEqual(payload['tags'], [[3, 0.4, 0.0]])
         self.assertEqual(payload['stamp_s'], 12.5)
         self.assertAlmostEqual(payload['forward_clearance_m'], 0.4)
+        self.assertEqual(payload['tag_yaws'], [[3, 0.0]])
 
     def test_tf_lookup_never_substitutes_latest_for_missing_image_transform(self):
         """Missing exact-time transforms must not become fresh visual measurements.
@@ -575,6 +570,19 @@ class TestVisionGeometry(unittest.TestCase):
         for family, margin, bits in [('25h9', 50, 0), ('36h11', 10, 0),
                                      ('36h11', math.nan, 0), ('36h11', 50, 2)]:
             self.assertFalse(method(node, Record(family=family, decision_margin=margin, hamming=bits)))
+
+    def test_relative_tag_turn_rejects_face_flips_and_disagreement(self):
+        self.assertAlmostEqual(relative_tag_turn({7: 0.3}, {7: 0.3 - math.pi / 2}, math.pi / 2), math.pi / 2)
+        self.assertIsNone(relative_tag_turn({7: 0.3}, {7: 0.3 + math.pi / 2}, math.pi / 2))
+        self.assertIsNone(relative_tag_turn({7: 0, 9: 0}, {7: -1.2, 9: -1.9}, math.pi / 2))
+        self.assertIsNone(relative_tag_turn({7: 0}, {9: 0}, math.pi / 2))
+
+    def test_tag_normal_yaw_uses_vertical_face_geometry(self):
+        transform = np.eye(4)
+        transform[:3, 2] = [0.6, 0.8, 0]
+        self.assertAlmostEqual(tag_normal_yaw(transform), math.atan2(0.8, 0.6))
+        transform[:3, 2] = [0, 0, 1]
+        self.assertIsNone(tag_normal_yaw(transform))
 
     def test_command_yaw_uncertainty_does_not_depend_on_callback_rate(self):
         coarse, fine = EkfSlam(), EkfSlam()

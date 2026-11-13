@@ -14,22 +14,30 @@ class NavigationPolicy:
     """Limits in meters, radians, and seconds; clearances are from robot center."""
 
     vision_timeout_s: float = 1.0
-    alignment_timeout_s: float = 18.0
+    corner_timeout_s: float = 18.0
+    corner_correction_limit_rad: float = math.pi / 12
+    corner_max_corrections: int = 2
     drive_budget_factor: float = 1.25
-    scan_timeout_s: float = 20.0
-    scan_step_rad: float = math.pi / 4
-    scan_pause_s: float = 0.5
     midpoint_pause_s: float = 1.0
 
     def __post_init__(self):
-        """Reject invalid limits rather than silently disabling motion guards."""
+        """Validate nominal motion limits and bounded optional corrections.
+
+        Args:
+            None.
+
+        Returns:
+            None. Raises ValueError for invalid phase timing, angles, or counts.
+        """
         if not all(math.isfinite(getattr(self, f.name)) and getattr(self, f.name) > 0
                    for f in fields(self)):
             raise ValueError('Navigation vision limits must be finite and positive.')
         if self.drive_budget_factor < 1:
             raise ValueError('Drive budget factor must be at least one.')
-        if self.scan_step_rad > math.pi / 2:
-            raise ValueError('Scan stages must be at most 90 nominal degrees.')
+        if self.corner_correction_limit_rad > math.pi / 4:
+            raise ValueError('Optional corner corrections must total at most 45 nominal degrees.')
+        if int(self.corner_max_corrections) != self.corner_max_corrections:
+            raise ValueError('Corner correction count must be an integer.')
 
 
 class VisualFeedback:
@@ -44,6 +52,7 @@ class VisualFeedback:
         self.progress = None
         self.progress_stamp, self.progress_prediction = -math.inf, 0.0
         self.heading = None
+        self.tag_yaws, self.yaw_stamp = {}, -math.inf
 
     def begin_leg(self, heading):
         """Reset relative tag travel anchors for a fixed SLAM-frame heading."""
@@ -52,7 +61,7 @@ class VisualFeedback:
         self.progress, self.progress_stamp = None, -math.inf
         self.progress_prediction = 0.0
 
-    def update(self, stamp, tags, known_ids, clearance, pose, predicted_progress):
+    def update(self, stamp, tags, known_ids, clearance, pose, predicted_progress, tag_yaws=None):
         """Cache one distinct accepted frame and estimate travel from stationary tags.
 
         Args:
@@ -62,13 +71,16 @@ class VisualFeedback:
             clearance: Forward wall-plane intersection in meters, or None.
             pose: Current SLAM-frame (x_m, y_m, yaw_rad) estimate.
             predicted_progress: EKF forward displacement since this leg began, in meters.
+            tag_yaws: Optional [tag_id, face_normal_yaw_rad] pairs in the robot base frame.
 
         Returns:
-            None. Updates freshness, stopped-pose history, and relative travel.
+            None. Updates optional geometry, orientation snapshots, freshness, and travel.
         """
         if stamp <= self.stamp:
             return
         self.stamp = stamp
+        self.tag_yaws = dict(tag_yaws or [])
+        self.yaw_stamp = stamp if self.tag_yaws else -math.inf
         if tags:
             self.clearance, self.clearance_stamp = clearance, stamp
         if tags and known_ids:
@@ -131,3 +143,39 @@ def forward_wall_clearance(base_tag):
         return None
     distance = float(normal @ point / normal[0])
     return distance if distance > 0 else None
+
+
+def tag_normal_yaw(base_tag):
+    """Return a vertical tag face normal's base-frame yaw in radians, or None."""
+    matrix = np.asarray(base_tag, dtype=float)
+    if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
+        return None
+    normal = matrix[:3, 2]
+    if abs(normal[2]) > 0.3 or math.hypot(normal[0], normal[1]) < 0.9:
+        return None
+    return math.atan2(normal[1], normal[0])
+
+
+def relative_tag_turn(reference, current, expected_turn):
+    """Estimate rotation from the same tag's before/after face orientation.
+
+    Args:
+        reference: Tag-ID-indexed base-frame normal yaws before turning, in radians.
+        current: Tag-ID-indexed normal yaws after turning, in radians.
+        expected_turn: Signed nominal turn including correction commands, in radians.
+
+    Returns:
+        Signed median yaw change, positive CCW, or None without consistent matches.
+        Reject candidates more than 45 degrees from prediction (including PnP
+        face flips), and matched-tag disagreement above 15 degrees. No prior map
+        positions or tag orientations are used.
+    """
+    changes = [wrap_angle(reference[tag] - current[tag]) for tag in reference.keys() & current.keys()]
+    changes = [v for v in changes if abs(wrap_angle(v - expected_turn)) <= math.pi / 4]
+    if not changes:
+        return None
+    center = changes[0]
+    measured = wrap_angle(median([center + wrap_angle(v - center) for v in changes]))
+    if any(abs(wrap_angle(v - measured)) > math.pi / 12 for v in changes):
+        return None
+    return measured
