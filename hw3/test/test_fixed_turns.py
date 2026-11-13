@@ -128,12 +128,13 @@ class TestFixedTurns(unittest.TestCase):
         self.assertGreater(nav.step(now + 0.05).angular_omega_radps, 0)
         self.assertEqual(nav.vision.valid_stamp, -math.inf)
 
-    def test_new_tag_can_stop_first_leg_for_close_wall(self):
+    def test_new_tag_wall_distance_is_logged_without_stopping_first_leg(self):
         nav = self.prepared(NavigationState.DRIVING)
         nav.update_vision(1, [[99, 0.3, 0]], [], 0.3)
         cmd = nav.step(1)
-        self.assertEqual(cmd.linear_v_mps, 0)
-        self.assertIn('clearance', nav.stop_reason)
+        self.assertGreater(cmd.linear_v_mps, 0)
+        self.assertEqual(nav.vision.clearance, 0.3)
+        self.assertTrue(nav.is_active)
 
     def test_square_has_four_scans_and_fixed_headings(self):
         """Simulate four visually observed legs and scans, including the final heading.
@@ -207,20 +208,130 @@ class TestFixedTurns(unittest.TestCase):
         self.assertAlmostEqual(nav.navigation_yaw, math.pi / 2)
         self.assertEqual(nav.step(1.05).state, NavigationState.DRIVING)
 
+    def test_entire_square_without_ekf_or_camera_messages(self):
+        """Missing sensors cannot block the supervised command-predicted mission.
+
+        Args:
+            None.
+
+        Returns:
+            None. Verifies all four legs and scans finish with no sensor callbacks.
+        """
+        nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
+        nav.start()
+        scans, midpoints, previous = 0, 0, None
+        for tick in range(8000):
+            cmd = nav.step(1 + tick * 0.05)
+            scans += int(cmd.state == NavigationState.SCANNING and previous != cmd.state)
+            midpoints += int(cmd.state == NavigationState.MIDPOINT_PAUSE and previous != cmd.state)
+            previous = cmd.state
+            if not nav.is_active:
+                break
+        self.assertEqual(nav.state, NavigationState.COMPLETED)
+        self.assertEqual(scans, 4)
+        self.assertEqual(midpoints, 4)
+        self.assertIsNone(nav.latest_slam_pose)
+
+    def test_manual_stop_still_cancels_motion(self):
+        nav = self.prepared(NavigationState.SCANNING)
+        nav.step(1.05)
+        nav.stop('Supervisor stop')
+        cmd = nav.step(1.1)
+        self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
+        self.assertEqual(nav.state, NavigationState.STOPPED)
+        self.assertFalse(nav.start()[0])
+
+    def at_midpoint(self):
+        """Prepare a half-traveled leg and enter its stopped midpoint phase."""
+        nav = self.prepared(NavigationState.DRIVING)
+        nav._reset_midpoint()
+        nav.drive_used = nav.square_size_m / 2
+        self.assertEqual(nav.step(2).state, NavigationState.MIDPOINT_PAUSE)
+        return nav
+
+    def test_midpoint_pause_accepts_ekf_undershoot_without_steering(self):
+        """A shorter measured first half increases only the remaining forward distance.
+
+        Args:
+            None.
+
+        Returns:
+            None. Confirms stopped acquisition time, fixed leg origin, and zero steering.
+        """
+        nav = self.at_midpoint()
+        origin, heading, target = nav.leg_origin, nav._heading(), nav.target
+        self.assertEqual(nav.step(2.5).linear_v_mps, 0)
+        self.assertFalse(nav.midpoint_done)
+        nav.update_ekf_pose(0.75, 0.2, 0.1, 0.01, 0.01, 3)
+        cmd = nav.step(3)
+        self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
+        self.assertAlmostEqual(nav.midpoint_progress_m, 0.75)
+        self.assertAlmostEqual(nav.midpoint_remaining_m, nav.square_size_m - 0.75)
+        self.assertEqual((nav.leg_origin, nav._heading(), nav.target), (origin, heading, target))
+        cmd = nav.step(3.05)
+        self.assertGreater(cmd.linear_v_mps, 0)
+        self.assertEqual(cmd.angular_omega_radps, 0)
+        self.assertEqual(nav.midpoint_source, 'fresh EKF')
+
+    def test_midpoint_ekf_overshoot_reduces_remaining_distance(self):
+        nav = self.at_midpoint()
+        nav.update_ekf_pose(1.1, 0, 0, 0.01, 0.01, 3)
+        nav.step(3)
+        self.assertAlmostEqual(nav.midpoint_remaining_m, nav.square_size_m - 1.1)
+        self.assertGreater(nav.progress_correction_m, 0)
+        self.assertEqual(nav.step(3.05).angular_omega_radps, 0)
+
+    def test_midpoint_bad_or_missing_ekf_uses_finite_nominal_fallback(self):
+        """Missing, stale, or uncertain observations do not prolong the midpoint pause.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks nominal half-side remainder and automatic forward continuation.
+        """
+        for pose in [None, (0.75, 0, 0, 0.01, 0.01, 2.1), (0.75, 0, 0, 10, 10, 3)]:
+            nav = self.at_midpoint()
+            if pose is not None:
+                nav.update_ekf_pose(*pose)
+            nav.step(3)
+            self.assertEqual(nav.state, NavigationState.DRIVING)
+            self.assertAlmostEqual(nav.midpoint_remaining_m, nav.square_size_m / 2)
+            self.assertEqual(nav.midpoint_source, 'command prediction fallback')
+            self.assertGreater(nav.step(3.05).linear_v_mps, 0)
+
+    def test_midpoint_uses_fixed_side_axis_not_distance_to_a_new_target(self):
+        nav = self.at_midpoint()
+        nav.side_index = 1
+        nav.update_ekf_pose(0.4, 0.8, 1.8, 0.01, 0.01, 3)
+        nav.step(3)
+        self.assertAlmostEqual(nav.midpoint_progress_m, 0.8)
+        self.assertAlmostEqual(nav._heading(), math.pi / 2)
+        self.assertEqual(nav.step(3.05).angular_omega_radps, 0)
+
+    def test_manual_stop_during_midpoint_does_not_resume(self):
+        nav = self.at_midpoint()
+        nav.stop('Supervisor stop')
+        cmd = nav.step(4)
+        self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
+        self.assertFalse(nav.is_active)
+
     def prepared(self, state):
         """Create an active controller with a known initial pose and requested phase."""
         nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
         nav.start()
         nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, 1)
         nav._transition(state, 1)
+        if state == NavigationState.DRIVING:
+            nav.midpoint_done = True
         return nav
 
-    def test_stale_pose_stops_scan_and_cannot_resume(self):
+    def test_stale_pose_does_not_abort_scan(self):
         nav = self.prepared(NavigationState.SCANNING)
         self.assertGreater(nav.step(1.05).angular_omega_radps, 0)
-        self.assertEqual(nav.step(2).angular_omega_radps, 0)
-        self.assertEqual(nav.state, NavigationState.STOPPED)
-        self.assertFalse(nav.start()[0])
+        self.assertGreater(nav.step(2).angular_omega_radps, 0)
+        self.assertEqual(nav.state, NavigationState.SCANNING)
+        self.assertTrue(nav.is_active)
 
     def test_inconsistent_visual_heading_has_bounded_best_effort_alignment(self):
         """Conflicting heading feedback cannot block the next leg indefinitely.
@@ -281,27 +392,27 @@ class TestFixedTurns(unittest.TestCase):
                             for value in angles))
         self.assertLessEqual(sum(angles), 2 * math.pi + nav.turn_calibration.ccw_radps * 0.05)
 
-    def test_scan_timeout_includes_stopped_camera_pauses(self):
-        """A stage pause cannot extend the overall scan deadline.
+    def test_scan_timeout_proceeds_to_alignment_instead_of_aborting_square(self):
+        """A scan deadline during a camera pause ends only the scan phase.
 
         Args:
             None.
 
         Returns:
-            None. Verifies zero commands after timing out during a camera pause.
+            None. Verifies a stopped phase transition and an active continuing mission.
         """
         nav = self.prepared(NavigationState.SCANNING)
         nav.policy = NavigationPolicy(scan_timeout_s=1.5)
         for tick in range(40):
             now = 1 + tick * 0.05
-            nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, now)
             command = nav.step(now)
-            if not nav.is_active:
+            if nav.state == NavigationState.LOCALIZING:
                 break
         self.assertGreaterEqual(nav.scan_stage_index, 1)
-        self.assertEqual(nav.state, NavigationState.STOPPED)
+        self.assertEqual(nav.state, NavigationState.LOCALIZING)
+        self.assertTrue(nav.is_active)
         self.assertEqual(command.angular_omega_radps, 0)
-        self.assertIn('time limit', nav.stop_reason)
+        self.assertIn('deadline', command.status_message)
 
     def test_scan_and_alignment_continue_without_vision(self):
         """A tag-free scan proceeds through finite settling and calibrated alignment.
@@ -326,12 +437,13 @@ class TestFixedTurns(unittest.TestCase):
         nav.update_ekf_pose(0, 0, 0, 10, 10, now + 0.05)
         self.assertGreater(nav.step(now + 0.05).linear_v_mps, 0)
 
-    def test_drive_stops_for_wall_and_does_not_pivot_mid_side(self):
+    def test_known_tag_wall_distance_does_not_stop_or_pivot(self):
         nav = self.prepared(NavigationState.DRIVING)
         self.feed_vision(nav, 1, (0, 0, 0), clearance=0.3)
         cmd = nav.step(1)
-        self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
-        self.assertIn('clearance', nav.stop_reason)
+        self.assertGreater(cmd.linear_v_mps, 0)
+        self.assertEqual(cmd.angular_omega_radps, 0)
+        self.assertEqual(nav.vision.clearance, 0.3)
 
     def test_empty_frames_do_not_refresh_vision_or_block_forward_fallback(self):
         nav = self.prepared(NavigationState.DRIVING)

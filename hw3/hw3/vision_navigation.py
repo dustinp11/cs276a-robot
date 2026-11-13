@@ -14,13 +14,12 @@ class NavigationPolicy:
     """Limits in meters, radians, and seconds; clearances are from robot center."""
 
     vision_timeout_s: float = 1.0
-    pose_wait_timeout_s: float = 8.0
     alignment_timeout_s: float = 18.0
-    wall_stop_distance_m: float = 0.45
     drive_budget_factor: float = 1.25
     scan_timeout_s: float = 20.0
     scan_step_rad: float = math.pi / 4
     scan_pause_s: float = 0.5
+    midpoint_pause_s: float = 1.0
 
     def __post_init__(self):
         """Reject invalid limits rather than silently disabling motion guards."""
@@ -109,12 +108,6 @@ class VisualFeedback:
     def fresh(self, now):
         """Require a real image timestamp within the allowed age, not a pose timer."""
         return -0.05 <= now - self.valid_stamp <= self.policy.vision_timeout_s
-
-    def wall_too_close(self, now):
-        """Use fresh wall geometry even from a tag first discovered during this leg."""
-        return (self.clearance is not None
-                and -0.05 <= now - self.clearance_stamp <= self.policy.vision_timeout_s
-                and self.clearance <= self.policy.wall_stop_distance_m)
 
 
 

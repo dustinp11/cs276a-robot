@@ -72,16 +72,26 @@ encoder measurements. Manual visual-only mode retains its VO prediction source.
 
 The square now uses the following phases on each of four sides:
 
-`DRIVE → STOPPING → SCANNING → LOCALIZING → ALIGNING → next DRIVE`
+`DRIVE first 3 ft → MIDPOINT_PAUSE → DRIVE remainder → STOPPING → SCANNING → LOCALIZING → ALIGNING → next side`
 
 - Every leg starts and continues without requiring any visible or previously
-  mapped tag. A fresh estimator heartbeat is required to distinguish running
-  software from a stalled node, but high covariance does not block the mission.
-- Drive up to 6 feet (1.8288 m) at a maximum 0.12 m/s, with angular command zero.
-  Calibrated command integration supplies fallback travel on all four sides.
-  When usable tags are reobserved, their relative displacement corrects travel;
-  newly seen tags inherit an anchor and cannot verify earlier displacement.
-  A nominal distance budget ends the leg even if visual progress stays frozen.
+  mapped tag. Missing/stale EKF messages use calibrated command prediction;
+  high covariance does not block the mission.
+- Drive a nominal first 3 feet (0.9144 m, half the configured side length),
+  then stop for `navigation.midpoint_pause_s` (default 1.0 second). Callbacks
+  remain active during the pause so delayed images and EKF updates can arrive.
+- At pause completion, project a fresh, sufficiently confident post-stop EKF
+  position onto the original side axis. Subtract that progress from the total
+  6-foot (1.8288 m) side to determine the remaining forward distance. A first
+  half estimated shorter than 3 feet increases the remainder; an estimated
+  overshoot reduces it. This adjusts distance only: no new target direction,
+  no turn, and no reset of the leg's original position/heading.
+- Missing, stale, or uncertain EKF data use nominal half-side travel instead.
+  The pause always ends after its fixed duration; visible tags are not required.
+  During the remainder, calibrated command travel and any usable relative-tag
+  displacement provide distance feedback. Maximum speed remains 0.12 m/s and
+  angular commands remain zero. The existing total-leg command budget still
+  advances to the scan if the distance estimate stays frozen.
 - Stop and settle for one second, then scan in eight nominal CCW 45° stages,
   stopping for 0.5 seconds after each stage, including the eighth. Configure
   `navigation.scan_step_rad` and `navigation.scan_pause_s` for the camera.
@@ -98,15 +108,15 @@ The square now uses the following phases on each of four sides:
 
 The complete four-side sequence can finish with zero detections. Missing tags,
 high covariance, and lack of visual stability never by themselves stop it.
-Manual stop, stale/invalid estimator heartbeat, a visible wall inside the clearance
-limit, and an overall scan deadline still stop the mission. A stopped mission
-requires relaunch/reset.
+There is no autonomous wall-distance stop. Clearance is recorded in the CSV
+only; a supervising human uses `/stop_navigation` or Ctrl-C to stop motion.
+Missing/stale EKF messages also do not abort the mission. A scan deadline ends
+the scan and proceeds to alignment rather than stopping the entire square.
+The motor driver's command watchdog and shutdown stop remain unchanged.
 
-For visible wall-mounted tags with valid vertical face normals, a forward-ray/
-wall-plane intersection supplies an independent clearance check. At 0.45 m from
-robot center the mission stops; include body dimensions and braking margin when
-adjusting `navigation.wall_stop_distance_m`. This is not an obstacle sensor and
-cannot protect against untagged walls or objects. No surveyed map is loaded.
+Wall-plane intersection from visible tags remains a diagnostic measurement in
+meters from robot center. It does not impose a travel limit or require known
+wall coordinates. No surveyed map is loaded by navigation.
 
 The EKF uses higher-uncertainty command prediction plus gated tag observations.
 Command covariance grows with elapsed time rather than shrinking with callback
@@ -450,7 +460,8 @@ ros2 service call /stop_navigation std_srvs/srv/Trigger
 4. **Lighting & Motion Blur**: Fast manual movements or low lighting may cause AprilTag detection drops, temporarily pausing VO.
 
 Navigation CSV adds `vision_age_s`, `visual_progress_m`, `ekf_progress_m`,
-`forward_clearance_m`, `scan_nominal_rad`, and `navigation_heading_rad` to the existing columns. These
+`forward_clearance_m`, `scan_nominal_rad`, `navigation_heading_rad`,
+`midpoint_progress_m`, `midpoint_remaining_m`, and `midpoint_source` to the existing columns. These
 record visual freshness, competing travel estimates, wall clearance, and timed
-scan prediction and navigation heading separately. Navigation heading can be
+scan prediction, navigation heading, and midpoint correction separately. Navigation heading can be
 model-predicted while the EKF pose remains uncertain. EKF landmark and trajectory CSV formats are unchanged.

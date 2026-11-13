@@ -102,20 +102,19 @@
       linear_kp: 0.60                 # Proportional gain on distance error
       waypoint_tolerance_m: 0.10      # Acceptance radius for arriving at a waypoint (m)
       heading_tolerance_rad: 0.12     # Heading tolerance for turn-in-place (~7 deg)
-      pose_timeout_s: 0.60            # Maximum allowable age of EKF pose before halting (s)
+      pose_timeout_s: 0.60            # Maximum age for using optional EKF corrections (s)
       max_position_uncertainty_m: 0.40  # confidence threshold for optional heading corrections (m)
       max_heading_uncertainty_rad: 0.40 # confidence threshold for optional heading corrections (rad)
       turn_pulse_rad: 0.2617993878  # maximum 15-degree alignment pulse before stopping
       turn_settle_s: 1.0           # stopped time for vision after each pulse
       # no surveyed wall coordinates are used; distances are from robot center
       vision_timeout_s: 1.0
-      pose_wait_timeout_s: 8.0
       alignment_timeout_s: 18.0
-      wall_stop_distance_m: 0.45
       drive_budget_factor: 1.25
       scan_timeout_s: 20.0
       scan_step_rad: 0.7853981633974483  # 45 nominal degrees per stage
       scan_pause_s: 0.5                 # stopped time after every stage
+      midpoint_pause_s: 1.0             # camera-processing pause halfway through each side
       control_frequency_hz: 20.0      # Closed-loop control loop frequency (Hz)
       auto_start: false               # Require explicit start command
       output_dir: "hw3_results"       # Telemetry output directory
