@@ -17,6 +17,7 @@ class NavigationState(Enum):
     MIDPOINT_PAUSE = 'MIDPOINT_PAUSE'
     STOPPING = 'STOPPING'
     TURNING = 'TURNING'
+    TURN_STAGE_PAUSE = 'TURN_STAGE_PAUSE'
     CORNER_PAUSE = 'CORNER_PAUSE'
     CORRECTING = 'CORRECTING'
     STOPPED = 'STOPPED'
@@ -140,6 +141,7 @@ class SquareNavigator:
         self.corner_reference, self.corner_source = {}, 'prediction'
         self.corner_residual = None
         self.corner_start_heading = self.correction_goal = 0.0
+        self.corner_stage_goal, self.corner_stage_done = 0.0, True
         self.correction_count = 0
         self.last_command, self.last_tick = (0.0, 0.0), None
         self.phase_started = None
@@ -289,6 +291,7 @@ class SquareNavigator:
                     NavigationState.MIDPOINT_PAUSE: self._midpoint_pause,
                     NavigationState.STOPPING: self._settle,
                     NavigationState.TURNING: self._turn_corner,
+                    NavigationState.TURN_STAGE_PAUSE: self._turn_stage_pause,
                     NavigationState.CORNER_PAUSE: self._corner_pause,
                     NavigationState.CORRECTING: self._correct_corner}
         return handlers[self.state](now)
@@ -390,7 +393,7 @@ class SquareNavigator:
         """Stop before capturing optional tag references and beginning a direct left turn."""
         if now - self.phase_started >= self.turn_settle_s:
             self._begin_corner(now)
-        return self._output('Stopped before direct 90-degree left turn')
+        return self._output('Stopped before calibrated left corner')
 
     def _begin_corner(self, now):
         """Anchor one direct corner turn without requiring a visible landmark.
@@ -402,9 +405,10 @@ class SquareNavigator:
             None. Captures optional stopped tag normals and resets correction budgets.
         """
         self.corner_start_heading = self.navigation_yaw
-        self.corner_reference = {}
-        if self.vision.yaw_stamp >= self.phase_started and now - self.vision.yaw_stamp <= self.policy.vision_timeout_s:
-            self.corner_reference = dict(self.vision.tag_yaws)
+        self.corner_reference = self.vision.stable_tag_yaws(now, self.phase_started)
+        nominal = self.turn_calibration.ccw_radps * self.policy.corner_turn_duration_s
+        self.corner_stage_goal = min(nominal, self.policy.corner_stage_angle_rad)
+        self.corner_stage_done = self.corner_stage_goal >= nominal
         self.corner_used = self.correction_used = self.correction_signed = 0.0
         self.correction_count = 0
         self.corner_source = 'calibrated turn prediction'
@@ -413,12 +417,64 @@ class SquareNavigator:
         self._transition(NavigationState.TURNING, now)
 
     def _turn_corner(self, now):
-        """Apply the shorter initial left pulse without fabricating a completed configured corner turn."""
-        target_angle = self.turn_calibration.ccw_radps * self.policy.corner_turn_duration_s
-        if self.corner_used + 1e-9 >= target_angle or now - self.phase_started >= self.policy.corner_timeout_s:
-            self._transition(NavigationState.CORNER_PAUSE, now)
-            return self._output('Initial left-turn pulse finished; stopped for camera processing')
-        return self._output('Initial left-turn pulse toward polygon corner', angular=self.turn_calibration.rate(1))
+        """Turn to the current stage budget, then stop for a bounded camera interval."""
+        if (self.corner_used + 1e-9 >= self.corner_stage_goal
+                or now - self.phase_started >= self.policy.corner_timeout_s):
+            state = NavigationState.CORNER_PAUSE if self.corner_stage_done else NavigationState.TURN_STAGE_PAUSE
+            self._transition(state, now)
+            return self._output('Turn stage finished; stopped for camera processing')
+        return self._output('Calibrated left corner stage', angular=self.turn_calibration.rate(1))
+
+    def _relative_corner_measurement(self, now):
+        """Measure turn rotation and transfer a visually anchored reference to overlapping tags.
+
+        Args:
+            now: Current ROS time after the stationary acquisition interval, in seconds.
+
+        Returns:
+            Measured total left rotation in radians, or None without stable shared tags.
+            Newly visible tags become references only after a shared tag anchors rotation.
+        """
+        yaws = self.vision.stable_tag_yaws(now, self.phase_started)
+        measured = relative_tag_turn(self.corner_reference, yaws, self.corner_used + self.correction_signed)
+        if measured is None:
+            return None
+        for tag, yaw in yaws.items():
+            self.corner_reference.setdefault(tag, wrap_angle(yaw + measured))
+        self.navigation_yaw = wrap_angle(self.corner_start_heading + measured)
+        self.heading_time, self.corner_source = now, 'stable same-tag face orientation'
+        return measured
+
+    def _plan_corner_remainder(self, measured):
+        """Finish the calibrated remainder, allowing a bounded visually measured adjustment.
+
+        Args:
+            measured: Total relative rotation in radians, or None without usable vision.
+
+        Returns:
+            None. Updates the remaining turn budget. An actionable visual adjustment
+            consumes one of the three correction attempts and its absolute angle budget.
+        """
+        nominal = self.turn_calibration.ccw_radps * self.policy.corner_turn_duration_s
+        remaining = max(0.0, nominal - self.corner_used)
+        if measured is not None and self.correction_count < self.policy.corner_max_corrections:
+            delta = max(-remaining, self.corner_angle_rad - measured - remaining)
+            limit = max(0.0, self.policy.corner_correction_limit_rad - self.correction_used)
+            delta = max(-limit, min(limit, delta))
+            if abs(delta) + 1e-9 >= self.policy.corner_min_correction_rad:
+                remaining += delta
+                self.correction_used += abs(delta)
+                self.correction_count += 1
+        self.corner_stage_goal = self.corner_used + remaining
+        self.corner_stage_done = True
+
+    def _turn_stage_pause(self, now):
+        """Pause between stages, then finish using optional vision or the timed remainder."""
+        if now - self.phase_started < self.turn_settle_s:
+            return self._output('Intermediate corner pause; gathering optional stable tag observations')
+        self._plan_corner_remainder(self._relative_corner_measurement(now))
+        self._transition(NavigationState.TURNING, now)
+        return self._output('Corner remainder ready; source: ' + self.corner_source)
 
     def _corner_error(self, now):
         """Prefer relative tag orientation, then optional fresh EKF heading corrections.
@@ -433,20 +489,17 @@ class SquareNavigator:
             scaled by corner_ekf_weight.
             Missing or stale observations never authorize extra corrective rotation.
         """
-        if self.vision.yaw_stamp >= self.phase_started and now - self.vision.yaw_stamp <= self.policy.vision_timeout_s:
-            measured = relative_tag_turn(self.corner_reference, self.vision.tag_yaws,
-                                         self.corner_used + self.correction_signed)
-            if measured is not None:
-                self.navigation_yaw = wrap_angle(self.corner_start_heading + measured)
-                self.heading_time, self.corner_source = now, 'same-tag face orientation'
-                return wrap_angle(self.corner_angle_rad - measured)
+        measured = self._relative_corner_measurement(now)
+        if measured is not None:
+            return wrap_angle(self.corner_angle_rad - measured)
         yaw = self.vision.confident_ekf_yaw(now, self.phase_started)
         if self.policy.corner_ekf_weight > 0 and yaw is not None:
             self.navigation_yaw = yaw
             self.heading_time = now
             self.corner_source = f'EKF with confident post-turn landmarks {sorted(self.vision.known_ids)}'
             return self.policy.corner_ekf_weight * self._heading_error()
-        self.corner_source = 'calibrated turn prediction; no post-turn visual correction'
+        reason = self.vision.ekf_rejection_reason if self.policy.corner_ekf_weight else 'disabled'
+        self.corner_source = 'Timed fallback; no stable shared tag; EKF ' + reason
         return None
 
     def _corner_pause(self, now):

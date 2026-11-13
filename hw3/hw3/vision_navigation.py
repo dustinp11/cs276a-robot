@@ -1,5 +1,6 @@
 """Fresh tag feedback and wall-plane geometry for navigation without a prior map."""
 
+from collections import deque
 from dataclasses import dataclass, fields
 import math
 from statistics import median
@@ -16,6 +17,9 @@ class NavigationPolicy:
     vision_timeout_s: float = 1.0
     corner_timeout_s: float = 18.0
     corner_turn_duration_s: float = 0.95
+    corner_stage_angle_rad: float = math.pi
+    corner_min_observations: int = 3
+    corner_yaw_spread_rad: float = math.pi / 60
     corner_min_correction_rad: float = math.pi / 36
     corner_correction_limit_rad: float = math.pi / 12
     corner_max_corrections: int = 3
@@ -46,6 +50,8 @@ class NavigationPolicy:
             raise ValueError('Minimum useful correction cannot exceed the total correction budget.')
         if self.corner_correction_limit_rad > math.pi / 4:
             raise ValueError('Optional corner corrections must total at most 45 nominal degrees.')
+        if int(self.corner_min_observations) != self.corner_min_observations:
+            raise ValueError('Corner observation count must be an integer.')
         if int(self.corner_max_corrections) != self.corner_max_corrections:
             raise ValueError('Corner correction count must be an integer.')
 
@@ -63,7 +69,9 @@ class VisualFeedback:
         self.progress_stamp, self.progress_prediction = -math.inf, 0.0
         self.heading = None
         self.tag_yaws, self.yaw_stamp = {}, -math.inf
+        self.yaw_history = deque(maxlen=128)
         self.known_ids, self.landmark_sigmas, self.ekf_heading = set(), {}, None
+        self.ekf_rejection_reason = 'no image-associated heading'
 
     def begin_leg(self, heading):
         """Reset relative tag travel anchors for a fixed SLAM-frame heading."""
@@ -84,7 +92,7 @@ class VisualFeedback:
             pose: Current SLAM-frame (x_m, y_m, yaw_rad) estimate.
             predicted_progress: EKF forward displacement since this leg began, in meters.
             tag_yaws: Optional [tag_id, face_normal_yaw_rad] pairs in the robot base frame.
-            landmark_sigmas: Pre-update [tag_id, major-axis standard deviation in meters].
+            landmark_sigmas: Pre-update [tag_id, relative major-axis standard deviation in meters].
             ekf_heading: Post-image [SLAM yaw, yaw standard deviation], in radians.
 
         Returns:
@@ -97,6 +105,7 @@ class VisualFeedback:
         self.landmark_sigmas = dict(landmark_sigmas or [])
         self.ekf_heading = ekf_heading
         self.tag_yaws = dict(tag_yaws or [])
+        self.yaw_history.append((stamp, self.tag_yaws))
         self.yaw_stamp = stamp if self.tag_yaws else -math.inf
         if tags:
             self.clearance, self.clearance_stamp = clearance, stamp
@@ -104,6 +113,40 @@ class VisualFeedback:
             self.valid_stamp = stamp
         if self.heading is not None:
             self._update_progress(tags, known_ids, pose[2], predicted_progress)
+
+    def stable_tag_yaws(self, now, stopped_at):
+        """Collect consistent face-normal observations captured during this stop.
+
+        Args:
+            now: Current ROS time in seconds.
+            stopped_at: Beginning of this stationary acquisition interval, in seconds.
+
+        Returns:
+            Tag-ID-indexed median yaws in radians, excluding stale or inconsistent tags.
+            Samples may span the stop, but each tag's newest sample must still be fresh.
+        """
+        samples = {}
+        for stamp, yaws in self.yaw_history:
+            if stopped_at <= stamp <= now:
+                for tag, yaw in yaws.items():
+                    samples.setdefault(tag, []).append((stamp, yaw))
+        result = {}
+        for tag, observations in samples.items():
+            if now - observations[-1][0] <= self.policy.vision_timeout_s:
+                yaw = self._stable_yaw([v for _, v in observations])
+                if yaw is not None:
+                    result[tag] = yaw
+        return result
+
+    def _stable_yaw(self, samples):
+        """Return a circular median only after enough mutually consistent samples."""
+        if len(samples) < self.policy.corner_min_observations:
+            return None
+        samples = samples[-self.policy.corner_min_observations:]
+        values = [samples[0] + wrap_angle(v - samples[0]) for v in samples]
+        if max(values) - min(values) > self.policy.corner_yaw_spread_rad:
+            return None
+        return wrap_angle(median(values))
 
     def confident_ekf_yaw(self, now, stopped_at):
         """Select an image-associated heading only when every updated known tag is confident.
@@ -114,18 +157,24 @@ class VisualFeedback:
 
         Returns:
             SLAM yaw in radians, or None for stale, missing, or uncertain feedback.
-            Landmark confidence uses pre-update covariance, including its cross term.
+            Landmark confidence uses pre-update robot-relative covariance, including
+            robot-landmark cross correlations.
         """
         if self.stamp < stopped_at or not 0 <= now - self.stamp <= self.policy.vision_timeout_s:
+            self.ekf_rejection_reason = 'no fresh post-stop image'
             return None
         if not self.known_ids or self.ekf_heading is None:
+            self.ekf_rejection_reason = 'no accepted mapped tag or image heading'
             return None
         sigmas = [self.landmark_sigmas.get(tag, math.inf) for tag in self.known_ids]
         if not all(math.isfinite(v) and 0 <= v <= self.policy.corner_landmark_sigma_m for v in sigmas):
+            self.ekf_rejection_reason = 'missing or uncertain robot-relative landmark covariance'
             return None
         yaw, sigma = self.ekf_heading
         if math.isfinite(yaw) and math.isfinite(sigma) and 0 <= sigma <= self.policy.corner_heading_sigma_rad:
+            self.ekf_rejection_reason = ''
             return yaw
+        self.ekf_rejection_reason = 'uncertain image heading'
         return None
 
     def _update_progress(self, tags, known_ids, yaw, predicted_progress):

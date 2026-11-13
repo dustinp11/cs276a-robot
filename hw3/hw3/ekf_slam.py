@@ -494,6 +494,28 @@ class EkfSlam:
             covariance=self.P[m_idx:m_idx + 2, m_idx:m_idx + 2].copy(),
         )
 
+    def get_relative_landmark_covariance(self, tag_id):
+        """Propagate joint pose/map uncertainty to the tag position in robot coordinates.
+
+        Args:
+            tag_id: Mapped AprilTag ID.
+
+        Returns:
+            2x2 covariance in m² for [forward, left], or None for an unknown tag.
+            Uses the full joint covariance so shared global-pose uncertainty cancels.
+        """
+        if tag_id not in self.tag_id_to_idx:
+            return None
+        index = 3 + 2 * self.tag_id_to_idx[tag_id]
+        c, s = math.cos(self.x[2]), math.sin(self.x[2])
+        rotation = np.array([[c, s], [-s, c]])
+        relative = rotation @ (self.x[index:index + 2] - self.x[:2])
+        jacobian = np.zeros((2, self.state_dim))
+        jacobian[:, :2], jacobian[:, index:index + 2] = -rotation, rotation
+        jacobian[:, 2] = [relative[1], -relative[0]]
+        covariance = jacobian @ self.P @ jacobian.T
+        return (covariance + covariance.T) * 0.5
+
     def get_all_landmarks(self) -> Dict[int, LandmarkEstimate]:
         """Return map of all currently discovered landmarks."""
         result = {}

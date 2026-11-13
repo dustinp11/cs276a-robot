@@ -18,13 +18,23 @@ source /opt/ros/jazzy/setup.bash
 ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
 ```
 
-Eight repetitions: drive 75 cm → stop → turn left 45° → stop.
+Eight repetitions: drive 75 cm → stop → turn left about 30° → pause →
+finish the remaining turn toward 45° → pause → optional bounded corrections.
 The final turn restores the nominal starting orientation. The measured left
-pivot uses `[-0.35, +0.35]` for 0.5 seconds (nominal pi/2 rad/s). The profile is
+pivot uses `[-0.35, +0.35]` with a nominal total of 0.5 seconds (pi/2 rad/s),
+split at `navigation.corner_stage_angle_rad` (30 degrees for this profile).
+The intermediate pause lasts 3 seconds. Stable relative vision may adjust the
+remaining angle; an adjustment of at least 5 degrees consumes one correction
+attempt and part of the same 15-degree total correction budget. Without feedback,
+the remaining timed rotation completes the nominal 45-degree corner. The profile is
 in `launch/hw3_navigation.launch.py`; the octagon launch reuses that stack.
 EKF turn corrections require confident post-stop mapped-tag observations (see
 the covariance gate below). Same-tag relative corrections remain optional
-and target 45°. Missing tags never block progress. Straight travel retains
+and target 45°. Each tag reference requires three distinct stopped images
+with at most 3 degrees of face-normal yaw spread. The newest image must be
+fresh. When a shared tag anchors the intermediate rotation, newly visible tags
+can carry that reference through the remaining turn; without a shared anchor,
+a new tag is never treated as evidence of a completed angle. Missing tags never block progress. Straight travel retains
 the midpoint pause at 37.5 cm and the bounded EKF distance adjustment; therefore
 75 cm is the nominal commanded side, not a guaranteed physical distance.
 All pauses remain 3 seconds. Straight inputs remain `[+0.185, +0.15]` at the
@@ -163,13 +173,19 @@ The square now uses the following phases on each of four sides:
   independently of any bias in the prior global heading. Tag orientations are transformed from
   camera optical coordinates into robot-base coordinates. This comparison uses
   no estimated global tag position. Reject likely PnP face flips and inconsistent
-  matched-tag changes. Only images captured after stopping can correct the turn.
+  matched-tag changes. Use `navigation.corner_min_observations` (default 3)
+  distinct stopped frames per tag, with normal-yaw spread no greater than
+  `navigation.corner_yaw_spread_rad` (default 3 degrees). Only images captured
+  after stopping can correct the turn. These sample-consistency settings also
+  apply to references captured before the turn.
 - If no usable same-tag comparison exists, EKF turn feedback is permitted only
   from a fresh image captured after the current stop. Every accepted known tag
-  updated by that image must have a pre-update largest positional standard
-  deviation of at most `navigation.corner_landmark_sigma_m` (default 0.06 m).
-  This uses the largest eigenvalue of the full 2x2 covariance, including cov_xy;
-  it is independent of map-axis orientation. One confident tag is sufficient;
+  updated by that image must have a pre-update largest robot-relative positional
+  standard deviation of at most `navigation.corner_landmark_sigma_m` (default 0.06 m).
+  Propagate the full joint robot/landmark covariance through the robot-frame
+  position Jacobian, including yaw and robot-landmark cross correlations, then
+  use the largest eigenvalue of the resulting 2x2 covariance. Shared global
+  uncertainty can cancel; no global landmark covariance is artificially reduced. One confident tag is sufficient;
   there are no hard-coded tag IDs. Missing covariance or mixed-confidence updates
   cause the EKF fallback to be skipped.
 - The image-associated EKF yaw must also have standard deviation at most
@@ -178,7 +194,9 @@ The square now uses the following phases on each of four sides:
   enforce the pulse and total-angle limits. Set weight to zero to disable this
   fallback. A new post-stop image is required after each pulse; timer-published
   predictions alone cannot authorize another correction. Source tag IDs are
-  recorded in `corner_feedback_source`. Covariance is model confidence, not
+  recorded in `corner_feedback_source`; skipped feedback records whether the
+  reason was freshness, missing map observations, relative covariance, or heading
+  uncertainty. Covariance is model confidence, not
   independent proof of map or heading accuracy.
 - Optional corrections use the measured fixed CW/CCW inputs. They never reduce
   motor magnitude to request a small turn. Residual errors below

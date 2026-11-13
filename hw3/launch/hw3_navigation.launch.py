@@ -95,6 +95,7 @@ def _control_nodes(context):
         navigation_overrides = {'navigation.side_count': 8,
                                 'navigation.side_length_m': 0.75,
                                 'navigation.corner_turn_duration_s': 0.5,
+                                'navigation.corner_stage_angle_rad': 0.5235987755982988,
                                 'navigation.corner_ekf_weight': 0.5}
     return [
         _hw3_node('visual_odometry_node'),

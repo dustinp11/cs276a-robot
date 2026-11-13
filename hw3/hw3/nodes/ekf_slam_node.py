@@ -463,9 +463,9 @@ class EkfSlamNode(Node):
             self.last_vo_time = stamp_s
 
     def _landmark_sigma(self, tag_id):
-        """Return the largest positional standard deviation in meters, independent of axes."""
-        landmark = self.ekf.get_landmark_pose(tag_id)
-        return math.sqrt(max(0.0, float(np.linalg.eigvalsh(landmark.covariance).max())))
+        """Return the largest robot-relative positional standard deviation in meters."""
+        covariance = self.ekf.get_relative_landmark_covariance(tag_id)
+        return math.sqrt(max(0.0, float(np.linalg.eigvalsh(covariance).max())))
 
     def _update_observed_landmarks(self, detections):
         """Distinguish map initialization from accepted reobservations of known tags.
@@ -475,7 +475,7 @@ class EkfSlamNode(Node):
 
         Returns:
             IDs successfully corrected that existed before this image's updates.
-            Caches their pre-image major-axis standard deviations in meters.
+            Caches their pre-image robot-relative major-axis standard deviations in meters.
         """
         known_before = set(self.ekf.tag_id_to_idx)
         accepted = []

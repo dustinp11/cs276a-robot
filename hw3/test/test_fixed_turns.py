@@ -161,27 +161,99 @@ class TestFixedTurns(unittest.TestCase):
         """
         calibration = TurnCalibration(-0.35, 0.35, 0.37, -0.37, math.pi / 2, math.pi / 2)
         nav = SquareNavigator(side_count=8, side_length_m=0.75, turn_calibration=calibration,
-                              policy=NavigationPolicy(corner_turn_duration_s=0.5))
+                              policy=NavigationPolicy(corner_turn_duration_s=0.5,
+                                                      corner_stage_angle_rad=math.pi / 6))
         nav.start()
-        previous, corners, legs = None, 0, set()
+        previous, corners, legs, stage_pauses = None, 0, set(), 0
         for tick in range(4000):
             cmd = nav.step(tick * 0.05)
             if cmd.state == NavigationState.DRIVING:
                 legs.add(nav.side_index)
-            if cmd.state == NavigationState.TURNING and previous != cmd.state:
+            if cmd.state == NavigationState.TURNING and nav.side_index > corners:
                 corners += 1
                 self.assertAlmostEqual(nav.drive_used, 0.75, delta=0.02)
                 self.assertAlmostEqual(nav._heading(), corners * math.pi / 4)
             if cmd.angular_omega_radps:
                 self.assertEqual(calibration.motors(cmd.angular_omega_radps), (-0.35, 0.35))
             self.assertFalse(cmd.linear_v_mps and cmd.angular_omega_radps)
+            stage_pauses += int(cmd.state == NavigationState.TURN_STAGE_PAUSE and previous != cmd.state)
             previous = cmd.state
             if not nav.is_active:
                 break
+        self.assertEqual(stage_pauses, 8)
         self.assertEqual(nav.state, NavigationState.COMPLETED)
         self.assertEqual((corners, legs), (8, set(range(8))))
         self.assertAlmostEqual(nav.corner_used, math.pi / 4, delta=math.pi / 40)
         self.assertEqual(nav.correction_count, 0)
+
+    def staged_corner(self):
+        """Create a 30-degree stage with a stable pre-turn tag reference.
+
+        Args:
+            None.
+
+        Returns:
+            Octagon navigator stopped after the first stage, with three original samples.
+        """
+        calibration = TurnCalibration(-0.35, 0.35, 0.37, -0.37, math.pi / 2, math.pi / 2)
+        policy = NavigationPolicy(corner_turn_duration_s=0.5, corner_stage_angle_rad=math.pi / 6)
+        nav = SquareNavigator(side_count=8, side_length_m=0.75,
+                              turn_calibration=calibration, policy=policy)
+        nav.start()
+        nav._transition(NavigationState.STOPPING, 0)
+        for stamp in (1, 1.5, 2):
+            nav.update_vision(stamp, [[7, 2, 1]], [], None, [[7, 0.4]])
+        nav._begin_corner(2.5)
+        nav.corner_used = math.pi / 6
+        nav._turn_corner(2.8)
+        return nav
+
+    def test_staged_turn_adjusts_remainder_and_hands_reference_to_new_tag(self):
+        """An uncertain global map cannot block stable relative turn feedback or handoff.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks a measured 25-degree first stage selects a 20-degree remainder.
+        """
+        nav = self.staged_corner()
+        self.assertEqual(nav.state, NavigationState.TURN_STAGE_PAUSE)
+        for stamp in (4.5, 5, 5.5):
+            nav.update_vision(stamp, [[7, 2, 1], [9, 1, 1]], [], None,
+                              [[7, 0.4 - math.radians(25)], [9, 1.0]])
+        self.assertEqual(nav.step(5.7).angular_omega_radps, 0)
+        nav.step(5.8)
+        self.assertEqual(nav.state, NavigationState.TURNING)
+        self.assertAlmostEqual(nav.corner_stage_goal - nav.corner_used, math.radians(20))
+        self.assertEqual(nav.correction_count, 1)
+        self.assertAlmostEqual(nav.correction_used, math.radians(5))
+        self.assertAlmostEqual(nav.corner_reference[9], 1 + math.radians(25))
+        nav.corner_used = nav.corner_stage_goal
+        nav._turn_corner(6)
+        for stamp in (7, 8, 8.8):
+            nav.update_vision(stamp, [[9, 1, 1]], [], None, [[9, 1 - math.radians(20)]])
+        nav.step(9)
+        self.assertEqual(nav.state, NavigationState.DRIVING)
+        self.assertAlmostEqual(nav.corner_residual, 0)
+        self.assertEqual(nav.correction_count, 1)
+
+    def test_staged_turn_without_shared_reference_uses_only_timed_remainder(self):
+        nav = self.staged_corner()
+        for stamp in (4.5, 5, 5.5):
+            nav.update_vision(stamp, [[9, 1, 1]], [], None, [[9, 1.0]])
+        nav.step(5.8)
+        self.assertEqual(nav.state, NavigationState.TURNING)
+        self.assertAlmostEqual(nav.corner_stage_goal, math.pi / 4)
+        self.assertEqual(nav.correction_count, 0)
+        self.assertNotIn(9, nav.corner_reference)
+
+    def test_manual_stop_during_intermediate_turn_pause(self):
+        nav = self.staged_corner()
+        nav.stop()
+        cmd = nav.step(6)
+        self.assertEqual(cmd.state, NavigationState.STOPPED)
+        self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
 
     def test_octagon_relative_tag_correction_targets_45_degrees(self):
         nav = self.corner_with_measured_turn(35)
@@ -275,7 +347,8 @@ class TestFixedTurns(unittest.TestCase):
         Returns:
             None. Verifies all four legs and corners finish with no sensor callbacks.
         """
-        nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
+        nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1,
+                              policy=NavigationPolicy(corner_min_observations=1))
         nav.start()
         corners, midpoints, previous = 0, 0, None
         for tick in range(8000):
@@ -408,7 +481,8 @@ class TestFixedTurns(unittest.TestCase):
         Returns:
             SquareNavigator with measured test rates and optional corner state.
         """
-        nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
+        nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1,
+                              policy=NavigationPolicy(corner_min_observations=1))
         nav.start()
         nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, 1)
         nav._transition(state, 1)
@@ -577,7 +651,7 @@ class TestFixedTurns(unittest.TestCase):
         self.assertEqual(cmd.state, NavigationState.CORRECTING)
         self.assertGreater(nav.correction_omega, 0)
         self.assertAlmostEqual(nav.correction_goal, math.radians(10))
-        self.assertEqual(nav.corner_source, 'same-tag face orientation')
+        self.assertEqual(nav.corner_source, 'stable same-tag face orientation')
         self.assertEqual(nav.vision.valid_stamp, -math.inf)
         for tick in range(40):
             now = 3.25 + tick * 0.05
@@ -589,7 +663,7 @@ class TestFixedTurns(unittest.TestCase):
                 break
         self.assertEqual(nav.state, NavigationState.DRIVING)
         self.assertEqual(nav.correction_count, 1)
-        self.assertEqual(nav.corner_source, 'same-tag face orientation')
+        self.assertEqual(nav.corner_source, 'stable same-tag face orientation')
 
     def corner_with_measured_turn(self, angle_degrees):
         """Prepare a fresh same-tag quarter-turn measurement without a global map."""
@@ -802,11 +876,72 @@ class TestVisionGeometry(unittest.TestCase):
         self.assertEqual(feedback.valid_stamp, 1)
         self.assertFalse(feedback.fresh(3))
 
+    def test_stopped_yaw_consistency_requires_distinct_fresh_frames(self):
+        """Require three stationary samples and handle angular wrapping correctly.
+
+        Args:
+            None.
+
+        Returns:
+            None. Duplicates, moving samples, stale data, and noisy normals cannot qualify.
+        """
+        feedback = VisualFeedback(NavigationPolicy())
+        for stamp, degrees in ((0.5, 20), (1.1, 179), (1.1, 179), (1.5, -179)):
+            feedback.update(stamp, [], [], None, (0, 0, 0), 0, [[7, math.radians(degrees)]])
+        self.assertEqual(feedback.stable_tag_yaws(1.6, 1), {})
+        feedback.update(1.8, [], [], None, (0, 0, 0), 0, [[7, math.pi]])
+        self.assertAlmostEqual(abs(feedback.stable_tag_yaws(2, 1)[7]), math.pi)
+        self.assertEqual(feedback.stable_tag_yaws(3, 1), {})
+        feedback.update(2.1, [], [], None, (0, 0, 0), 0, [[7, math.radians(160)]])
+        self.assertEqual(feedback.stable_tag_yaws(2.2, 1), {})
+
+    def test_relative_landmark_covariance_cancels_shared_global_uncertainty(self):
+        """Shared translation and rotation uncertainty need not obscure local tag geometry.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks full cross covariance cancels a large common global gauge error.
+        """
+        ekf = EkfSlam()
+        ekf.update_landmark(7, 2, 0)
+        ekf.P = np.diag([0, 0, 0, 0.0004, 0.0004])
+        for gauge in ([1, 0, 0, 1, 0], [0, 1, 0, 0, 1], [0, 0, 1, 0, 2]):
+            vector = np.array(gauge, dtype=float)
+            ekf.P += np.outer(vector, vector)
+        self.assertGreater(np.linalg.eigvalsh(ekf.get_landmark_pose(7).covariance).max(), 1)
+        np.testing.assert_allclose(ekf.get_relative_landmark_covariance(7), np.eye(2) * 0.0004)
+        self.assertIsNone(ekf.get_relative_landmark_covariance(99))
+
+    def test_relative_covariance_matches_numerical_robot_frame_projection(self):
+        """Verify the covariance Jacobian at a nonzero heading using finite differences.
+
+        Args:
+            None.
+
+        Returns:
+            None. Tests robot yaw and both robot/tag translation contributions together.
+        """
+        ekf = EkfSlam()
+        ekf.update_landmark(7, 2, 0)
+        ekf.x = np.array([0.4, -0.6, 0.7, 1.3, 2.1])
+        matrix = np.random.default_rng(12).normal(size=(5, 5)) * 0.03
+        ekf.P = matrix @ matrix.T
+        def project(state):
+            c, s = math.cos(state[2]), math.sin(state[2])
+            return np.array([[c, s], [-s, c]]) @ (state[3:5] - state[:2])
+        steps = np.eye(5) * 1e-6
+        jacobian = np.column_stack([(project(ekf.x + step) - project(ekf.x - step)) / 2e-6
+                                    for step in steps])
+        expected = jacobian @ ekf.P @ jacobian.T
+        np.testing.assert_allclose(ekf.get_relative_landmark_covariance(7), expected, rtol=1e-8)
+
     def test_landmark_confidence_includes_covariance_cross_term(self):
         method = load_method('hw3/hw3/nodes/ekf_slam_node.py', 'EkfSlamNode',
                              '_landmark_sigma', {'math': math, 'np': np})
         covariance = np.array([[0.000625, 0.0005], [0.0005, 0.000625]])
-        node = Record(ekf=Record(get_landmark_pose=lambda tag: Record(covariance=covariance)))
+        node = Record(ekf=Record(get_relative_landmark_covariance=lambda tag: covariance))
         self.assertGreater(method(node, 7), 0.03)
         self.assertAlmostEqual(method(node, 7), math.sqrt(0.001125))
 
