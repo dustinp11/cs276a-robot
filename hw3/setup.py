@@ -36,6 +36,7 @@ setup(
             'record_data = hw3.scripts.record_data:main',
             'replay_data = hw3.scripts.replay_data:main',
             'export_map = hw3.scripts.export_map:main',
+            'publish_map = hw3.nodes.publish_map_node:main',
         ],
     },
 )

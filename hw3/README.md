@@ -233,6 +233,32 @@ Generated CSVs:
 - `ekf_slam_trajectory.csv`: `timestamp_s, x_m, y_m, theta_rad, sigma_x_m, sigma_y_m, sigma_theta_rad`
 - `ekf_slam_landmarks.csv`: `tag_id, x_m, y_m, sigma_x_m, sigma_y_m, cov_xy`
 
+### 3.9 Recording Rosbag and Viewing in RViz After Manual Mode
+
+There are two easy ways to record and view the landmarks and trajectory after running manual mode:
+
+#### Method 1: Live Rosbag Recording (Recommended)
+You can automatically record a ROS 2 bag during manual mode using the launch argument:
+```bash
+ros2 launch hw3 hw3_manual.launch.py record_bag:=true bag_name:=hw3_results/manual_square_bag
+```
+Or record in a separate terminal:
+```bash
+ros2 bag record /ekf_slam/landmarks /ekf_slam/trajectory /ekf_slam/pose /tf /tf_static -o hw3_results/manual_square_bag
+```
+After completing the manual run (Ctrl+C), replay the rosbag in a loop so it stays visible in RViz:
+```bash
+ros2 bag play hw3_results/manual_square_bag -l
+```
+Then start RViz (`rviz2`), set the Fixed Frame to `map`, and add `/ekf_slam/landmarks` (MarkerArray) and `/ekf_slam/trajectory` (Path).
+
+#### Method 2: Offline Map Publisher Node (No Rosbag Needed)
+If you already finished a run, the EKF node automatically saved the final landmarks and trajectory to `hw3_results/ekf_slam_landmarks.csv`. You can republish them directly to RViz with latched QoS:
+```bash
+ros2 run hw3 publish_map --landmarks hw3_results/ekf_slam_landmarks.csv --trajectory hw3_results/ekf_slam_trajectory.csv
+```
+This continually broadcasts the static `map` frame and publishes all landmarks, tag IDs, covariance ellipses, and trajectory points so you can open RViz anytime and inspect the map!
+
 ---
 
 ## 4. Verification Checklist & Expected Behavior
