@@ -58,7 +58,7 @@ class SquareNavigationNode(Node):
         for field in fields(NavigationPolicy):
             self.declare_parameter('navigation.' + field.name, field.default)
         # declare parameters
-        self.declare_parameter('navigation.square_size_ft', 4.0)
+        self.declare_parameter('navigation.square_size_ft', 6.0)
         self.declare_parameter('navigation.waypoint_tolerance_m', 0.01)
         self.declare_parameter('navigation.heading_tolerance_rad', 0.12)
         self.declare_parameter('navigation.pose_timeout_s', 0.60)

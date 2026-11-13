@@ -1,4 +1,4 @@
-"""Launch camera, 36h11 detection, estimation, and a calibrated four-foot square."""
+"""Launch camera, 36h11 detection, estimation, and a calibrated six-foot square."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -31,7 +31,7 @@ def _launch_arguments():
                               description='Start camera and 36h11 detector together'),
         DeclareLaunchArgument('auto_start', default_value='false',
                               description='Start motion automatically instead of waiting for the service'),
-        DeclareLaunchArgument('square_size_ft', default_value='4.0',
+        DeclareLaunchArgument('square_size_ft', default_value='6.0',
                               description='Square side length in feet'),
     ]
 

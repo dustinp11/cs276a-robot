@@ -103,7 +103,7 @@
 
     # Closed-Loop Square Navigation settings
     navigation:
-      square_size_ft: 4.0             # Side length of the square in feet (4 ft = 1.2192 m)
+      square_size_ft: 6.0             # Side length of the square in feet (6 ft = 1.8288 m)
       # pivots use turn_calibration rates; straight segments have angular velocity zero
       waypoint_tolerance_m: 0.01      # nominal distance tolerance (m); speed stays fixed
       heading_tolerance_rad: 0.12     # Heading tolerance for turn-in-place (~7 deg)
