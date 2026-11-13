@@ -5,7 +5,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32MultiArray
 
-from hw3.turn_calibration import read_turn_calibration
+from hw3.turn_calibration import read_forward_calibration, read_turn_calibration
 from hw3.velocity_mapping import VelocityMapper
 
 
@@ -25,7 +25,7 @@ class VelocityToMotorNode(Node):
         calibration = read_turn_calibration(self)
         if calibration is None:
             raise ValueError('HW3 mapping requires enabled, measured turn calibration.')
-        self.mapper = VelocityMapper(calibration)
+        self.mapper = VelocityMapper(calibration, read_forward_calibration(self))
         self.motor_pub = self.create_publisher(Float32MultiArray, '/motor_commands', 10)
         self.applied_pub = self.create_publisher(Twist, '/cmd_vel_applied', 10)
         self.subscription = self.create_subscription(Twist, '/cmd_vel', self.on_command, 10)

@@ -3,22 +3,47 @@
 ## Fixed-rate turning: calibrate, then run the square
 
 The navigation launch uses **straight travel and separate fixed-rate pivots**.
-For a positive (CCW) pivot, the mapper sends exactly `[L, R] = [-0.43, +0.43]`;
-for CW it sends `[+0.40, -0.40]`. Nonzero angular command magnitude does not change
+For a positive (CCW) pivot, the mapper sends exactly `[L, R] = [-0.40, +0.37]`;
+for CW correction it sends `[+0.37, -0.37]`. Nonzero angular command magnitude does not change
 the motor input. The HW2 package and its mapping remain unchanged. All square-control code lives in HW3.
 
-After calibration on the same surface, edit the single shared block in
+Measured motion settings are shared by navigation and mapping in
 `hw3/config/hw3_params.yaml`:
 
 ```yaml
 turn_calibration:
   enabled: false  # the navigation launch enables it for the relevant nodes
-  ccw_motor_input: 0.43
-  cw_motor_input: 0.40
-  ccw_radps: 1.7699113541  # 360 degrees in 3.55 seconds
-  cw_radps: 1.7501908934   # positive magnitude: 360 degrees in 3.59 seconds
+  ccw_left_input: -0.40
+  ccw_right_input: 0.37
+  cw_left_input: 0.37
+  cw_right_input: -0.37
+  ccw_radps: 1.5707963267948966  # approximately 90 degrees in 1 second
+  cw_radps: 1.5707963267948966   # approximately 90 degrees CW in 1 second
 ```
 
+Forward calibration uses **left +0.18, right +0.15**, measured at **2.03 m in
+10 seconds = 0.203 m/s**. Both motors hold these fixed values during forward
+travel; the old speed-dependent mapping and end-of-leg taper have been removed.
+The mapper publishes the same measured speed on `/cmd_vel_applied` for the EKF.
+
+```yaml
+forward_calibration:
+  left_input: 0.18
+  right_input: 0.15
+  speed_mps: 0.203
+```
+
+Nominal travel times are **4.504 seconds for 3 feet** and **9.009 seconds for
+6 feet**, excluding pauses and estimator-based remaining-distance corrections.
+The controller samples commands at 20 Hz, so stopping is quantized to a control
+interval. Distance acceptance is now 0.01 m in the prediction, rather than the
+previous 0.10 m shortfall allowance; this is not a physical accuracy guarantee.
+Reverse requests stop because this calibration only measures forward motion.
+
+The latest CCW calibration uses approximately 90 degrees in 1 second at
+`[-0.40, +0.37]`. CW correction uses approximately 90 degrees in 1 second at
+`[+0.37, -0.37]`. Both nominal rate magnitudes are `pi/2` rad/s. Main square
+corners always turn left; clockwise motion is only an optional overshoot correction.
 For each direction, calculate `rate_radps = total_angle_degrees * pi / 180 / seconds`.
 For a complete turn this is `2*pi / turn_seconds`. If using several rotations,
 include all rotations in the total angle. Measure both directions, including
@@ -89,12 +114,12 @@ The square now uses the following phases on each of four sides:
 - Missing, stale, or uncertain EKF data use nominal half-side travel instead.
   The pause always ends after its fixed duration; visible tags are not required.
   During the remainder, calibrated command travel and any usable relative-tag
-  displacement provide distance feedback. Maximum speed remains 0.12 m/s and
+  displacement provide distance feedback. Forward speed prediction is fixed at 0.203 m/s and
   angular commands remain zero. The existing total-leg command budget still
   advances to the corner turn if the distance estimate stays frozen.
 - Stop for one second, then command a single continuous nominal 90° left turn
   using the measured CCW rate. There is no 360° scan. The nominal quarter-turn
-  takes 0.8875 seconds at the current calibration, with control-tick quantization.
+  takes 1.0 second at the current calibration, with control-tick quantization.
 - Stop for another `navigation.turn_settle_s` (default 1 second), allowing delayed
   camera observations to arrive. A missing observation never extends this pause.
 - Prefer the same tag's face-normal orientation before and after turning to
@@ -106,7 +131,12 @@ The square now uses the following phases on each of four sides:
 - If no usable same-tag comparison exists, a fresh known-tag EKF correction may
   provide the next absolute side-heading error. If neither is available, continue
   from calibrated turn prediction without any extra corrective spin.
-- Optional corrections use the measured fixed CW/CCW inputs and total at most
+- Optional corrections use the measured fixed CW/CCW inputs. They never reduce
+  motor magnitude to request a small turn. Residual errors below
+  `navigation.corner_min_correction_rad` (default 10 degrees) are accepted without
+  motion because short pulses may fail to overcome the deadzone. A remaining
+  correction budget below that minimum is skipped rather than rounded upward.
+  Corrections total at most
   `navigation.corner_correction_limit_rad` (default 15 nominal degrees), in at most
   `navigation.corner_max_corrections` pulses (default 2). Pause after each pulse
   before considering another observation. Timer quantization may add up to one

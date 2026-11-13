@@ -17,7 +17,7 @@ from std_msgs.msg import Empty, String
 from std_srvs.srv import Trigger
 
 from hw3.square_navigation import NavigationState, SquareNavigator
-from hw3.turn_calibration import read_turn_calibration
+from hw3.turn_calibration import read_forward_calibration, read_turn_calibration
 from hw3.vision_navigation import NavigationPolicy
 from dataclasses import fields
 
@@ -36,6 +36,7 @@ class SquareNavigationNode(Node):
         """
         super().__init__('square_navigation_node')
         self.calibration = read_turn_calibration(self)
+        self.forward_calibration = read_forward_calibration(self)
         self._declare_parameters()
         self._create_navigator()
         self._create_publishers()
@@ -58,10 +59,7 @@ class SquareNavigationNode(Node):
             self.declare_parameter('navigation.' + field.name, field.default)
         # declare parameters
         self.declare_parameter('navigation.square_size_ft', 6.0)
-        self.declare_parameter('navigation.max_linear_velocity', 0.12)
-        self.declare_parameter('navigation.min_linear_velocity', 0.05)
-        self.declare_parameter('navigation.linear_kp', 0.60)
-        self.declare_parameter('navigation.waypoint_tolerance_m', 0.10)
+        self.declare_parameter('navigation.waypoint_tolerance_m', 0.01)
         self.declare_parameter('navigation.heading_tolerance_rad', 0.12)
         self.declare_parameter('navigation.pose_timeout_s', 0.60)
         self.declare_parameter('navigation.max_position_uncertainty_m', 0.40)
@@ -92,9 +90,7 @@ class SquareNavigationNode(Node):
             turn_pulse_rad=self.get_parameter('navigation.turn_pulse_rad').value,
             turn_settle_s=self.get_parameter('navigation.turn_settle_s').value,
             square_size_ft=self.get_parameter('navigation.square_size_ft').value,
-            max_linear_v_mps=self.get_parameter('navigation.max_linear_velocity').value,
-            min_linear_v_mps=self.get_parameter('navigation.min_linear_velocity').value,
-            linear_kp=self.get_parameter('navigation.linear_kp').value,
+            forward_calibration=self.forward_calibration,
             waypoint_tolerance_m=self.get_parameter('navigation.waypoint_tolerance_m').value,
             heading_tolerance_rad=self.get_parameter('navigation.heading_tolerance_rad').value,
             pose_timeout_s=self.get_parameter('navigation.pose_timeout_s').value,

@@ -5,7 +5,7 @@ from enum import Enum
 import math
 
 from .coordinates import wrap_angle
-from .turn_calibration import TurnCalibration
+from .turn_calibration import ForwardCalibration
 from .vision_navigation import NavigationPolicy, VisualFeedback, relative_tag_turn
 
 
@@ -56,19 +56,15 @@ class SquareNavigator:
 
     FEET_TO_METERS = 0.3048
 
-    def __init__(self, square_size_ft=6.0, max_linear_v_mps=0.12,
-                 min_linear_v_mps=0.05, linear_kp=0.60, waypoint_tolerance_m=0.10,
+    def __init__(self, square_size_ft=6.0, waypoint_tolerance_m=0.01,
                  heading_tolerance_rad=0.12, pose_timeout_s=0.60,
                  max_pos_uncertainty_m=0.40, max_heading_uncertainty_rad=0.40,
                  turn_calibration=None, turn_pulse_rad=math.pi / 12,
-                 turn_settle_s=1.0, policy=None):
+                 turn_settle_s=1.0, policy=None, forward_calibration=None):
         """Configure a stopped four-leg mission without supplying a surveyed map.
 
         Args:
             square_size_ft: Desired forward travel per side, in feet.
-            max_linear_v_mps: Maximum forward speed in meters per second.
-            min_linear_v_mps: Minimum forward speed in meters per second.
-            linear_kp: Gain converting remaining meters to requested speed.
             waypoint_tolerance_m: Allowed shortfall per leg in meters.
             heading_tolerance_rad: Allowed absolute side-heading error in radians.
             pose_timeout_s: Maximum EKF pose age in seconds.
@@ -78,13 +74,14 @@ class SquareNavigator:
             turn_pulse_rad: Maximum alignment correction pulse angle, in radians.
             turn_settle_s: Stopped settling time after motion, in seconds.
             policy: NavigationPolicy with optional vision freshness and phase timing settings.
+            forward_calibration: Fixed straight motor pair and measured speed in m/s.
 
         Returns:
             None. Mission start requires neither EKF messages nor visible tags.
         """
         self.square_size_m = float(square_size_ft) * self.FEET_TO_METERS
-        self.max_linear_v, self.min_linear_v = max_linear_v_mps, min_linear_v_mps
-        self.linear_kp, self.waypoint_tolerance_m = linear_kp, waypoint_tolerance_m
+        self.forward = forward_calibration or ForwardCalibration()
+        self.waypoint_tolerance_m = waypoint_tolerance_m
         self.heading_tolerance_rad, self.pose_timeout_s = heading_tolerance_rad, pose_timeout_s
         self.max_pos_uncertainty_m = max_pos_uncertainty_m
         self.max_heading_uncertainty_rad = max_heading_uncertainty_rad
@@ -103,14 +100,14 @@ class SquareNavigator:
         Returns:
             None. Raises ValueError for invalid limits.
         """
-        limits = (self.square_size_m, self.max_linear_v, self.min_linear_v, self.linear_kp,
+        limits = (self.square_size_m, self.forward.speed_mps,
                   self.waypoint_tolerance_m, self.heading_tolerance_rad, self.pose_timeout_s,
                   self.max_pos_uncertainty_m, self.max_heading_uncertainty_rad,
                   self.turn_pulse_rad, self.turn_settle_s)
         if not all(math.isfinite(v) and v > 0 for v in limits):
             raise ValueError('Navigation limits must be finite and positive.')
-        if self.min_linear_v > self.max_linear_v or self.turn_pulse_rad > math.pi / 2:
-            raise ValueError('Invalid speed range or turn pulse larger than 90 degrees.')
+        if self.turn_pulse_rad > math.pi / 2:
+            raise ValueError('Turn pulses must not exceed 90 nominal degrees.')
 
     def reset(self):
         """Clear the mission, including visual references and timed-motion budgets.
@@ -313,10 +310,6 @@ class SquareNavigator:
         self.midpoint_source = 'not reached'
         self.progress_correction_m = 0.0
 
-    def _forward_speed(self, remaining):
-        """Taper forward speed toward a distance target in meters, with zero steering."""
-        return max(self.min_linear_v, min(self.max_linear_v, self.linear_kp * remaining))
-
     def _first_half(self, now):
         """Drive half the nominal side using command prediction, then stop once."""
         self.progress = self.drive_used
@@ -325,7 +318,7 @@ class SquareNavigator:
             self._transition(NavigationState.MIDPOINT_PAUSE, now)
             return self._output('Half-side reached; stopped for camera processing')
         return self._output('Driving nominal first half; no steering corrections',
-                            linear=self._forward_speed(remaining))
+                            linear=self.forward.speed_mps)
 
     def _midpoint_estimate(self, now):
         """Select a fresh post-stop EKF displacement or retain nominal half-side travel."""
@@ -376,7 +369,7 @@ class SquareNavigator:
             self._transition(NavigationState.STOPPING, now)
             return self._output('Leg travel target or nominal budget reached; stopping before quarter-turn')
         return self._output('Driving remaining distance on unchanged side heading',
-                            linear=self._forward_speed(remaining))
+                            linear=self.forward.speed_mps)
 
     def _settle(self, now):
         """Stop before capturing optional tag references and beginning a direct left turn."""
@@ -406,7 +399,7 @@ class SquareNavigator:
 
     def _turn_corner(self, now):
         """Command a nominal 90-degree left turn, independently of the learned map."""
-        if self.corner_used >= math.pi / 2 or now - self.phase_started >= self.policy.corner_timeout_s:
+        if self.corner_used + 1e-9 >= math.pi / 2 or now - self.phase_started >= self.policy.corner_timeout_s:
             self._transition(NavigationState.CORNER_PAUSE, now)
             return self._output('Quarter-turn finished; stopped for camera processing')
         return self._output('Direct nominal 90-degree left turn', angular=self.turn_calibration.rate(1))
@@ -447,17 +440,19 @@ class SquareNavigator:
 
         Returns:
             Stopped NavigationOutput. Corrections share a small total nominal angle
-            budget and a maximum count; neither missing tags nor noisy feedback block a leg.
+            budget and a maximum count. Subminimum angles are skipped, including a
+            remaining budget too small to move the robot. Tags never block a leg.
         """
         if now - self.phase_started < self.turn_settle_s:
             return self._output('Corner pause; allowing optional camera observations to arrive')
         error = self._corner_error(now)
         self.corner_residual = error
         remaining = self.policy.corner_correction_limit_rad - self.correction_used
-        if (error is None or abs(error) <= self.heading_tolerance_rad or remaining <= 0
-                or self.correction_count >= self.policy.corner_max_corrections):
+        minimum = max(self.policy.corner_min_correction_rad, self.heading_tolerance_rad)
+        angle = min(abs(error), self.turn_pulse_rad, remaining) if error is not None else 0.0
+        if angle + 1e-9 < minimum or self.correction_count >= self.policy.corner_max_corrections:
             return self._finish_corner(now)
-        self.correction_goal = self.correction_used + min(abs(error), self.turn_pulse_rad, remaining)
+        self.correction_goal = self.correction_used + angle
         self.correction_omega = self.turn_calibration.rate(error)
         self.correction_count += 1
         self._transition(NavigationState.CORRECTING, now)

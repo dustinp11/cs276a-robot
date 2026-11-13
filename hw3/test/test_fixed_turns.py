@@ -10,7 +10,7 @@ import unittest
 
 import numpy as np
 
-from hw3.turn_calibration import TurnCalibration
+from hw3.turn_calibration import ForwardCalibration, TurnCalibration, read_forward_calibration
 from hw3.velocity_mapping import VelocityMapper
 from hw3.vision_navigation import NavigationPolicy, VisualFeedback, forward_wall_clearance, tag_normal_yaw, relative_tag_turn
 from hw3.ekf_slam import EkfSlam
@@ -45,7 +45,7 @@ def load_method(path, class_name, method_name, namespace=None):
 
 class TestFixedTurns(unittest.TestCase):
     def setUp(self):
-        self.calibration = TurnCalibration(0.3, 0.3, 0.6, 0.5)
+        self.calibration = TurnCalibration(-0.3, 0.3, 0.3, -0.3, 0.6, 0.5)
 
     def test_direction_specific_fixed_rates_and_inputs(self):
         for request in (0.001, 0.2, 2.0):
@@ -56,19 +56,53 @@ class TestFixedTurns(unittest.TestCase):
         self.assertEqual(self.calibration.motors(0), (0, 0))
 
     def test_measured_direction_specific_motor_inputs(self):
-        calibration = TurnCalibration(0.43, 0.40, 2 * math.pi / 3.55, 2 * math.pi / 3.59)
+        calibration = TurnCalibration(-0.40, 0.37, 0.37, -0.37, math.pi / 2, math.pi / 2)
         mapper = VelocityMapper(calibration)
         ccw, cw = mapper.map_command(0, 1), mapper.map_command(0, -1)
-        self.assertEqual((ccw.left, ccw.right), (-0.43, 0.43))
-        self.assertEqual((cw.left, cw.right), (0.40, -0.40))
-        self.assertAlmostEqual(ccw.angular_radps * 3.55, 2 * math.pi)
-        self.assertAlmostEqual(cw.angular_radps * 3.59, -2 * math.pi)
+        self.assertEqual((ccw.left, ccw.right), (-0.40, 0.37))
+        self.assertEqual((cw.left, cw.right), (0.37, -0.37))
+        self.assertAlmostEqual(ccw.angular_radps * 1.0, math.pi / 2)
+        self.assertAlmostEqual(cw.angular_radps * 1.0, -math.pi / 2)
+
+    def test_measured_asymmetric_quarter_turn_lasts_one_second(self):
+        """Exercise the nominal 90-degree command at the 20 Hz control frequency.
+
+        Args:
+            None.
+
+        Returns:
+            None. Confirms exactly one second of [-0.40, +0.37] command prediction.
+        """
+        calibration = TurnCalibration(-0.40, 0.37, 0.37, -0.37, math.pi / 2, math.pi / 2)
+        mapper = VelocityMapper(calibration)
+        nav = SquareNavigator(turn_calibration=calibration)
+        nav.start()
+        nav._transition(NavigationState.STOPPING, 1)
+        nav._begin_corner(1)
+        moving_ticks = 0
+        for tick in range(60):
+            cmd = nav.step(1 + tick * 0.05)
+            if cmd.angular_omega_radps:
+                moving_ticks += 1
+                motors = mapper.map_command(0, cmd.angular_omega_radps)
+                self.assertEqual((motors.left, motors.right), (-0.40, 0.37))
+                self.assertAlmostEqual(motors.angular_radps, math.pi / 2)
+            if cmd.state == NavigationState.CORNER_PAUSE:
+                break
+        self.assertEqual(moving_ticks, 20)
+        self.assertAlmostEqual(nav.corner_used, math.pi / 2)
+
+    def test_turn_calibration_rejects_wrong_direction_signs(self):
+        for motors in [(0.4, 0.37, 0.4, -0.4), (-0.4, -0.37, 0.4, -0.4),
+                       (-0.4, 0.37, -0.4, 0.4), (-0.4, 0.6, 0.4, -0.4)]:
+            with self.assertRaises(ValueError):
+                TurnCalibration(*motors, math.pi / 2, 1.75)
 
     def test_unmeasured_or_invalid_calibration_is_rejected(self):
         for values in [(0.3, 0.3, 0, 0), (0.6, 0.3, 0.5, 0.5),
                        (0.3, 0.6, 0.5, 0.5), (0.3, 0.3, -1, 1), (0.3, 0.3, math.nan, 1)]:
             with self.assertRaises(ValueError):
-                TurnCalibration(*values)
+                TurnCalibration(-values[0], values[0], values[1], -values[1], *values[2:])
         nav = SquareNavigator()
         self.assertFalse(nav.start()[0])
 
@@ -382,6 +416,52 @@ class TestFixedTurns(unittest.TestCase):
         self.assertEqual(nav.correction_count, 1)
         self.assertEqual(nav.corner_source, 'same-tag face orientation')
 
+    def corner_with_measured_turn(self, angle_degrees):
+        """Prepare a fresh same-tag quarter-turn measurement without a global map."""
+        nav = self.prepared(NavigationState.STOPPING)
+        nav.update_vision(2, [[7, 2, 1]], [], None, [[7, 0.4]])
+        nav._begin_corner(2)
+        nav.corner_used = math.pi / 2
+        nav._transition(NavigationState.CORNER_PAUSE, 3)
+        nav.update_vision(3.2, [[7, 2, 1]], [], None, [[7, 0.4 - math.radians(angle_degrees)]])
+        return nav
+
+    def test_sub_ten_degree_corrections_are_skipped_in_both_directions(self):
+        for observed in (81, 85, 89, 91, 95, 99):
+            nav = self.corner_with_measured_turn(observed)
+            cmd = nav.step(3.2)
+            self.assertEqual(cmd.state, NavigationState.DRIVING)
+            self.assertEqual(cmd.angular_omega_radps, 0)
+            self.assertEqual(nav.correction_count, 0)
+
+    def test_ten_degree_overshoot_uses_right_turn_only_for_correction(self):
+        """An actionable overshoot selects the measured clockwise pair.
+
+        Args:
+            None.
+
+        Returns:
+            None. Confirms clockwise direction, full fixed inputs, and nominal rate.
+        """
+        nav = self.corner_with_measured_turn(100)
+        nav.turn_calibration = TurnCalibration(-0.4, 0.37, 0.37, -0.37, math.pi / 2, math.pi / 2)
+        nav.step(3.2)
+        self.assertEqual(nav.state, NavigationState.CORRECTING)
+        cmd = nav.step(3.25)
+        self.assertLess(cmd.angular_omega_radps, 0)
+        command = VelocityMapper(nav.turn_calibration).map_command(0, cmd.angular_omega_radps)
+        self.assertEqual((command.left, command.right), (0.37, -0.37))
+        self.assertAlmostEqual(abs(command.angular_radps), math.pi / 2)
+        self.assertAlmostEqual(nav.correction_goal, math.radians(10))
+
+    def test_remaining_correction_budget_below_ten_degrees_is_skipped(self):
+        nav = self.corner_with_measured_turn(70)
+        nav.correction_used = math.radians(6)
+        cmd = nav.step(3.2)
+        self.assertEqual(cmd.state, NavigationState.DRIVING)
+        self.assertEqual(cmd.angular_omega_radps, 0)
+        self.assertEqual(nav.correction_count, 0)
+
     def test_changed_tag_without_map_feedback_does_not_trigger_correction(self):
         nav = self.prepared(NavigationState.STOPPING)
         nav.update_vision(2, [[7, 2, 1]], [], None, [[7, -0.4]])
@@ -480,6 +560,14 @@ class TestFixedTurns(unittest.TestCase):
         self.assertEqual(cmd.linear_v_mps, 0)
 
     def test_visual_progress_overrides_bad_ekf_distance(self):
+        """Verify visual progress overrides bad ekf distance.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify measured calibration and controller behavior.
+        """
         nav = self.prepared(NavigationState.DRIVING)
         nav.vision.begin_leg(0)
         nav.update_vision(1, [[1, 3, 0], [3, 3, 1]], [1, 3], None)
@@ -487,6 +575,10 @@ class TestFixedTurns(unittest.TestCase):
         nav.update_vision(1.1, [[1, 1.2, 0], [3, 1.2, 1]], [1, 3], None)
         cmd = nav.step(1.1)
         self.assertAlmostEqual(nav.progress, 1.8)
+        self.assertGreater(cmd.linear_v_mps, 0)
+        nav.update_ekf_pose(0.1, 0, 0, 0.01, 0.01, 1.2)
+        nav.update_vision(1.2, [[1, 1.175, 0], [3, 1.175, 1]], [1, 3], None)
+        cmd = nav.step(1.2)
         self.assertEqual(cmd.linear_v_mps, 0)
         self.assertEqual(nav.state, NavigationState.STOPPING)
 
@@ -652,7 +744,7 @@ class TestFixedMapper(unittest.TestCase):
         twist = lambda: Record(linear=Record(x=0.0), angular=Record(z=0.0))
         method = load_method('hw3/hw3/nodes/velocity_mapping.py', 'VelocityToMotorNode',
                              'on_command', {'Twist': twist, 'Float32MultiArray': Record})
-        node = Record(mapper=VelocityMapper(TurnCalibration(0.3, 0.3, 0.6, 0.5)),
+        node = Record(mapper=VelocityMapper(TurnCalibration(-0.3, 0.3, 0.3, -0.3, 0.6, 0.5)),
                       motor_pub=Record(publish=motors.append),
                       applied_pub=Record(publish=applied.append))
         for request in (0.01, -0.01, 0):
@@ -662,21 +754,86 @@ class TestFixedMapper(unittest.TestCase):
         self.assertEqual([m.data for m in motors], [[-0.3, 0.3], [0.3, -0.3], [0, 0]])
         self.assertEqual([m.angular.z for m in applied], [0.6, -0.5, 0])
 
-    def test_straight_motion_uses_existing_linear_calibration(self):
-        mapper = VelocityMapper(TurnCalibration(0.3, 0.3, 0.6, 0.5))
-        command = mapper.map_command(0.2, 0.7)
-        self.assertAlmostEqual(command.left, 0.08 + 0.2 / 1.772915625)
-        self.assertEqual(command.left, command.right)
-        self.assertEqual(command.angular_radps, 0)
-        self.assertAlmostEqual(command.linear_mps, 0.2)
+    def test_forward_motion_uses_fixed_trimmed_inputs_at_all_requested_speeds(self):
+        mapper = VelocityMapper(TurnCalibration(-0.3, 0.3, 0.3, -0.3, 0.6, 0.5))
+        for requested in (0.01, 0.12, 0.203, 10):
+            command = mapper.map_command(requested, 0.7)
+            self.assertEqual((command.left, command.right), (0.18, 0.15))
+            self.assertEqual(command.angular_radps, 0)
+            self.assertEqual(command.linear_mps, 0.203)
 
-    def test_saturation_and_nonfinite_commands(self):
-        mapper = VelocityMapper(TurnCalibration(0.3, 0.3, 0.6, 0.5))
-        command = mapper.map_command(10, 0)
-        self.assertEqual(command.left, 0.5)
-        self.assertAlmostEqual(command.linear_mps, (0.5 - 0.08) * 1.772915625)
-        self.assertEqual(mapper.map_command(math.nan, 1).left, 0)
-        self.assertEqual(mapper.map_command(1, math.inf).right, 0)
+    def test_nonfinite_or_uncalibrated_reverse_requests_stop(self):
+        mapper = VelocityMapper(TurnCalibration(-0.3, 0.3, 0.3, -0.3, 0.6, 0.5))
+        for linear, angular in [(math.nan, 1), (1, math.inf), (-0.203, 0), (0, 0)]:
+            command = mapper.map_command(linear, angular)
+            self.assertEqual((command.left, command.right, command.linear_mps, command.angular_radps),
+                             (0, 0, 0, 0))
+
+    def test_measured_speed_matches_nominal_three_foot_command_time(self):
+        """Verify measured speed matches nominal three foot command time.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify measured calibration and controller behavior.
+        """
+        nav = SquareNavigator(turn_calibration=TurnCalibration(-0.3, 0.3, 0.3, -0.3, 0.6, 0.5))
+        nav.start()
+        commanded_distance = 0.0
+        previous = 0.0
+        for tick in range(150):
+            commanded_distance += previous * 0.05
+            cmd = nav.step(1 + tick * 0.05)
+            self.assertIn(cmd.linear_v_mps, (0, 0.203))
+            previous = cmd.linear_v_mps
+            if nav.state == NavigationState.MIDPOINT_PAUSE:
+                break
+        self.assertEqual(nav.state, NavigationState.MIDPOINT_PAUSE)
+        self.assertAlmostEqual(commanded_distance, 0.9144, delta=0.203 * 0.05)
+        self.assertAlmostEqual(0.9144 / nav.forward.speed_mps, 4.5044334975)
+
+    def test_mapper_publishes_actual_calibrated_speed_for_ekf(self):
+        """The applied command must describe the measured motor pair, not the request.
+
+        Args:
+            None.
+
+        Returns:
+            None. Confirms the EKF receives 0.203 m/s for the exact trimmed motor inputs.
+        """
+        motors, applied = [], []
+        twist = lambda: Record(linear=Record(x=0.0), angular=Record(z=0.0))
+        method = load_method('hw3/hw3/nodes/velocity_mapping.py', 'VelocityToMotorNode',
+                             'on_command', {'Twist': twist, 'Float32MultiArray': Record})
+        node = Record(mapper=VelocityMapper(TurnCalibration(-0.3, 0.3, 0.3, -0.3, 0.6, 0.5)),
+                      motor_pub=Record(publish=motors.append), applied_pub=Record(publish=applied.append))
+        request = twist()
+        request.linear.x = 0.05
+        method(node, request)
+        self.assertEqual(motors[0].data, [0.18, 0.15])
+        self.assertEqual(applied[0].linear.x, 0.203)
+
+    def test_forward_calibration_is_shared_and_validated(self):
+        """Verify forward calibration is shared and validated.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify measured calibration and controller behavior.
+        """
+        values = {'forward_calibration.left_input': 0.2, 'forward_calibration.right_input': 0.16,
+                  'forward_calibration.speed_mps': 0.25}
+        node = Record(declare_parameter=lambda name, default: Record(value=values.get(name, default)))
+        calibration = read_forward_calibration(node)
+        mapper = VelocityMapper(TurnCalibration(-0.3, 0.3, 0.3, -0.3, 0.6, 0.5), calibration)
+        nav = SquareNavigator(forward_calibration=calibration)
+        self.assertEqual(mapper.map_command(0.1, 0).linear_mps, nav.forward.speed_mps)
+        self.assertEqual(nav.forward.speed_mps, 0.25)
+        for values in [(0.6, 0.15, 0.203), (0.18, 0.15, 0), (0.18, math.nan, 0.203)]:
+            with self.assertRaises(ValueError):
+                ForwardCalibration(*values)
 
 
 class TestHw3SerialDriver(unittest.TestCase):

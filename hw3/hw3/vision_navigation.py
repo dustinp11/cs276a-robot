@@ -15,6 +15,7 @@ class NavigationPolicy:
 
     vision_timeout_s: float = 1.0
     corner_timeout_s: float = 18.0
+    corner_min_correction_rad: float = math.pi / 18
     corner_correction_limit_rad: float = math.pi / 12
     corner_max_corrections: int = 2
     drive_budget_factor: float = 1.25
@@ -34,6 +35,8 @@ class NavigationPolicy:
             raise ValueError('Navigation vision limits must be finite and positive.')
         if self.drive_budget_factor < 1:
             raise ValueError('Drive budget factor must be at least one.')
+        if self.corner_min_correction_rad > self.corner_correction_limit_rad:
+            raise ValueError('Minimum useful correction cannot exceed the total correction budget.')
         if self.corner_correction_limit_rad > math.pi / 4:
             raise ValueError('Optional corner corrections must total at most 45 nominal degrees.')
         if int(self.corner_max_corrections) != self.corner_max_corrections:
