@@ -71,8 +71,8 @@ class SquareNavigator:
             waypoint_tolerance_m: Allowed shortfall per leg in meters.
             heading_tolerance_rad: Allowed absolute side-heading error in radians.
             pose_timeout_s: Maximum EKF pose age in seconds.
-            max_pos_uncertainty_m: Maximum position standard deviation in meters.
-            max_heading_uncertainty_rad: Maximum yaw standard deviation in radians.
+            max_pos_uncertainty_m: Confidence limit for optional EKF corrections, in meters.
+            max_heading_uncertainty_rad: Confidence limit for optional EKF yaw corrections, in radians.
             turn_calibration: Measured direction-specific motor inputs and rad/s rates.
             turn_pulse_rad: Maximum alignment correction pulse angle, in radians.
             turn_settle_s: Stopped settling time after motion, in seconds.
@@ -132,6 +132,7 @@ class SquareNavigator:
         self.scan_stage_index, self.scan_ready_at = 0, 0.0
         self.last_command, self.last_tick = (0.0, 0.0), None
         self.phase_started = None
+        self.navigation_yaw, self.heading_time = 0.0, -math.inf
         self.turn = None
         self.vision = VisualFeedback(self.policy)
 
@@ -173,6 +174,9 @@ class SquareNavigator:
         if self.is_active and not self.origin_latched:
             self.x0_slam, self.y0_slam, self.theta0_slam = self.latest_slam_pose
             self.origin_latched = True
+            self.navigation_yaw, self.heading_time = theta_slam, stamp_s
+        elif self.vision.fresh(stamp_s) and self._uncertainty_ok():
+            self.navigation_yaw, self.heading_time = theta_slam, stamp_s
 
     def slam_to_nav_frame(self, x_slam, y_slam, theta_slam):
         """Return (x_m, y_m, yaw_rad) in the initial robot-centered frame."""
@@ -192,7 +196,7 @@ class SquareNavigator:
 
     def _heading_error(self):
         """Return wrapped error to the fixed side heading, never to a moving waypoint."""
-        return wrap_angle(self._heading() - self.latest_slam_pose[2])
+        return wrap_angle(self._heading() - self.navigation_yaw)
 
     def _ekf_progress(self):
         """Project the current EKF position onto this leg's fixed forward axis."""
@@ -213,13 +217,24 @@ class SquareNavigator:
         return None
 
     def _uncertainty_ok(self):
-        """Check EKF confidence for visually verified phases after the first scan."""
+        """Select trustworthy optional EKF heading corrections without blocking motion."""
         return (self.latest_uncertainty[0] <= self.max_pos_uncertainty_m
                 and self.latest_uncertainty[1] <= self.max_heading_uncertainty_rad)
 
     def _account_motion(self, now):
-        """Bound command accounting by the motor watchdog; never assume a fixed tick."""
+        """Integrate travel and fallback heading without requiring visual observations.
+
+        Args:
+            now: Current ROS controller time in seconds.
+
+        Returns:
+            None. Integrates each held-command interval once, limited by the motor
+            watchdog; an EKF heading correction already covers time up to its stamp.
+        """
         dt = 0.0 if self.last_tick is None else max(0.0, min(now - self.last_tick, 0.15))
+        heading_start = max(self.last_tick if self.last_tick is not None else now, self.heading_time)
+        heading_dt = max(0.0, min(now - heading_start, 0.15))
+        self.navigation_yaw = wrap_angle(self.navigation_yaw + self.last_command[1] * heading_dt)
         self.drive_used += abs(self.last_command[0]) * dt
         if self.state == NavigationState.SCANNING:
             self.scan_used += abs(self.last_command[1]) * dt
@@ -258,9 +273,6 @@ class SquareNavigator:
         problem = self._pose_problem(now)
         if problem and self.state != NavigationState.WAITING_FOR_POSE:
             return self._fail(problem)
-        if self.side_index > 0 and self.state in (NavigationState.DRIVING, NavigationState.ALIGNING):
-            if not self._uncertainty_ok():
-                return self._fail('Pose uncertainty exceeds navigation limits')
         handlers = {NavigationState.WAITING_FOR_POSE: self._wait_for_start,
                     NavigationState.DRIVING: self._drive, NavigationState.STOPPING: self._settle,
                     NavigationState.SCANNING: self._scan, NavigationState.LOCALIZING: self._localize,
@@ -269,7 +281,7 @@ class SquareNavigator:
 
     def _wait_for_start(self, now):
         """Begin the first leg on a fresh pose heartbeat without any landmark prerequisite."""
-        if now - self.phase_started > self.policy.localization_timeout_s:
+        if now - self.phase_started > self.policy.pose_wait_timeout_s:
             return self._fail('Initial estimator pose timed out')
         if self._pose_problem(now):
             return self._output('Waiting for initial estimator pose; tags are optional')
@@ -295,23 +307,18 @@ class SquareNavigator:
         Returns:
             NavigationOutput for forward motion, arrival, or terminal feedback failure.
         """
-        if self.side_index > 0 and not self.vision.fresh(now):
-            return self._fail('Lost fresh tag observations while driving')
         if self.vision.wall_too_close(now):
             return self._fail('Visible wall inside forward clearance limit')
-        if self.drive_used > self.policy.drive_budget_factor * self.square_size_m:
-            return self._fail('Straight command budget exhausted before visual arrival')
-        self.progress = self.drive_used if self.side_index == 0 else self._ekf_progress()
+        self.progress = self.drive_used
         if now - self.vision.progress_stamp <= self.policy.vision_timeout_s:
             self.progress = self.vision.extrapolated_progress(self._ekf_progress())
         remaining = self.square_size_m - self.progress
-        if remaining <= self.waypoint_tolerance_m:
+        budget_reached = self.drive_used >= self.policy.drive_budget_factor * self.square_size_m
+        if remaining <= self.waypoint_tolerance_m or budget_reached:
             self._transition(NavigationState.STOPPING, now)
-            return self._output('Six-foot leg reached; stopping before scan')
-        if abs(self._heading_error()) > self.policy.drive_heading_limit_rad:
-            return self._fail('Heading drift exceeded limit during straight travel')
+            return self._output('Leg travel target or nominal budget reached; stopping before scan')
         speed = max(self.min_linear_v, min(self.max_linear_v, self.linear_kp * remaining))
-        source = 'timed first-leg prediction' if self.side_index == 0 else 'EKF prediction'
+        source = 'calibrated command prediction; vision optional'
         if now - self.vision.progress_stamp <= self.policy.vision_timeout_s:
             source = 'visual progress feedback'
         return self._output('Driving straight with ' + source, linear=speed)
@@ -340,7 +347,7 @@ class SquareNavigator:
             return self._output('Scan paused; allowing camera frames to arrive')
         if self.scan_stage_index >= math.ceil(2 * math.pi / self.policy.scan_step_rad):
             self._transition(NavigationState.LOCALIZING, now)
-            return self._output('Staged 360 scan complete; waiting for visual localization')
+            return self._output('Staged 360 scan complete; settling with optional vision updates')
         goal = min(2 * math.pi, (self.scan_stage_index + 1) * self.policy.scan_step_rad)
         if self.scan_used >= goal:
             return self._pause_scan_stage(now)
@@ -353,50 +360,45 @@ class SquareNavigator:
         return self._output(f'Scan stage {self.scan_stage_index} complete; stopped for camera')
 
     def _localize(self, now):
-        """Require fresh stable mapped-tag observations after the scan, then align."""
-        if now - self.phase_started > self.policy.localization_timeout_s:
-            return self._fail('Post-scan visual localization timed out')
-        if not self._uncertainty_ok() or not self.vision.stable(now, self.phase_started + self.turn_settle_s):
-            return self._output('Stopped; gathering stable post-scan known-tag updates')
+        """Settle for a fixed duration, accepting optional vision without requiring tags."""
+        if now - self.phase_started < self.turn_settle_s:
+            return self._output('Post-scan settle; tag observations are optional')
         self.side_index += 1
         self.turn = None
         self._transition(NavigationState.ALIGNING, now)
-        return self._output('Localized; aligning to initial heading plus 90-degree side increments')
+        return self._output('Aligning to next absolute side heading using the best available estimate')
 
     def _align(self, now):
-        """Apply bounded fixed-rate pulses and verify alignment with stopped vision.
+        """Align with calibrated prediction and optional visual heading corrections.
 
         Args:
             now: ROS controller time in seconds.
 
         Returns:
-            NavigationOutput; no leg begins on timed prediction alone.
+            NavigationOutput. Absent tags never block a leg; exhausted correction
+            budgets continue best effort without claiming visual verification.
         """
-        if now - self.phase_started > self.policy.localization_timeout_s + 10:
-            return self._fail('Alignment or visual verification timed out')
+        if now - self.phase_started > self.policy.alignment_timeout_s:
+            return self._finish_alignment(now, 'Alignment timeout; continuing best effort')
         if self.turn is None:
             self.turn = FixedTurnPulse(self.turn_calibration, abs(self._heading_error()),
                                        self.turn_pulse_rad, self.turn_settle_s)
         omega, message = self.turn.step(now, self._heading_error(), self.heading_tolerance_rad)
         if self.turn.exhausted:
-            return self._fail('Alignment angle budget exhausted')
-        if omega and not self.vision.fresh(now):
-            self.turn.pause(now)
-            return self._output('Stopped alignment; waiting for fresh tags')
-        verified = self.turn.done and omega == 0 and abs(self._heading_error()) <= self.heading_tolerance_rad
-        if verified and self.vision.stable(now, max(self.phase_started, self.turn.ready_at)):
-            return self._finish_alignment(now)
+            return self._finish_alignment(now, 'Alignment correction budget exhausted; continuing best effort')
+        if self.turn.done and omega == 0 and abs(self._heading_error()) <= self.heading_tolerance_rad:
+            return self._finish_alignment(now, 'Aligned by best available heading; vision optional')
         return self._output(message, angular=omega)
 
-    def _finish_alignment(self, now):
-        """Finish four sides at the initial heading or begin the next fixed-heading leg."""
+    def _finish_alignment(self, now, message):
+        """Finish four sides or begin the next leg without requiring a visible tag."""
         self.turn = None
         if self.side_index == 4:
             self.state, self.is_active = NavigationState.COMPLETED, False
-            return self._output('Four legs and scans complete; final heading visually verified')
+            return self._output('Four legs and scans complete. ' + message)
         self.current_wp_idx = self.side_index + 1
         self._begin_leg(now)
-        return self._output('Next side visually aligned; ready to drive')
+        return self._output(message)
 
 
 class FixedTurnPulse:

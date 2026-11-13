@@ -168,6 +168,45 @@ class TestFixedTurns(unittest.TestCase):
         self.assertLess(abs(math.atan2(math.sin(yaw), math.cos(yaw))), nav.heading_tolerance_rad)
         self.assertLess(math.hypot(x, y), 0.4)
 
+    def test_complete_square_with_no_tags_and_unreliable_ekf(self):
+        """Run all four sides and scans without any visual observations.
+
+        Args:
+            None.
+
+        Returns:
+            None. Verifies completion, no tag waits, four scans, and nominal command closure.
+        """
+        nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
+        nav.start()
+        x = y = yaw = 0.0
+        scans, previous = 0, None
+        for tick in range(8000):
+            now = 1 + tick * 0.05
+            nav.update_ekf_pose(0, 0, 0, 10, 10, now)
+            cmd = nav.step(now)
+            scans += int(cmd.state == NavigationState.SCANNING and previous != cmd.state)
+            previous = cmd.state
+            self.assertFalse(cmd.linear_v_mps and cmd.angular_omega_radps)
+            x += cmd.linear_v_mps * math.cos(yaw) * 0.05
+            y += cmd.linear_v_mps * math.sin(yaw) * 0.05
+            yaw += cmd.angular_omega_radps * 0.05
+            if not nav.is_active:
+                break
+        self.assertEqual(nav.state, NavigationState.COMPLETED, nav.stop_reason)
+        self.assertEqual(scans, 4)
+        self.assertEqual(nav.vision.valid_stamp, -math.inf)
+        self.assertLess(math.hypot(x, y), 0.4)
+        self.assertLess(abs(math.atan2(math.sin(yaw), math.cos(yaw))), nav.heading_tolerance_rad)
+
+    def test_one_known_tag_can_correct_heading_without_a_tag_count_gate(self):
+        nav = self.prepared(NavigationState.ALIGNING)
+        nav.side_index = 1
+        nav.update_vision(1, [[7, 2, 0]], [7], None)
+        nav.update_ekf_pose(0, 0, math.pi / 2, 0.01, 0.01, 1.05)
+        self.assertAlmostEqual(nav.navigation_yaw, math.pi / 2)
+        self.assertEqual(nav.step(1.05).state, NavigationState.DRIVING)
+
     def prepared(self, state):
         """Create an active controller with a known initial pose and requested phase."""
         nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
@@ -183,27 +222,27 @@ class TestFixedTurns(unittest.TestCase):
         self.assertEqual(nav.state, NavigationState.STOPPED)
         self.assertFalse(nav.start()[0])
 
-    def test_frozen_heading_exhausts_alignment_budget(self):
-        """Fresh vision cannot authorize unlimited spinning on a frozen heading.
+    def test_inconsistent_visual_heading_has_bounded_best_effort_alignment(self):
+        """Conflicting heading feedback cannot block the next leg indefinitely.
 
         Args:
             None.
 
         Returns:
-            None. Verifies terminal zero command after consuming the bounded turn budget.
+            None. Verifies bounded correction angle and explicit prediction-only continuation.
         """
         nav = self.prepared(NavigationState.ALIGNING)
         nav.side_index = 1
-        for tick in range(400):
+        for tick in range(500):
             now = 1 + tick * 0.05
             nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, now)
             self.feed_vision(nav, now, (0, 0, 0))
             result = nav.step(now)
-            if not nav.is_active:
+            if nav.state == NavigationState.DRIVING:
                 break
-        self.assertEqual(nav.state, NavigationState.STOPPED)
+        self.assertEqual(nav.state, NavigationState.DRIVING)
         self.assertEqual(result.angular_omega_radps, 0)
-        self.assertIn('budget', nav.stop_reason)
+        self.assertIn('best effort', result.status_message)
 
     def test_scan_has_eight_45_degree_stages_and_half_second_pauses(self):
         """Check the actual scan commands at the robot's nominal 20 Hz control rate.
@@ -264,27 +303,28 @@ class TestFixedTurns(unittest.TestCase):
         self.assertEqual(command.angular_omega_radps, 0)
         self.assertIn('time limit', nav.stop_reason)
 
-    def test_timed_scan_cannot_authorize_drive_without_vision(self):
-        """A nominal full rotation ends stopped and fails if localization is unavailable.
+    def test_scan_and_alignment_continue_without_vision(self):
+        """A tag-free scan proceeds through finite settling and calibrated alignment.
 
         Args:
             None.
 
         Returns:
-            None. Verifies bounded scan command angle and post-scan timeout.
+            None. Checks that absent observations never prevent the second side.
         """
         nav = self.prepared(NavigationState.SCANNING)
-        for tick in range(500):
+        for tick in range(800):
             now = 1 + tick * 0.05
-            nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, now)
+            nav.update_ekf_pose(0, 0, 0, 10, 10, now)
             cmd = nav.step(now)
-            self.assertEqual(cmd.linear_v_mps, 0)
-            if not nav.is_active:
+            if nav.state == NavigationState.DRIVING:
                 break
+        self.assertEqual(nav.state, NavigationState.DRIVING, nav.stop_reason)
+        self.assertEqual(nav.side_index, 1)
         self.assertLess(nav.scan_used, 2 * math.pi + 0.04)
-        self.assertGreaterEqual(nav.scan_used, 2 * math.pi)
-        self.assertEqual(nav.state, NavigationState.STOPPED)
-        self.assertIn('localization', nav.stop_reason)
+        self.assertEqual(nav.vision.valid_stamp, -math.inf)
+        nav.update_ekf_pose(0, 0, 0, 10, 10, now + 0.05)
+        self.assertGreater(nav.step(now + 0.05).linear_v_mps, 0)
 
     def test_drive_stops_for_wall_and_does_not_pivot_mid_side(self):
         nav = self.prepared(NavigationState.DRIVING)
@@ -293,31 +333,31 @@ class TestFixedTurns(unittest.TestCase):
         self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
         self.assertIn('clearance', nav.stop_reason)
 
-    def test_empty_detection_frames_do_not_refresh_vision(self):
+    def test_empty_frames_do_not_refresh_vision_or_block_forward_fallback(self):
         nav = self.prepared(NavigationState.DRIVING)
         nav.side_index = 1
         self.feed_vision(nav, 1, (0, 0, 0))
-        nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, 3)
+        nav.update_ekf_pose(0, 0, 0, 10, 10, 3)
         nav.update_vision(3, [], [], None)
-        self.assertEqual(nav.step(3).linear_v_mps, 0)
-        self.assertIn('Lost fresh', nav.stop_reason)
+        self.assertFalse(nav.vision.fresh(3))
+        self.assertGreater(nav.step(3).linear_v_mps, 0)
 
-    def test_heading_drift_stops_without_mid_side_pivot(self):
+    def test_heading_drift_defers_correction_until_corner(self):
         nav = self.prepared(NavigationState.DRIVING)
         nav.update_ekf_pose(0.5, 0, 0.5, 0.01, 0.01, 1.1)
         self.feed_vision(nav, 1.1, (0.5, 0, 0.5))
         cmd = nav.step(1.1)
-        self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
-        self.assertIn('Heading drift', nav.stop_reason)
+        self.assertGreater(cmd.linear_v_mps, 0)
+        self.assertEqual(cmd.angular_omega_radps, 0)
 
-    def test_frozen_distance_cannot_authorize_unbounded_forward_motion(self):
-        """Finite fresh-looking vision still cannot override the straight command cap.
+    def test_frozen_visual_distance_ends_leg_at_nominal_budget(self):
+        """Unchanging observations cannot produce unbounded travel or abort the square.
 
         Args:
             None.
 
         Returns:
-            None. Checks terminal stop when displacement feedback remains frozen.
+            None. Verifies a bounded leg followed by the next scan phase.
         """
         nav = self.prepared(NavigationState.DRIVING)
         nav.side_index = 1
@@ -326,10 +366,11 @@ class TestFixedTurns(unittest.TestCase):
             nav.update_ekf_pose(0, 0, math.pi / 2, 0.01, 0.01, now)
             self.feed_vision(nav, now, (0, 0, math.pi / 2))
             cmd = nav.step(now)
-            if not nav.is_active:
+            if nav.state == NavigationState.STOPPING:
                 break
-        self.assertEqual(nav.state, NavigationState.STOPPED)
-        self.assertIn('budget', nav.stop_reason)
+        self.assertEqual(nav.state, NavigationState.STOPPING)
+        self.assertTrue(nav.is_active)
+        self.assertLessEqual(nav.drive_used, nav.policy.drive_budget_factor * nav.square_size_m + 0.01)
         self.assertEqual(cmd.linear_v_mps, 0)
 
     def test_visual_progress_overrides_bad_ekf_distance(self):
@@ -353,14 +394,14 @@ class TestVisionGeometry(unittest.TestCase):
         transform[:3, 2] = [0, 1, 0]
         self.assertIsNone(forward_wall_clearance(transform))
 
-    def test_duplicate_frames_or_new_tag_ids_do_not_verify_localization(self):
+    def test_duplicate_or_empty_frames_cannot_refresh_visual_corrections(self):
         feedback = VisualFeedback(NavigationPolicy())
-        for tick in range(10):
-            feedback.update(1, [[1, 2, 0]], [1, 3], None, (0, 0, 0), 0)
-        self.assertFalse(feedback.stable(1.1, 0))
-        for stamp in [1.1, 1.4, 1.8]:
-            feedback.update(stamp, [[1, 2, 0]], [], None, (0, 0, 0), 0)
-        self.assertFalse(feedback.stable(1.8, 1.1))
+        feedback.update(1, [[1, 2, 0]], [1], None, (0, 0, 0), 0)
+        for _ in range(10):
+            feedback.update(1, [[1, 3, 0]], [1], None, (0, 0, 0), 0)
+        feedback.update(3, [], [], None, (0, 0, 0), 0)
+        self.assertEqual(feedback.valid_stamp, 1)
+        self.assertFalse(feedback.fresh(3))
 
     def test_feedback_publisher_converts_optical_geometry_to_base(self):
         """Exercise the real ROS adapter with calibrated camera extrinsics.

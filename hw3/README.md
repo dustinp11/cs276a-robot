@@ -74,35 +74,33 @@ The square now uses the following phases on each of four sides:
 
 `DRIVE → STOPPING → SCANNING → LOCALIZING → ALIGNING → next DRIVE`
 
-- The first leg starts on a fresh estimator heartbeat without requiring visible
-  or previously mapped tags. It uses bounded command-integrated travel when
-  vision is unavailable; physical distance remains calibration-dependent.
+- Every leg starts and continues without requiring any visible or previously
+  mapped tag. A fresh estimator heartbeat is required to distinguish running
+  software from a stalled node, but high covariance does not block the mission.
 - Drive up to 6 feet (1.8288 m) at a maximum 0.12 m/s, with angular command zero.
-  Travel is estimated from the change in relative positions of the same stationary
-  tags, projected onto the fixed side heading using EKF yaw. Newly visible tags
-  inherit a travel anchor; they cannot independently verify earlier displacement.
-  The first leg falls back to integrated forward commands; subsequent legs use
-  EKF displacement briefly when relative travel is unavailable.
+  Calibrated command integration supplies fallback travel on all four sides.
+  When usable tags are reobserved, their relative displacement corrects travel;
+  newly seen tags inherit an anchor and cannot verify earlier displacement.
+  A nominal distance budget ends the leg even if visual progress stays frozen.
 - Stop and settle for one second, then scan in eight nominal CCW 45° stages,
-  stopping for 0.5 seconds after every stage, including the eighth. Set
-  `navigation.scan_step_rad` and `navigation.scan_pause_s` to adjust acquisition
-  time for camera latency/frame rate. The measured full-turn rate predicts each
-  stage; actual short-turn angles still need hardware verification. The 20-second
-  scan timeout includes turning and all eight pauses. Pauses do not fabricate
-  fresh images or waive the subsequent localization checks.
-- Remain stopped until at least three distinct images over 0.6 seconds provide
-  successful updates of at least two previously mapped tag IDs, with stable EKF
-  position and heading. Newly initialized tags alone cannot authorize movement.
+  stopping for 0.5 seconds after each stage, including the eighth. Configure
+  `navigation.scan_step_rad` and `navigation.scan_pause_s` for the camera.
+  The 20-second scan deadline includes turning and all pauses. Stage angles
+  remain command predictions, not measured physical rotations.
+- After the scan, settle for one second to accept optional vision updates.
+  `LOCALIZING` is a finite settle phase, not a wait for tags or tag count.
 - Align to initial heading + 90°, 180°, 270°, then 360° after the final side.
-  Alignment uses pulses of at most 15 nominal degrees, followed by stopped vision
-  verification. Its separate angle budget is capped at 180°; the full scan is not
-  charged against this quarter-turn budget. The fourth scan/alignment finishes
-  stopped at the initial heading. The controller does not pivot mid-side.
+  Navigation predicts heading from calibrated applied turn commands and accepts
+  sufficiently confident EKF corrections while recent tag updates are available.
+  Alignment uses stopped pulses of at most 15 nominal degrees. It continues
+  best effort when its bounded correction budget or deadline expires, logging
+  that fallback rather than claiming visual verification. No mid-side pivots.
 
-Navigation stops on stale pose, excessive covariance after localization, loss of
-accepted known-tag feedback for one second during subsequent legs, excessive
-heading drift, exhausted motion
-budgets, or localization timeout. Stop is terminal until relaunch/reset.
+The complete four-side sequence can finish with zero detections. Missing tags,
+high covariance, and lack of visual stability never by themselves stop it.
+Manual stop, stale/invalid estimator heartbeat, a visible wall inside the clearance
+limit, and an overall scan deadline still stop the mission. A stopped mission
+requires relaunch/reset.
 
 For visible wall-mounted tags with valid vertical face normals, a forward-ray/
 wall-plane intersection supplies an independent clearance check. At 0.45 m from
@@ -257,7 +255,7 @@ $$P_{RM} \leftarrow F_R P_{RM}, \quad P_{MR} \leftarrow P_{RM}^T, \quad P_{MM} \
 **Commanded Velocity Fallback**:
 If VO is unavailable and linear velocity $v$ or angular velocity $\omega$ is commanded over $\Delta t$:
 $$\Delta x = v \Delta t, \quad \Delta y = 0, \quad \Delta \theta = \omega \Delta t$$
-Process noise $Q_{cmd} = \text{diag}((\sigma_v \Delta t)^2, (\sigma_{lat} \Delta t)^2, (\sigma_\omega \Delta t)^2)$ with higher uncertainty reflecting motor inconsistency.
+Process noise $Q_{cmd} = \text{diag}(\sigma_v^2, \sigma_{lat}^2, \sigma_\omega^2) \Delta t$ during commanded motion with higher uncertainty reflecting motor inconsistency.
 
 ### 2.5 Measurement Model & Update
 
@@ -401,7 +399,7 @@ This continually broadcasts the static `map` frame and publishes all landmarks, 
 ### 3.10 Closed-Loop Square Navigation (6 ft x 6 ft)
 
 The `square_navigation_node` drives four 6 ft legs with initial-frame headings,
-full scans, and visual verification as described above. Ideal corners are shown
+full scans, and optional visual corrections as described above. Ideal corners are shown
 below; actual leg origins come from the current post-scan pose, so the controller
 does not fabricate a corrected corner or guarantee physical closure:
 - Waypoints:
@@ -452,6 +450,7 @@ ros2 service call /stop_navigation std_srvs/srv/Trigger
 4. **Lighting & Motion Blur**: Fast manual movements or low lighting may cause AprilTag detection drops, temporarily pausing VO.
 
 Navigation CSV adds `vision_age_s`, `visual_progress_m`, `ekf_progress_m`,
-`forward_clearance_m`, and `scan_nominal_rad` to the existing columns. These
+`forward_clearance_m`, `scan_nominal_rad`, and `navigation_heading_rad` to the existing columns. These
 record visual freshness, competing travel estimates, wall clearance, and timed
-scan prediction separately. EKF landmark and trajectory CSV formats are unchanged.
+scan prediction and navigation heading separately. Navigation heading can be
+model-predicted while the EKF pose remains uncertain. EKF landmark and trajectory CSV formats are unchanged.

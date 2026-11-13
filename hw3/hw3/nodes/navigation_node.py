@@ -220,7 +220,7 @@ class SquareNavigationNode(Node):
                     'state',
                     'status_message',
                     'vision_age_s', 'visual_progress_m', 'ekf_progress_m',
-                    'forward_clearance_m', 'scan_nominal_rad',
+                    'forward_clearance_m', 'scan_nominal_rad', 'navigation_heading_rad',
                 ])
             self.csv_initialized = True
         except Exception as e:
@@ -426,6 +426,7 @@ class SquareNavigationNode(Node):
                         self.navigator._ekf_progress() if self.navigator.latest_slam_pose else '',
                         self.navigator.vision.clearance,
                         self.navigator.scan_used,
+                        self.navigator.navigation_yaw,
                     ])
             except OSError as error:
                 self.get_logger().warn(f'Navigation CSV write failed: {error}', throttle_duration_sec=5.0)

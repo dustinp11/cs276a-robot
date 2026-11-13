@@ -1,6 +1,5 @@
 """Fresh tag feedback and wall-plane geometry for navigation without a prior map."""
 
-from collections import deque
 from dataclasses import dataclass, fields
 import math
 from statistics import median
@@ -15,14 +14,9 @@ class NavigationPolicy:
     """Limits in meters, radians, and seconds; clearances are from robot center."""
 
     vision_timeout_s: float = 1.0
-    localization_timeout_s: float = 8.0
-    stable_window_s: float = 0.6
-    stable_position_m: float = 0.05
-    stable_heading_rad: float = 0.08
-    min_known_tags: int = 2
-    min_frames: int = 3
+    pose_wait_timeout_s: float = 8.0
+    alignment_timeout_s: float = 18.0
     wall_stop_distance_m: float = 0.45
-    drive_heading_limit_rad: float = 0.35
     drive_budget_factor: float = 1.25
     scan_timeout_s: float = 20.0
     scan_step_rad: float = math.pi / 4
@@ -33,21 +27,20 @@ class NavigationPolicy:
         if not all(math.isfinite(getattr(self, f.name)) and getattr(self, f.name) > 0
                    for f in fields(self)):
             raise ValueError('Navigation vision limits must be finite and positive.')
-        if self.min_frames < 3 or self.min_known_tags < 2 or self.drive_budget_factor < 1:
-            raise ValueError('Require >=3 frames, >=2 known tags, and drive budget >=1.')
+        if self.drive_budget_factor < 1:
+            raise ValueError('Drive budget factor must be at least one.')
         if self.scan_step_rad > math.pi / 2:
             raise ValueError('Scan stages must be at most 90 nominal degrees.')
 
 
 class VisualFeedback:
-    """Track fresh known-tag updates, stable stopped poses, and relative progress."""
+    """Track optional accepted tag feedback and relative travel anchors."""
 
     def __init__(self, policy):
         """Initialize empty observations and no active leg anchors."""
         self.policy = policy
         self.stamp = self.valid_stamp = -math.inf
         self.clearance, self.clearance_stamp = None, -math.inf
-        self.samples = deque(maxlen=100)
         self.baselines = {}
         self.progress = None
         self.progress_stamp, self.progress_prediction = -math.inf, 0.0
@@ -81,7 +74,6 @@ class VisualFeedback:
             self.clearance, self.clearance_stamp = clearance, stamp
         if tags and known_ids:
             self.valid_stamp = stamp
-        self.samples.append((stamp, set(known_ids), pose))
         if self.heading is not None:
             self._update_progress(tags, known_ids, pose[2], predicted_progress)
 
@@ -124,28 +116,6 @@ class VisualFeedback:
                 and -0.05 <= now - self.clearance_stamp <= self.policy.vision_timeout_s
                 and self.clearance <= self.policy.wall_stop_distance_m)
 
-    def stable(self, now, since):
-        """Require multiple known tags and stable poses from distinct stopped frames.
-
-        Args:
-            now: Current ROS time in seconds.
-            since: Earliest allowed frame time, after stopping/settling.
-
-        Returns:
-            True only with sufficient fresh frames spanning the stability window.
-        """
-        cutoff = max(since, now - self.policy.stable_window_s - 0.3)
-        samples = [s for s in self.samples if s[0] >= cutoff and s[1]]
-        if not self.fresh(now) or len(samples) < self.policy.min_frames:
-            return False
-        if samples[-1][0] - samples[0][0] < self.policy.stable_window_s:
-            return False
-        ids = set().union(*(s[1] for s in samples))
-        origin = samples[0][2]
-        return len(ids) >= self.policy.min_known_tags and all(
-            math.hypot(p[0] - origin[0], p[1] - origin[1]) <= self.policy.stable_position_m
-            and abs(wrap_angle(p[2] - origin[2])) <= self.policy.stable_heading_rad
-            for _, _, p in samples)
 
 
 def forward_wall_clearance(base_tag):
