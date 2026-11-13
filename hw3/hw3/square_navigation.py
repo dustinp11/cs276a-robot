@@ -81,10 +81,10 @@ class SquareNavigator:
         linear_kp: float = 0.60,
         angular_kp: float = 1.20,
         waypoint_tolerance_m: float = 0.15,
-        heading_tolerance_rad: float = 0.12,  # ~7 degrees
+        heading_tolerance_rad: float = 0.10,  # ~5.7 degrees
         heading_drive_threshold_rad: float = 0.45,  # ~26 degrees
-        turn_step_deg: float = 30.0,  # Turn 30 deg three times at corners to allow camera catch-up
-        turn_settle_time_s: float = 1.0,  # Pause duration (s) between sub-turns for stable camera frames
+        turn_step_deg: float = 90.0,  # Option A: Single continuous 90 deg turn at corners
+        turn_settle_time_s: float = 1.5,  # Pause duration (s) after corner turn for stable camera frames & tag detection
         pose_timeout_s: float = 0.60,
         max_pos_uncertainty_m: float = 0.40,
         max_heading_uncertainty_rad: float = 0.40,
@@ -402,22 +402,34 @@ class SquareNavigator:
 
             if self.state in (NavigationState.TURNING, NavigationState.PAUSED_STALE_POSE, NavigationState.PAUSED_HIGH_UNCERTAINTY):
                 if abs(alpha) <= self.heading_tolerance_rad:
-                    # Reached the sub-turn angle! Begin camera settle period
+                    # Reached the turn angle! Begin camera settle period
                     self.state = NavigationState.SETTLING
                     self.settle_start_time = current_time_s
                     cmd_v = 0.0
                     cmd_omega = 0.0
-                    msg = (
-                        f"Corner WP{self.current_wp_idx} sub-turn {self.corner_subturn_idx + 1}/{self.num_subturns} "
-                        f"reached ({math.degrees(rtheta):.1f}°). Settling camera feed..."
-                    )
+                    if self.num_subturns == 1:
+                        msg = (
+                            f"Corner WP{self.current_wp_idx} 90° turn reached ({math.degrees(rtheta):.1f}°). "
+                            f"Settling camera feed facing new wall for {self.turn_settle_time_s:.1f}s..."
+                        )
+                    else:
+                        msg = (
+                            f"Corner WP{self.current_wp_idx} sub-turn {self.corner_subturn_idx + 1}/{self.num_subturns} "
+                            f"reached ({math.degrees(rtheta):.1f}°). Settling camera feed..."
+                        )
                 else:
                     cmd_v = 0.0
                     cmd_omega = self.angular_velocity_ccw if alpha > 0 else -self.angular_velocity_cw
-                    msg = (
-                        f"Corner WP{self.current_wp_idx} sub-turn {self.corner_subturn_idx + 1}/{self.num_subturns}: "
-                        f"turning to {math.degrees(target_heading):.1f}° (err: {math.degrees(alpha):.1f}°)"
-                    )
+                    if self.num_subturns == 1:
+                        msg = (
+                            f"Corner WP{self.current_wp_idx}: turning 90° to {math.degrees(target_heading):.1f}° "
+                            f"(err: {math.degrees(alpha):.1f}°)"
+                        )
+                    else:
+                        msg = (
+                            f"Corner WP{self.current_wp_idx} sub-turn {self.corner_subturn_idx + 1}/{self.num_subturns}: "
+                            f"turning to {math.degrees(target_heading):.1f}° (err: {math.degrees(alpha):.1f}°)"
+                        )
 
             elif self.state == NavigationState.SETTLING:
                 cmd_v = 0.0
@@ -435,17 +447,23 @@ class SquareNavigator:
                             f"(target: {math.degrees(self.corner_step_target_heading):.1f}°)"
                         )
                     else:
-                        # Completed all sub-turns (full 90 deg corner turn finished)
+                        # Completed corner turn (full 90 deg corner turn finished)
                         self.in_corner_turn = False
                         self.current_wp_idx += 1
                         target_wp = self.waypoints[self.current_wp_idx]
                         self.state = NavigationState.DRIVING
                         msg = f"Corner WP{self.current_wp_idx - 1} 90° turn completed. Driving to WP{self.current_wp_idx}."
                 else:
-                    msg = (
-                        f"Corner WP{self.current_wp_idx} sub-turn {self.corner_subturn_idx + 1}/{self.num_subturns} "
-                        f"settling ({elapsed:.1f}s / {self.turn_settle_time_s:.1f}s)"
-                    )
+                    if self.num_subturns == 1:
+                        msg = (
+                            f"Corner WP{self.current_wp_idx} settling camera on new wall "
+                            f"({elapsed:.1f}s / {self.turn_settle_time_s:.1f}s)"
+                        )
+                    else:
+                        msg = (
+                            f"Corner WP{self.current_wp_idx} sub-turn {self.corner_subturn_idx + 1}/{self.num_subturns} "
+                            f"settling ({elapsed:.1f}s / {self.turn_settle_time_s:.1f}s)"
+                        )
             else:
                 cmd_v = 0.0
                 cmd_omega = 0.0
