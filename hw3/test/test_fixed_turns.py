@@ -150,6 +150,55 @@ class TestFixedTurns(unittest.TestCase):
         self.assertEqual(nav.vision.clearance, 0.3)
         self.assertTrue(nav.is_active)
 
+    def test_octagon_completes_eight_legs_without_sensor_feedback(self):
+        """Exercise the measured octagon profile without camera or EKF callbacks.
+
+        Args:
+            None.
+
+        Returns:
+            None. Verifies eight 75 cm legs, left pivots, and completion after turn eight.
+        """
+        calibration = TurnCalibration(-0.35, 0.35, 0.37, -0.37, math.pi / 2, math.pi / 2)
+        nav = SquareNavigator(side_count=8, side_length_m=0.75, turn_calibration=calibration,
+                              policy=NavigationPolicy(corner_turn_duration_s=0.5))
+        nav.start()
+        previous, corners, legs = None, 0, set()
+        for tick in range(4000):
+            cmd = nav.step(tick * 0.05)
+            if cmd.state == NavigationState.DRIVING:
+                legs.add(nav.side_index)
+            if cmd.state == NavigationState.TURNING and previous != cmd.state:
+                corners += 1
+                self.assertAlmostEqual(nav.drive_used, 0.75, delta=0.02)
+                self.assertAlmostEqual(nav._heading(), corners * math.pi / 4)
+            if cmd.angular_omega_radps:
+                self.assertEqual(calibration.motors(cmd.angular_omega_radps), (-0.35, 0.35))
+            self.assertFalse(cmd.linear_v_mps and cmd.angular_omega_radps)
+            previous = cmd.state
+            if not nav.is_active:
+                break
+        self.assertEqual(nav.state, NavigationState.COMPLETED)
+        self.assertEqual((corners, legs), (8, set(range(8))))
+        self.assertAlmostEqual(nav.corner_used, math.pi / 4, delta=math.pi / 40)
+        self.assertEqual(nav.correction_count, 0)
+
+    def test_octagon_relative_tag_correction_targets_45_degrees(self):
+        nav = self.corner_with_measured_turn(35)
+        nav.side_count, nav.corner_angle_rad = 8, math.pi / 4
+        nav.corner_used = math.pi / 4
+        nav.step(3.2)
+        self.assertEqual(nav.state, NavigationState.CORRECTING)
+        self.assertAlmostEqual(nav.correction_goal, math.radians(10))
+
+    def test_polygon_geometry_rejects_invalid_parameters(self):
+        for sides in (2, 4.5, math.inf):
+            with self.assertRaises(ValueError):
+                SquareNavigator(side_count=sides)
+        for length in (-1, math.nan, math.inf):
+            with self.assertRaises(ValueError):
+                SquareNavigator(side_length_m=length)
+
     def test_square_has_four_direct_turns_and_fixed_headings(self):
         """Simulate four visually observed legs and corners, including the final heading.
 

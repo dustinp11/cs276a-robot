@@ -59,6 +59,8 @@ class SquareNavigationNode(Node):
             self.declare_parameter('navigation.' + field.name, field.default)
         # declare parameters
         self.declare_parameter('navigation.square_size_ft', 6.0)
+        self.declare_parameter('navigation.side_count', 4)
+        self.declare_parameter('navigation.side_length_m', 0.0)
         self.declare_parameter('navigation.waypoint_tolerance_m', 0.01)
         self.declare_parameter('navigation.heading_tolerance_rad', 0.12)
         self.declare_parameter('navigation.pose_timeout_s', 0.60)
@@ -86,6 +88,8 @@ class SquareNavigationNode(Node):
                                      for field in fields(NavigationPolicy)})
         self.navigator = SquareNavigator(
             policy=policy,
+            side_count=self.get_parameter('navigation.side_count').value,
+            side_length_m=self.get_parameter('navigation.side_length_m').value,
             turn_calibration=self.calibration,
             turn_pulse_rad=self.get_parameter('navigation.turn_pulse_rad').value,
             turn_settle_s=self.get_parameter('navigation.turn_settle_s').value,

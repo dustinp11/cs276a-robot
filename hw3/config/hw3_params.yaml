@@ -103,6 +103,8 @@
 
     # Closed-Loop Square Navigation settings
     navigation:
+      side_count: 4                  # octagon launch overrides this to eight
+      side_length_m: 0.0             # zero uses square_size_ft; octagon uses 0.75 m
       square_size_ft: 6.0             # Side length of the square in feet (6 ft = 1.8288 m)
       # pivots use turn_calibration rates; straight segments have angular velocity zero
       waypoint_tolerance_m: 0.01      # nominal distance tolerance (m); speed stays fixed

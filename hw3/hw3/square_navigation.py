@@ -1,4 +1,4 @@
-"""Four fixed-heading legs with direct quarter-turns and optional visual corrections."""
+"""Regular polygon legs with calibrated corner turns and optional visual corrections."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -60,11 +60,14 @@ class SquareNavigator:
                  heading_tolerance_rad=0.12, pose_timeout_s=0.60,
                  max_pos_uncertainty_m=0.40, max_heading_uncertainty_rad=0.40,
                  turn_calibration=None, turn_pulse_rad=math.pi / 12,
-                 turn_settle_s=3.0, policy=None, forward_calibration=None):
-        """Configure a stopped four-leg mission without supplying a surveyed map.
+                 turn_settle_s=3.0, policy=None, forward_calibration=None,
+                 side_count=4, side_length_m=0.0):
+        """Configure a stopped regular-polygon mission without supplying a surveyed map.
 
         Args:
-            square_size_ft: Desired forward travel per side, in feet.
+            square_size_ft: Legacy side length in feet when side_length_m is zero.
+            side_count: Number of sides; exterior left turns are 2*pi/side_count.
+            side_length_m: Side length in meters, or zero to use square_size_ft.
             waypoint_tolerance_m: Allowed shortfall per leg in meters.
             heading_tolerance_rad: Allowed absolute side-heading error in radians.
             pose_timeout_s: Maximum EKF pose age in seconds.
@@ -79,7 +82,13 @@ class SquareNavigator:
         Returns:
             None. Mission start requires neither EKF messages nor visible tags.
         """
-        self.square_size_m = float(square_size_ft) * self.FEET_TO_METERS
+        if not math.isfinite(side_count) or int(side_count) != side_count or side_count < 3:
+            raise ValueError('Polygon side count must be an integer of at least three.')
+        if not math.isfinite(side_length_m) or side_length_m < 0:
+            raise ValueError('Side length must be finite and nonnegative.')
+        self.side_count = int(side_count)
+        self.corner_angle_rad = 2 * math.pi / self.side_count
+        self.square_size_m = side_length_m or float(square_size_ft) * self.FEET_TO_METERS
         self.forward = forward_calibration or ForwardCalibration()
         self.waypoint_tolerance_m = waypoint_tolerance_m
         self.heading_tolerance_rad, self.pose_timeout_s = heading_tolerance_rad, pose_timeout_s
@@ -196,7 +205,7 @@ class SquareNavigator:
 
     def _heading(self):
         """Return the absolute SLAM heading anchored to the initial robot direction."""
-        return self.theta0_slam + self.side_index * math.pi / 2
+        return self.theta0_slam + self.side_index * self.corner_angle_rad
 
     def _heading_error(self):
         """Return wrapped error to the fixed side heading, never to a moving waypoint."""
@@ -372,7 +381,7 @@ class SquareNavigator:
         budget_reached = self.drive_used >= self.policy.drive_budget_factor * self.square_size_m
         if remaining <= self.waypoint_tolerance_m or budget_reached:
             self._transition(NavigationState.STOPPING, now)
-            return self._output('Leg travel target or nominal budget reached; stopping before quarter-turn')
+            return self._output('Leg travel target or nominal budget reached; stopping before corner turn')
         return self._output('Driving remaining distance on unchanged side heading',
                             linear=self.forward.speed_mps)
 
@@ -383,7 +392,7 @@ class SquareNavigator:
         return self._output('Stopped before direct 90-degree left turn')
 
     def _begin_corner(self, now):
-        """Anchor one direct quarter-turn without requiring a visible landmark.
+        """Anchor one direct corner turn without requiring a visible landmark.
 
         Args:
             now: ROS controller time in seconds.
@@ -403,12 +412,12 @@ class SquareNavigator:
         self._transition(NavigationState.TURNING, now)
 
     def _turn_corner(self, now):
-        """Apply the shorter initial left pulse without fabricating a completed 90-degree turn."""
+        """Apply the shorter initial left pulse without fabricating a completed configured corner turn."""
         target_angle = self.turn_calibration.ccw_radps * self.policy.corner_turn_duration_s
         if self.corner_used + 1e-9 >= target_angle or now - self.phase_started >= self.policy.corner_timeout_s:
             self._transition(NavigationState.CORNER_PAUSE, now)
             return self._output('Initial left-turn pulse finished; stopped for camera processing')
-        return self._output('Initial left-turn pulse toward 90-degree corner', angular=self.turn_calibration.rate(1))
+        return self._output('Initial left-turn pulse toward polygon corner', angular=self.turn_calibration.rate(1))
 
     def _corner_error(self, now):
         """Prefer relative tag orientation, then optional fresh EKF heading corrections.
@@ -418,7 +427,7 @@ class SquareNavigator:
 
         Returns:
             Signed residual in radians, or None without useful vision. A same-tag
-            comparison corrects relative rotation to 90 degrees; EKF fallback
+            comparison corrects relative rotation to the configured exterior angle; EKF fallback
             corrects the absolute side heading scaled by corner_ekf_weight.
             Missing or stale observations never authorize extra corrective rotation.
         """
@@ -428,7 +437,7 @@ class SquareNavigator:
             if measured is not None:
                 self.navigation_yaw = wrap_angle(self.corner_start_heading + measured)
                 self.heading_time, self.corner_source = now, 'same-tag face orientation'
-                return wrap_angle(math.pi / 2 - measured)
+                return wrap_angle(self.corner_angle_rad - measured)
         if (self.policy.corner_ekf_weight > 0
                 and self.vision.valid_stamp >= self.phase_started and self.vision.fresh(now)
                 and -0.05 <= now - self.latest_pose_stamp_s <= self.pose_timeout_s
@@ -475,9 +484,9 @@ class SquareNavigator:
 
     def _finish_corner(self, now):
         """Finish the lap or advance to the next side; visual feedback is always optional."""
-        if self.side_index == 4:
+        if self.side_index == self.side_count:
             self.state, self.is_active = NavigationState.COMPLETED, False
-            return self._output('Four sides complete; final corner used ' + self.corner_source)
+            return self._output(f'{self.side_count} sides complete; final corner used ' + self.corner_source)
         self.current_wp_idx = self.side_index + 1
         self._begin_leg(now)
         return self._output('Next side ready; corner used ' + self.corner_source)

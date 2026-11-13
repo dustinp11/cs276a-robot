@@ -14,6 +14,7 @@ setup(
             'launch/hw3.launch.py',
             'launch/hw3_manual.launch.py',
             'launch/hw3_navigation.launch.py',
+            'launch/hw3_octagon.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/hw3_params.yaml',

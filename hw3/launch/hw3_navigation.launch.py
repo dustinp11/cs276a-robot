@@ -1,7 +1,7 @@
 """Launch camera, 36h11 detection, estimation, and a calibrated six-foot square."""
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
@@ -31,6 +31,8 @@ def _launch_arguments():
                               description='Start camera and 36h11 detector together'),
         DeclareLaunchArgument('auto_start', default_value='false',
                               description='Start motion automatically instead of waiting for the service'),
+        DeclareLaunchArgument('mission', default_value='square',
+                              description='square or octagon calibrated motion profile'),
         DeclareLaunchArgument('square_size_ft', default_value='6.0',
                               description='Square side length in feet'),
     ]
@@ -72,15 +74,28 @@ def _hw3_node(executable, name=None, overrides=None):
                 parameters=[LaunchConfiguration('params_file'), overrides or {}])
 
 
-def _control_nodes():
+def _control_nodes(context):
     """Connect sensor estimation to calibrated mapping, serial motors, and navigation.
 
     Args:
-        None.
+        context: Launch context used to select the calibrated motion profile.
 
     Returns:
         Five ROS nodes; navigation remains idle unless explicitly started.
     """
+    mission = LaunchConfiguration('mission').perform(context)
+    if mission not in ('square', 'octagon'):
+        raise ValueError('Mission must be square or octagon.')
+    turn_overrides = {'turn_calibration.enabled': True}
+    navigation_overrides = {}
+    if mission == 'octagon':
+        turn_overrides.update({'turn_calibration.ccw_left_input': -0.35,
+                               'turn_calibration.ccw_right_input': 0.35,
+                               'turn_calibration.ccw_radps': 1.5707963267948966})
+        navigation_overrides = {'navigation.side_count': 8,
+                                'navigation.side_length_m': 0.75,
+                                'navigation.corner_turn_duration_s': 0.5,
+                                'navigation.corner_ekf_weight': 0.0}
     return [
         _hw3_node('visual_odometry_node'),
         _hw3_node('ekf_slam_node', overrides={
@@ -88,15 +103,16 @@ def _control_nodes():
             'ekf_slam.command_topic': '/cmd_vel_applied',
         }),
         _hw3_node('motor_control'),
-        _hw3_node('velocity_mapping', overrides={'turn_calibration.enabled': True}),
+        _hw3_node('velocity_mapping', overrides=turn_overrides),
         _hw3_node('navigation_node', name='square_navigation_node', overrides={
-            'turn_calibration.enabled': True,
+            **turn_overrides,
             'navigation.auto_start': LaunchConfiguration('auto_start'),
             'navigation.square_size_ft': LaunchConfiguration('square_size_ft'),
+            **navigation_overrides,
         }),
     ]
 
 
 def generate_launch_description():
     """Launch the complete square experiment, including its camera and detector."""
-    return LaunchDescription(_launch_arguments() + _sensor_nodes() + _control_nodes())
+    return LaunchDescription(_launch_arguments() + _sensor_nodes() + [OpaqueFunction(function=_control_nodes)])

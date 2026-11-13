@@ -1,3 +1,35 @@
+## Octagon trial
+
+Build the same HW3 package and launch the octagon profile:
+
+```bash
+cd ~/robot_testing
+source /opt/ros/jazzy/setup.bash
+source rubikpi_ros2/install/setup.bash
+colcon build --base-paths hw3 --packages-select hw3
+source install/setup.bash
+ros2 launch hw3 hw3_octagon.launch.py
+```
+
+In another robot terminal, start the mission:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
+```
+
+Eight repetitions: drive 75 cm → stop → turn left 45° → stop.
+The final turn restores the nominal starting orientation. The measured left
+pivot uses `[-0.35, +0.35]` for 0.5 seconds (nominal pi/2 rad/s). The profile is
+in `launch/hw3_navigation.launch.py`; the octagon launch reuses that stack.
+EKF turn corrections are disabled. Same-tag relative corrections remain optional
+and now target 45°. Missing tags never block progress. Straight travel retains
+the midpoint pause at 37.5 cm and the bounded EKF distance adjustment; therefore
+75 cm is the nominal commanded side, not a guaranteed physical distance.
+All pauses remain 3 seconds. Straight inputs remain `[+0.185, +0.15]` at the
+nominal 0.203 m/s. Existing CSV files and start/stop services are reused.
+The original `hw3_navigation.launch.py` defaults to the six-foot square.
+
 # HW3: Visual Odometry, EKF-SLAM, and Testing Infrastructure
 
 ## Fixed-rate turning: calibrate, then run the square
