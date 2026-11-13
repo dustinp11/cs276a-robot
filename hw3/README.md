@@ -167,7 +167,7 @@ The square now uses the following phases on each of four sides:
 - If no usable same-tag comparison exists, EKF turn feedback is permitted only
   from a fresh image captured after the current stop. Every accepted known tag
   updated by that image must have a pre-update largest positional standard
-  deviation of at most `navigation.corner_landmark_sigma_m` (default 0.03 m).
+  deviation of at most `navigation.corner_landmark_sigma_m` (default 0.06 m).
   This uses the largest eigenvalue of the full 2x2 covariance, including cov_xy;
   it is independent of map-axis orientation. One confident tag is sufficient;
   there are no hard-coded tag IDs. Missing covariance or mixed-confidence updates
