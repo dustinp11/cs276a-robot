@@ -56,7 +56,7 @@ class SquareNavigator:
 
     FEET_TO_METERS = 0.3048
 
-    def __init__(self, square_size_ft=5.0, waypoint_tolerance_m=0.01,
+    def __init__(self, square_size_ft=4.0, waypoint_tolerance_m=0.01,
                  heading_tolerance_rad=0.12, pose_timeout_s=0.60,
                  max_pos_uncertainty_m=0.40, max_heading_uncertainty_rad=0.40,
                  turn_calibration=None, turn_pulse_rad=math.pi / 12,

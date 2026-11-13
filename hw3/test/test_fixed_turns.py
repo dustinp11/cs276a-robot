@@ -622,7 +622,7 @@ class TestFixedTurns(unittest.TestCase):
         nav.step(3)
         self.assertAlmostEqual(nav.midpoint_progress_m, 1.47)
         self.assertAlmostEqual(nav.progress_correction_m, 0.10)
-        self.assertAlmostEqual(nav.midpoint_remaining_m, 0.662)
+        self.assertAlmostEqual(nav.midpoint_remaining_m, nav.square_size_m / 2 - 0.10)
         self.assertGreater(nav.step(3.05).linear_v_mps, 0)
         self.assertEqual(nav.state, NavigationState.DRIVING)
 
@@ -824,7 +824,7 @@ class TestFixedMapper(unittest.TestCase):
                              (0, 0, 0, 0))
 
     def test_measured_speed_matches_nominal_half_side_command_time(self):
-        """Verify measured speed matches nominal 2.5 foot command time.
+        """Verify measured speed matches nominal 2 foot command time.
 
         Args:
             None.
@@ -844,8 +844,8 @@ class TestFixedMapper(unittest.TestCase):
             if nav.state == NavigationState.MIDPOINT_PAUSE:
                 break
         self.assertEqual(nav.state, NavigationState.MIDPOINT_PAUSE)
-        self.assertAlmostEqual(commanded_distance, 0.762, delta=0.203 * 0.05)
-        self.assertAlmostEqual(0.762 / nav.forward.speed_mps, 3.7536945813)
+        self.assertAlmostEqual(commanded_distance, 0.6096, delta=0.203 * 0.05)
+        self.assertAlmostEqual(0.6096 / nav.forward.speed_mps, 3.0029556650)
 
     def test_mapper_publishes_actual_calibrated_speed_for_ekf(self):
         """The applied command must describe the measured motor pair, not the request.
