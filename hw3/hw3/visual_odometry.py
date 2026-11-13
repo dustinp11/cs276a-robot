@@ -69,6 +69,24 @@ class VisualMotionEstimator:
         base_trans_noise_m: float = 0.02,
         base_rot_noise_rad: float = 0.03,
     ):
+        """Initialize visual motion matching, quality gates, and noise settings.
+
+        Args:
+            extrinsics: CameraExtrinsics optical-to-base mount transform; None uses the default mount.
+            min_common_tags: Minimum number of matched tag IDs required for a motion estimate.
+            max_dt_s: Maximum allowed interval between observation frames, in seconds.
+            min_decision_margin: Minimum AprilTag decision margin accepted by visual odometry.
+            max_hamming: Maximum corrected bits accepted in an AprilTag detection.
+            max_tag_distance_m: Maximum accepted camera-to-tag distance, in meters.
+            min_tag_distance_m: Minimum accepted camera-to-tag distance, in meters.
+            max_trans_disagreement_m: Maximum translation disagreement between motion candidates, in meters.
+            max_rot_disagreement_deg: Maximum yaw disagreement between motion candidates, in degrees.
+            base_trans_noise_m: Base translation standard deviation per observation, in meters.
+            base_rot_noise_rad: Base rotation standard deviation per observation, in radians.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         self.extrinsics = extrinsics if extrinsics is not None else CameraExtrinsics()
         self.min_common_tags = max(1, int(min_common_tags))
         self.max_dt_s = float(max_dt_s)
@@ -281,7 +299,14 @@ class VisualMotionEstimator:
         )
 
     def _filter_outliers(self, candidates: List[dict]) -> List[dict]:
-        """Reject candidates that disagree significantly with the majority."""
+        """Reject candidates that disagree significantly with the majority.
+
+        Args:
+            candidates: Per-tag relative motion candidates with ID, dx, dy, and dtheta.
+
+        Returns:
+            Candidate dictionaries retained by the current consensus policy.
+        """
         if len(candidates) < 3:
             return candidates
 
@@ -312,7 +337,18 @@ class VisualMotionEstimator:
         dtheta: float,
         weights: np.ndarray,
     ) -> np.ndarray:
-        """Compute the 3x3 covariance matrix for the combined relative motion."""
+        """Compute the 3x3 covariance matrix for the combined relative motion.
+
+        Args:
+            inliers: Relative motion candidate dictionaries retained for covariance estimation.
+            dx: Relative forward displacement in the previous robot base frame, in meters.
+            dy: Relative lateral displacement in the previous robot base frame, in meters.
+            dtheta: Signed relative yaw change, in radians; positive is counterclockwise.
+            weights: Normalized weights in the same order as the motion candidates.
+
+        Returns:
+            3x3 covariance ordered [dx_m, dy_m, dtheta_rad].
+        """
         num_tags = len(inliers)
         mean_distance = float(np.average([c['distance'] for c in inliers], weights=weights))
 

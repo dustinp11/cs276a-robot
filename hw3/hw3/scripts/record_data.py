@@ -26,6 +26,14 @@ class ObservationRecorderNode(Node):
     """ROS 2 Node that listens to /detections, /tf, and /cmd_vel and saves to JSON."""
 
     def __init__(self, output_path: str):
+        """Initialize timestamped observation and command recording.
+
+        Args:
+            output_path: Destination CSV or JSON file path.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         if not HAS_ROS2:
             raise RuntimeError("ROS 2 is required to record live data.")
         super().__init__('observation_recorder_node')
@@ -53,6 +61,14 @@ class ObservationRecorderNode(Node):
         self.recorder.record_cmd_vel(msg.linear.x, msg.angular.z)
 
     def on_detections(self, msg: AprilTagDetectionArray):
+        """Record usable timestamped AprilTag poses from one detection message.
+
+        Args:
+            msg: Incoming ROS message for this callback, with its original timestamp and frame.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         stamp = msg.header.stamp
         stamp_s = stamp.sec + stamp.nanosec * 1e-9
         cam_frame = msg.header.frame_id if msg.header.frame_id else 'camera_frame'
@@ -76,6 +92,17 @@ class ObservationRecorderNode(Node):
             self.recorder.record_frame(stamp_s, processed)
 
     def _lookup_tag(self, camera_frame, tag_id, family, stamp):
+        """Resolve a detected tag pose in the camera optical frame.
+
+        Args:
+            camera_frame: Name of the camera optical frame used for tag pose lookup.
+            tag_id: AprilTag integer ID used to associate the same stationary landmark.
+            family: AprilTag family string used to resolve the detector TF frame name.
+            stamp: ROS observation timestamp used for lookup or publication.
+
+        Returns:
+            4x4 tag-to-camera optical transform, or None when lookup fails.
+        """
         for frame in [f"tag_{tag_id}", f"{family}:{tag_id}"]:
             try:
                 tf_res = self.tf_buffer.lookup_transform(camera_frame, frame, stamp)
@@ -93,6 +120,14 @@ class ObservationRecorderNode(Node):
 
 
 def main(args=None):
+    """Run this module through its command-line entry point.
+
+    Args:
+        args: Optional command-line arguments; None uses the process arguments.
+
+    Returns:
+        None. State changes and publications are performed in place.
+    """
     parser = argparse.ArgumentParser(description="Record AprilTag observations and cmd_vel to JSON.")
     parser.add_argument('--output', '-o', default='hw3_results/recorded_run.json', help="Output JSON path")
     parsed_args, ros_args = parser.parse_known_args(args=sys.argv[1:] if args is None else args)

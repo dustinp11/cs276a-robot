@@ -27,7 +27,16 @@ def wrap_angle(angle: float) -> float:
 
 
 def euler_to_rotation_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
-    """Create a 3x3 rotation matrix from Z-Y-X Euler angles (radians)."""
+    """Create a 3x3 rotation matrix from Z-Y-X Euler angles (radians).
+
+    Args:
+        roll: Roll rotation in radians.
+        pitch: Pitch rotation in radians.
+        yaw: Yaw rotation in radians.
+
+    Returns:
+        3x3 rotation matrix using the Z-Y-X convention.
+    """
     cr, sr = math.cos(roll), math.sin(roll)
     cp, sp = math.cos(pitch), math.sin(pitch)
     cy, sy = math.cos(yaw), math.sin(yaw)
@@ -40,7 +49,17 @@ def euler_to_rotation_matrix(roll: float, pitch: float, yaw: float) -> np.ndarra
 
 
 def quaternion_to_rotation_matrix(x: float, y: float, z: float, w: float) -> np.ndarray:
-    """Convert quaternion (x, y, z, w) to 3x3 rotation matrix."""
+    """Convert quaternion (x, y, z, w) to 3x3 rotation matrix.
+
+    Args:
+        x: Quaternion x component.
+        y: Quaternion y component.
+        z: Quaternion z component.
+        w: Quaternion w component.
+
+    Returns:
+        Normalized 3x3 rotation matrix; identity for a near-zero quaternion.
+    """
     norm = math.sqrt(x * x + y * y + z * z + w * w)
     if norm < 1e-9:
         return np.eye(3, dtype=float)
@@ -86,6 +105,19 @@ class CameraExtrinsics:
         pitch_deg: float = 0.0,
         yaw_deg: float = 0.0,
     ):
+        """Build rigid optical-to-base camera mount transforms.
+
+        Args:
+            x_m: Camera mount forward offset from robot base, in meters.
+            y_m: Camera mount left offset from robot base, in meters.
+            z_m: Camera mount height above robot base, in meters.
+            roll_deg: Camera mount roll in degrees.
+            pitch_deg: Camera mount pitch in degrees.
+            yaw_deg: Camera mount yaw in degrees.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         self.xyz = np.array([x_m, y_m, z_m], dtype=float)
         self.rpy_rad = np.radians([roll_deg, pitch_deg, yaw_deg])
 
@@ -113,6 +145,9 @@ class CameraExtrinsics:
 
     def landmark_in_base_2d(self, t_cam_landmark: np.ndarray) -> Tuple[float, float, float]:
         """Extract 2D (x, y, yaw) of landmark in robot base frame.
+
+        Args:
+            t_cam_landmark: 4x4 homogeneous transform from landmark coordinates to camera optical coordinates.
 
         Returns:
             (x_rel, y_rel, yaw_rel) in robot frame (meters, meters, radians).

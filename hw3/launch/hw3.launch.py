@@ -7,7 +7,14 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    """Launch file for Homework 3: Visual Odometry and EKF-SLAM."""
+    """Launch file for Homework 3: Visual Odometry and EKF-SLAM.
+
+    Args:
+        None.
+
+    Returns:
+        LaunchDescription for this HW3 workflow.
+    """
     params_file_arg = DeclareLaunchArgument(
         'params_file',
         default_value=PathJoinSubstitution([
@@ -47,7 +54,7 @@ def generate_launch_description():
     # Optional Hardware Nodes (when driving robot motors)
     motor_node = Node(
         condition=IfCondition(LaunchConfiguration('launch_motors')),
-        package='robot_testing',
+        package='hw3',
         executable='motor_control',
         name='motor_control',
         output='screen',
@@ -56,9 +63,10 @@ def generate_launch_description():
 
     velocity_node = Node(
         condition=IfCondition(LaunchConfiguration('launch_motors')),
-        package='robot_testing',
+        package='hw3',
         executable='velocity_mapping',
         name='velocity_mapping',
+        parameters=[LaunchConfiguration('params_file'), {'turn_calibration.enabled': True}],
         output='screen',
         emulate_tty=True,
     )

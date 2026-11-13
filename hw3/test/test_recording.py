@@ -16,7 +16,14 @@ from hw3.data_recorder import (
 
 class TestDataRecording(unittest.TestCase):
     def test_record_and_replay(self):
-        """Test recording observations to JSON and replaying through VO and EKF."""
+        """Test recording observations to JSON and replaying through VO and EKF.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         with tempfile.TemporaryDirectory() as tmp_dir:
             record_file = Path(tmp_dir) / "test_records.json"
             recorder = DataRecorder(record_file)

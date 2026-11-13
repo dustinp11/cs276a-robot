@@ -85,22 +85,29 @@
       default_output_dir: "hw3_results"
       auto_export_csv: true
 
+    # measured full turns: CCW 3.55 s at [-0.43, +0.43]; CW 3.59 s at [+0.40, -0.40]
+    turn_calibration:
+      enabled: false  # navigation launch enables this for mapper and controller
+      ccw_motor_input: 0.43
+      cw_motor_input: 0.40
+      ccw_radps: 1.7699113541  # 2*pi / 3.55 seconds
+      cw_radps: 1.7501908934   # positive magnitude: 2*pi / 3.59 seconds
+
     # Closed-Loop Square Navigation settings
     navigation:
       square_size_ft: 7.0             # Side length of the square in feet (7 ft = 2.1336 m)
       max_linear_velocity: 0.20       # Maximum linear speed (m/s, conservative from HW2)
       min_linear_velocity: 0.05       # Minimum linear speed to overcome motor deadzone (m/s)
-      max_angular_velocity: 0.80      # Maximum angular turn speed (rad/s)
-      min_angular_velocity: 0.20      # Minimum angular turn speed (rad/s)
+      # pivots use turn_calibration rates; straight segments have angular velocity zero
       linear_kp: 0.60                 # Proportional gain on distance error
-      angular_kp: 1.20                # Proportional gain on heading error
       waypoint_tolerance_m: 0.10      # Acceptance radius for arriving at a waypoint (m)
       heading_tolerance_rad: 0.12     # Heading tolerance for turn-in-place (~7 deg)
-      heading_drive_threshold_rad: 0.40 # Heading error threshold to revert to turn-in-place (~23 deg)
       pose_timeout_s: 0.60            # Maximum allowable age of EKF pose before halting (s)
       max_position_uncertainty_m: 0.40  # Maximum allowable robot position 1-sigma before halting (m)
       max_heading_uncertainty_rad: 0.40 # Maximum allowable robot heading 1-sigma before halting (~23 deg)
-      control_frequency_hz: 10.0      # Closed-loop control loop frequency (Hz)
+      turn_pulse_rad: 0.5235987756  # maximum 30-degree pulse before stopping
+      turn_settle_s: 1.0           # stopped time for vision after each pulse
+      control_frequency_hz: 20.0      # Closed-loop control loop frequency (Hz)
       auto_start: false               # Require explicit start command
       output_dir: "hw3_results"       # Telemetry output directory
       log_csv: true                   # Enable navigation_log.csv

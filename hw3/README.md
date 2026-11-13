@@ -1,5 +1,85 @@
 # HW3: Visual Odometry, EKF-SLAM, and Testing Infrastructure
 
+## Fixed-rate turning: calibrate, then run the square
+
+The navigation launch uses **straight travel and separate fixed-rate pivots**.
+For a positive (CCW) pivot, the mapper sends exactly `[L, R] = [-0.43, +0.43]`;
+for CW it sends `[+0.40, -0.40]`. Nonzero angular command magnitude does not change
+the motor input. The HW2 package and its mapping remain unchanged. All square-control code lives in HW3.
+
+After calibration on the same surface, edit the single shared block in
+`hw3/config/hw3_params.yaml`:
+
+```yaml
+turn_calibration:
+  enabled: false  # the navigation launch enables it for the relevant nodes
+  ccw_motor_input: 0.43
+  cw_motor_input: 0.40
+  ccw_radps: 1.7699113541  # 360 degrees in 3.55 seconds
+  cw_radps: 1.7501908934   # positive magnitude: 360 degrees in 3.59 seconds
+```
+
+For each direction, calculate `rate_radps = total_angle_degrees * pi / 180 / seconds`.
+For a complete turn this is `2*pi / turn_seconds`. If using several rotations,
+include all rotations in the total angle. Measure both directions, including
+short pulses: acceleration and stopping can make a short pulse differ from the
+average rate over several full rotations. Zero rates intentionally prevent
+navigation from starting; do not substitute guessed calibration values.
+
+Build **HW3** after pulling these changes, from the actual repository
+root on the robot (its directory name does not matter):
+
+```bash
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select hw3
+source install/setup.bash
+```
+
+Start the existing camera and 36h11 detector in separate terminals, as in section
+3.3. In a third terminal, from the same repository root, run:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 launch hw3 hw3_navigation.launch.py \
+  params_file:="$(pwd)/hw3/config/hw3_params.yaml" square_size_ft:=7.0
+```
+
+Using the source YAML path means later calibration edits require a **launch
+restart**, not another build. Once the nodes are ready, start the square from
+another sourced terminal:
+
+```bash
+ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
+```
+
+Stop with `ros2 service call /stop_navigation std_srvs/srv/Trigger '{}'` or Ctrl-C
+in the launch terminal. Do not run another controller or teleop concurrently.
+
+The mapper publishes its nominal calibrated velocity on `/cmd_vel_applied`.
+Navigation mode makes the EKF integrate that topic, including the last command
+interval before a stop; it does not also integrate VO motion. Tag observations
+still correct the robot/landmark state. These are model-based velocities, not
+encoder measurements. Manual visual-only mode retains its VO prediction source.
+
+Pivots run in pulses of at most 30 nominal degrees with a one-second stopped
+settle interval. A turn can consume only its initial heading error plus 30 nominal
+degrees, capped at 180 degrees; exhausting that budget stops the mission rather
+than repeatedly spinning. Reset by restarting the navigation launch after
+checking calibration and feedback. Pose age and uncertainty stops remain active.
+Actual angles depend on the calibration and surface; these limits do not measure
+physical rotation. Check a quarter-turn before trusting a full lap.
+
+For recording/debugging, include the applied commands as well as outputs:
+
+```bash
+ros2 bag record /cmd_vel /cmd_vel_applied /motor_commands \
+  /ekf_slam/pose /ekf_slam/trajectory /ekf_slam/landmarks \
+  /detections /tf /tf_static -o hw3_results/fixed_turn_square
+```
+
+Local synthetic checks (no ROS or hardware): `python3 hw3/run_tests.py`.
+
 This package implements Steps 2, 3, and 4 of Homework 3 for the differential-drive robot without wheel encoders or IMU:
 
 1. **Visual Odometry (VO)**: Planar relative motion estimation $(\Delta x, \Delta y, \Delta \theta)$ between consecutive camera frames using stationary AprilTags.
@@ -26,17 +106,23 @@ hw3/
 │   ├── coordinates.py            # Rigid transformations, camera-to-base extrinsics, angle wrapping
 │   ├── visual_odometry.py        # Core visual motion estimator from stationary AprilTags
 │   ├── ekf_slam.py               # Core EKF-SLAM state filter, Jacobians, and dynamic landmarks
+│   ├── square_navigation.py       # Pure waypoint and bounded turn-pulse controller
+│   ├── turn_calibration.py        # Shared fixed input and measured CW/CCW rates
+│   ├── velocity_mapping.py        # Pure command-to-motor mapping
 │   ├── data_recorder.py          # Observation/command recorder, replayer, and CSV exporters
 │   ├── nodes/
 │   │   ├── __init__.py
 │   │   ├── visual_odometry_node.py # ROS 2 node publishing /visual_odometry/* topics
-│   │   └── ekf_slam_node.py        # ROS 2 node running EKF-SLAM & publishing markers/TF
+│   │   ├── ekf_slam_node.py        # ROS 2 node running EKF-SLAM & publishing markers/TF
+│   │   ├── navigation_node.py      # ROS mission interfaces and telemetry
+│   │   ├── velocity_mapping.py     # ROS adapter for pure mapping
+│   │   └── motor_control.py        # Serial transport and motor watchdog
 │   └── scripts/
 │       ├── __init__.py
 │       ├── record_data.py        # CLI recording tool
 │       ├── replay_data.py        # CLI replay tool
 │       └── export_map.py         # CLI CSV export utility
-├── scripts/                      # Symlinked / executable CLI entry points
+├── scripts/                      # Thin compatibility wrappers for the packaged CLI tools
 │   ├── record_data.py
 │   ├── replay_data.py
 │   └── export_map.py
@@ -51,6 +137,16 @@ hw3/
 ```
 
 ---
+
+HW3 has no runtime dependency on `robot_testing`. Pure estimation/control modules
+contain the algorithms; `nodes/` contains ROS and serial adapters. The camera
+and AprilTag detector remain external sensor services. Command flow is:
+
+`square_navigation → /cmd_vel → velocity_mapping → /motor_commands → motor_control`
+
+The mapper also publishes `/cmd_vel_applied` for EKF command prediction.
+The outer `scripts/` wrappers reuse `hw3/scripts/`; there is one implementation
+of each CLI tool.
 
 ## 2. Mathematical Models and Derivations
 
@@ -162,7 +258,7 @@ source install/setup.bash
 
 Run the standalone Python unit test suite:
 ```bash
-# Run all 21 unit tests (covers all 10 synthetic requirements + square trajectory)
+# Run synthetic estimator, navigation, mapping, and protocol checks
 PYTHONPATH=hw3 python3 hw3/run_tests.py
 ```
 Or via pytest (if installed):
@@ -195,10 +291,11 @@ ros2 launch hw3 hw3_manual.launch.py
 ```
 
 **Option C: HW3 SLAM + Hardware Motors Enabled**:
-If you want to drive the robot with `/cmd_vel` or teleop while running SLAM:
+After entering measured turn calibration, enable the HW3 motor adapters:
 ```bash
 ros2 launch hw3 hw3.launch.py launch_motors:=true
 ```
+Commands use straight travel or fixed-rate pivots; combined steering is suppressed.
 In another terminal, send velocity commands:
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard

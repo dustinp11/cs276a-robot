@@ -55,6 +55,9 @@ class EkfSlam:
             base_measurement_noise: (sigma_range_m, sigma_bearing_rad) at 1 meter.
             range_scale_dist_m: Reference distance for scaling range uncertainty.
             mahalanobis_gate: Chi-square threshold for 2-DOF outlier rejection (99% = 9.21).
+
+        Returns:
+            None. State changes and publications are performed in place.
         """
         self.x = np.array([
             float(initial_robot_pose[0]),
@@ -106,6 +109,9 @@ class EkfSlam:
             dy: Relative displacement along robot Y-axis (meters).
             dtheta: Relative rotation (radians).
             vo_covariance: Optional 3x3 covariance matrix from visual odometry.
+
+        Returns:
+            None. State changes and publications are performed in place.
         """
         x_r = self.x[0]
         y_r = self.x[1]
@@ -171,6 +177,9 @@ class EkfSlam:
             v: Linear velocity in m/s.
             omega: Angular velocity in rad/s.
             dt: Time step in seconds.
+
+        Returns:
+            None. State changes and publications are performed in place.
         """
         if dt <= 0.0:
             return
@@ -242,6 +251,9 @@ class EkfSlam:
             dt: Elapsed time without tracking (seconds).
             pos_drift_rate_mps: Position drift 1-sigma rate (m/s).
             rot_drift_rate_radps: Heading drift 1-sigma rate (rad/s).
+
+        Returns:
+            None. State changes and publications are performed in place.
         """
         if dt <= 0.0:
             return
@@ -381,6 +393,15 @@ class EkfSlam:
         Global landmark position:
             m_x = x_r + r * cos(theta_r + beta)
             m_y = y_r + r * sin(theta_r + beta)
+
+        Args:
+            tag_id: AprilTag integer ID used to associate the same stationary landmark.
+            r_meas: Measured planar landmark range from the robot base, in meters.
+            beta_meas: Measured landmark bearing in the robot base frame, in radians.
+            r_mat: 2x2 range/bearing measurement covariance ordered [meters, radians].
+
+        Returns:
+            None. State changes and publications are performed in place.
         """
         x_r = self.x[0]
         y_r = self.x[1]
@@ -456,7 +477,14 @@ class EkfSlam:
         )
 
     def get_landmark_pose(self, tag_id: int) -> Optional[LandmarkEstimate]:
-        """Return estimated global pose and 2x2 covariance for a given tag ID."""
+        """Return estimated global pose and 2x2 covariance for a given tag ID.
+
+        Args:
+            tag_id: AprilTag integer ID used to associate the same stationary landmark.
+
+        Returns:
+            LandmarkEstimate with xy coordinates and 2x2 covariance, or None for an unknown ID.
+        """
         if tag_id not in self.tag_id_to_idx:
             return None
         idx = self.tag_id_to_idx[tag_id]

@@ -32,7 +32,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
         )
 
     def test_01_robot_motion_single_stationary_landmark(self):
-        """1. Robot motion with a single stationary landmark."""
+        """1. Robot motion with a single stationary landmark.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # Stationary landmark in world at (2.0, 0.0)
         # Robot starts at (0.0, 0.0, 0.0)
         # First observation: landmark at relative x=2.0, y=0.0
@@ -59,7 +66,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
         self.assertAlmostEqual(lm.y, 0.0, delta=0.02)
 
     def test_02_robot_motion_multiple_stationary_landmarks(self):
-        """2. Robot motion with multiple stationary landmarks."""
+        """2. Robot motion with multiple stationary landmarks.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # Two stationary landmarks in world:
         # Tag 0 at (2.0, 0.5), Tag 1 at (2.0, -0.5)
         self.ekf.update_landmark(tag_id=0, x_rel=2.0, y_rel=0.5)
@@ -94,7 +108,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
         self.assertAlmostEqual(pose.theta, true_theta, delta=0.05)
 
     def test_03_initializing_new_landmark(self):
-        """3. Initializing a new landmark correctly augments state and covariance."""
+        """3. Initializing a new landmark correctly augments state and covariance.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         self.assertEqual(self.ekf.num_landmarks, 0)
         self.assertEqual(self.ekf.state_dim, 3)
 
@@ -116,7 +137,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
         self.assertFalse(np.allclose(self.ekf.P[:3, 3:5], 0.0))
 
     def test_04_observing_existing_landmark_multiple_times(self):
-        """4. Observing an existing landmark multiple times reduces landmark covariance."""
+        """4. Observing an existing landmark multiple times reduces landmark covariance.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # Robot stationary at origin
         self.ekf.update_landmark(tag_id=2, x_rel=2.0, y_rel=0.0)
         init_cov = self.ekf.get_landmark_pose(tag_id=2).covariance.copy()
@@ -130,7 +158,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
         self.assertLess(np.trace(final_cov), np.trace(init_cov))
 
     def test_05_landmark_disappearing_and_reappearing(self):
-        """5. A landmark disappearing and reappearing retains position without duplicates."""
+        """5. A landmark disappearing and reappearing retains position without duplicates.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # Discover Tag 7
         self.ekf.update_landmark(tag_id=7, x_rel=1.0, y_rel=1.0)
         self.assertEqual(self.ekf.num_landmarks, 1)
@@ -154,7 +189,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
         self.assertIn(7, self.ekf.idx_to_tag_id)
 
     def test_06_multiple_landmarks_discovered_dynamically(self):
-        """6. Multiple landmarks being discovered dynamically expands the state vector."""
+        """6. Multiple landmarks being discovered dynamically expands the state vector.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         self.assertEqual(self.ekf.num_landmarks, 0)
 
         # Discover Tag 1
@@ -181,7 +223,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
         self.assertEqual(set(lms.keys()), {1, 2, 3})
 
     def test_07_angle_wrapping_near_boundary(self):
-        """7. Angle wrapping near -pi and pi handled correctly without singularity."""
+        """7. Angle wrapping near -pi and pi handled correctly without singularity.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # Initialize robot near +pi
         ekf_wrap = EkfSlam(
             initial_robot_pose=(0.0, 0.0, math.pi - 0.05),
@@ -202,7 +251,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
         self.assertTrue(-math.pi <= ekf_wrap.get_robot_pose().theta < math.pi)
 
     def test_08_no_landmarks_visible(self):
-        """8. No landmarks visible propagates uncertainty without error."""
+        """8. No landmarks visible propagates uncertainty without error.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # Multiple steps of prediction without any measurement updates
         init_cov = self.ekf.get_robot_pose().covariance.copy()
 
@@ -216,7 +272,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
         self.assertGreater(final_cov[2, 2], init_cov[2, 2])
 
     def test_09_motion_estimation_with_noisy_observations(self):
-        """9. Motion estimation with noisy observations converges close to true state."""
+        """9. Motion estimation with noisy observations converges close to true state.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         np.random.seed(42)
         # Known landmark at (2.0, 0.0)
         self.ekf.update_landmark(tag_id=0, x_rel=2.0, y_rel=0.0)
@@ -241,7 +304,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
         self.assertAlmostEqual(pose.y, 0.0, delta=0.06)
 
     def test_10_covariance_symmetry_and_positive_definiteness(self):
-        """10. Covariance symmetry and positive semi-definiteness maintained throughout."""
+        """10. Covariance symmetry and positive semi-definiteness maintained throughout.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # Initialize several landmarks and execute mixed predictions and updates
         self.ekf.update_landmark(tag_id=1, x_rel=1.5, y_rel=0.5)
         self.ekf.update_landmark(tag_id=2, x_rel=2.0, y_rel=-0.5)
@@ -261,7 +331,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
             self.assertTrue(np.all(eigenvalues.real >= -1e-9), f"Negative eigenvalues found: {eigenvalues}")
 
     def test_11_robot_completes_square_trajectory(self):
-        """11. Robot manually executes a 1m x 1m square around 4 tags and returns to origin."""
+        """11. Robot manually executes a 1m x 1m square around 4 tags and returns to origin.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # 4 landmarks placed outside the square:
         # Tag 0 at (1.5, 0.5) [visible along Leg 1: (0,0) -> (1,0)]
         # Tag 1 at (0.5, 1.5) [visible along Leg 2: (1,0) -> (1,1)]
@@ -323,7 +400,14 @@ class TestEkfSlamSynthetic(unittest.TestCase):
             self.assertAlmostEqual(lm.y, gy, delta=0.08)
 
     def test_12_untracked_drift_heading_recovery(self):
-        """12. Re-observation of a known landmark recovers heading after untracked drift."""
+        """12. Re-observation of a known landmark recovers heading after untracked drift.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # Initialize landmark 1 at (2.0, 0.0) from origin facing 0
         self.ekf.update_landmark(tag_id=1, x_rel=2.0, y_rel=0.0)
         lm = self.ekf.get_landmark_pose(1)

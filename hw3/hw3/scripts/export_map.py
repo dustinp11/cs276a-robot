@@ -9,6 +9,14 @@ from hw3.data_recorder import export_landmarks_csv, export_trajectory_csv
 
 
 def main(args=None):
+    """Run this module through its command-line entry point.
+
+    Args:
+        args: Optional command-line arguments; None uses the process arguments.
+
+    Returns:
+        None. State changes and publications are performed in place.
+    """
     parser = argparse.ArgumentParser(description="Export trajectory and map to CSV.")
     parser.add_argument('--input-json', '-i', help="Path to recorded JSON run (optional)")
     parser.add_argument('--output-dir', '-o', default='hw3_results', help="Output directory")

@@ -14,6 +14,12 @@ def generate_launch_description():
     3. Motor Controller Node (hardware serial interface to /dev/ttyUSB0)
     4. Velocity Mapping Node (converts /cmd_vel into left/right /motor_commands)
     5. Square Navigation Node (closed-loop 7ft x 7ft square waypoint controller)
+
+    Args:
+        None.
+
+    Returns:
+        LaunchDescription for this HW3 workflow.
     """
     params_file_arg = DeclareLaunchArgument(
         'params_file',
@@ -54,23 +60,27 @@ def generate_launch_description():
         name='ekf_slam_node',
         output='screen',
         emulate_tty=True,
-        parameters=[LaunchConfiguration('params_file')],
+        parameters=[LaunchConfiguration('params_file'), {
+            'ekf_slam.motion_prediction_source': 'cmd_vel',
+            'ekf_slam.command_topic': '/cmd_vel_applied',
+        }],
     )
 
-    # 3. Motor Controller (hardware serial interface from robot_testing)
+    # 3. Motor Controller (hardware serial interface from hw3)
     motor_node = Node(
-        package='robot_testing',
+        package='hw3',
         executable='motor_control',
         name='motor_control',
         output='screen',
         emulate_tty=True,
     )
 
-    # 4. Velocity Mapping (/cmd_vel -> /motor_commands from robot_testing)
+    # 4. Velocity Mapping (/cmd_vel -> /motor_commands from hw3)
     velocity_node = Node(
-        package='robot_testing',
+        package='hw3',
         executable='velocity_mapping',
         name='velocity_mapping',
+        parameters=[LaunchConfiguration('params_file'), {'turn_calibration.enabled': True}],
         output='screen',
         emulate_tty=True,
     )
@@ -85,8 +95,9 @@ def generate_launch_description():
         parameters=[
             LaunchConfiguration('params_file'),
             {
-                'auto_start': LaunchConfiguration('auto_start'),
-                'square_size_ft': LaunchConfiguration('square_size_ft'),
+                'turn_calibration.enabled': True,
+                'navigation.auto_start': LaunchConfiguration('auto_start'),
+                'navigation.square_size_ft': LaunchConfiguration('square_size_ft'),
             }
         ],
     )

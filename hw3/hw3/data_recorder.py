@@ -47,6 +47,9 @@ class DataRecorder:
             detections: List of detections with id, t_cam_tag or position/orientation, margin, etc.
             cmd_v: Optional linear velocity at this instant.
             cmd_omega: Optional angular velocity at this instant.
+
+        Returns:
+            None. State changes and publications are performed in place.
         """
         dt = 0.0 if self._last_frame_time == 0.0 else max(0.0, stamp_s - self._last_frame_time)
         self._last_frame_time = stamp_s
@@ -102,6 +105,17 @@ class DataReplayer:
         ekf: Optional[EkfSlam] = None,
         extrinsics: Optional[CameraExtrinsics] = None,
     ):
+        """Load recorded observations and configure the offline estimation pipeline.
+
+        Args:
+            record_path: Path to a recorded JSON observation run.
+            vo: Optional VisualMotionEstimator instance; None constructs a default estimator.
+            ekf: Optional EkfSlam instance; None constructs a default filter.
+            extrinsics: CameraExtrinsics optical-to-base mount transform; None uses the default mount.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         self.record_path = Path(record_path)
         with open(self.record_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -116,6 +130,10 @@ class DataReplayer:
         use_cmd_fallback: bool = True,
     ) -> dict:
         """Run through all records in sequence.
+
+        Args:
+            use_vo: Whether valid visual motion estimates drive prediction.
+            use_cmd_fallback: Whether recorded velocity commands may provide fallback prediction.
 
         Returns:
             Dictionary containing:
@@ -202,7 +220,15 @@ class DataReplayer:
 
 
 def export_trajectory_csv(trajectory: List[dict], output_path: Union[str, Path]):
-    """Export robot trajectory list to CSV."""
+    """Export robot trajectory list to CSV.
+
+    Args:
+        trajectory: Ordered robot state records containing xy positions in meters.
+        output_path: Destination CSV or JSON file path.
+
+    Returns:
+        None. State changes and publications are performed in place.
+    """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, 'w', newline='', encoding='utf-8') as f:
@@ -221,7 +247,15 @@ def export_trajectory_csv(trajectory: List[dict], output_path: Union[str, Path])
 
 
 def export_landmarks_csv(landmarks: Dict[int, dict], output_path: Union[str, Path]):
-    """Export landmark dictionary to CSV."""
+    """Export landmark dictionary to CSV.
+
+    Args:
+        landmarks: Tag-ID-indexed landmark records with positions in meters.
+        output_path: Destination CSV or JSON file path.
+
+    Returns:
+        None. State changes and publications are performed in place.
+    """
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, 'w', newline='', encoding='utf-8') as f:

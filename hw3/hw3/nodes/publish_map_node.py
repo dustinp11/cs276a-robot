@@ -31,6 +31,16 @@ class MapPublisherNode(Node):
     """Republishes saved landmarks and trajectory with latched QoS for RViz."""
 
     def __init__(self, landmarks_csv: str, trajectory_csv: Optional[str] = None, map_frame: str = 'map'):
+        """Load recorded map files and initialize the offline visualization publisher.
+
+        Args:
+            landmarks_csv: Path to the final landmark CSV, with xy coordinates in meters.
+            trajectory_csv: Optional path to the recorded trajectory CSV.
+            map_frame: Frame name shared by the published map, path, and poses.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         if not HAS_ROS2:
             raise RuntimeError("ROS 2 is required.")
         super().__init__('map_publisher_node')
@@ -63,6 +73,14 @@ class MapPublisherNode(Node):
         )
 
     def _load_landmarks(self, path: str) -> Dict[int, dict]:
+        """Load final landmark positions and covariance from CSV.
+
+        Args:
+            path: Path to the CSV file being read.
+
+        Returns:
+            Dictionary mapping tag IDs to their final position and covariance records.
+        """
         lms = {}
         csv_path = Path(path)
         if not csv_path.exists():
@@ -83,6 +101,14 @@ class MapPublisherNode(Node):
         return lms
 
     def _load_trajectory(self, path: str) -> List[dict]:
+        """Load trajectory positions from CSV in recorded order.
+
+        Args:
+            path: Path to the CSV file being read.
+
+        Returns:
+            Ordered trajectory records with positions in meters.
+        """
         traj = []
         csv_path = Path(path)
         if not csv_path.exists():
@@ -107,6 +133,14 @@ class MapPublisherNode(Node):
         self.tf_broadcaster.sendTransform(tf_msg)
 
     def publish_all(self):
+        """Publish the loaded landmark map and trajectory for offline RViz inspection.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         stamp = self.get_clock().now().to_msg()
         markers = []
 
@@ -218,6 +252,14 @@ class MapPublisherNode(Node):
 
 
 def main(args=None):
+    """Run this module through its command-line entry point.
+
+    Args:
+        args: Optional command-line arguments; None uses the process arguments.
+
+    Returns:
+        None. State changes and publications are performed in place.
+    """
     parser = argparse.ArgumentParser(description="Republish EKF-SLAM map markers for RViz.")
     parser.add_argument('--landmarks', '-l', default='hw3_results/ekf_slam_landmarks.csv', help="Path to landmarks CSV")
     parser.add_argument('--trajectory', '-t', default='hw3_results/ekf_slam_trajectory.csv', help="Path to trajectory CSV")

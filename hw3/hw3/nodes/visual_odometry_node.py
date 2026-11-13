@@ -44,7 +44,22 @@ class VisualOdometryNode(Node):
         if not HAS_ROS2:
             raise RuntimeError("ROS 2 Python packages (rclpy, apriltag_msgs, tf2_ros) are required.")
         super().__init__('visual_odometry_node')
+        self._declare_parameters()
+        self._create_estimator()
+        self._load_frames()
+        self._create_tf()
+        self._create_interfaces()
+        self._initialize_pose()
 
+    def _declare_parameters(self):
+        """Declare camera mount, tag quality, and VO noise parameters.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         # Declare parameters
         self.declare_parameter('robot_frame', 'base_link')
         self.declare_parameter('camera_frame', 'camera_frame')
@@ -65,6 +80,15 @@ class VisualOdometryNode(Node):
         self.declare_parameter('quality.max_tag_distance_m', 5.0)
         self.declare_parameter('quality.min_tag_distance_m', 0.1)
 
+    def _create_estimator(self):
+        """Build camera extrinsics and the pure visual motion estimator.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         # Build CameraExtrinsics
         extrinsics = CameraExtrinsics(
             x_m=self.get_parameter('camera_mount.x_m').value,
@@ -88,13 +112,26 @@ class VisualOdometryNode(Node):
             base_rot_noise_rad=self.get_parameter('visual_odometry.base_rot_noise_rad').value,
         )
 
+    def _load_frames(self):
+        """Load the configured robot and camera frame names."""
         self.robot_frame = self.get_parameter('robot_frame').value
         self.camera_frame = self.get_parameter('camera_frame').value
 
+    def _create_tf(self):
+        """Create timestamped TF lookup interfaces."""
         # TF Buffer and Listener
         self.tf_buffer = Buffer(node=self)
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
+    def _create_interfaces(self):
+        """Create observation subscription and motion/status publishers.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         # Subscribers and Publishers
         self.detection_sub = self.create_subscription(
             AprilTagDetectionArray,
@@ -124,6 +161,8 @@ class VisualOdometryNode(Node):
             10
         )
 
+    def _initialize_pose(self):
+        """Initialize the accumulated visual odometry pose."""
         # Accumulated VO pose for odom publishing
         self.accum_x = 0.0
         self.accum_y = 0.0
@@ -134,7 +173,14 @@ class VisualOdometryNode(Node):
         )
 
     def on_detections(self, msg: AprilTagDetectionArray):
-        """Callback for incoming AprilTag detections."""
+        """Callback for incoming AprilTag detections.
+
+        Args:
+            msg: Incoming ROS message for this callback, with its original timestamp and frame.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         stamp = msg.header.stamp
         stamp_s = stamp.sec + stamp.nanosec * 1e-9
         stamp_ns = stamp.sec * 10**9 + stamp.nanosec
@@ -238,7 +284,17 @@ class VisualOdometryNode(Node):
         family: str,
         stamp: Time,
     ) -> Optional[np.ndarray]:
-        """Look up 4x4 transform T_cam_tag from TF."""
+        """Look up 4x4 transform T_cam_tag from TF.
+
+        Args:
+            camera_frame: Name of the camera optical frame used for tag pose lookup.
+            tag_id: AprilTag integer ID used to associate the same stationary landmark.
+            family: AprilTag family string used to resolve the detector TF frame name.
+            stamp: ROS observation timestamp used for lookup or publication.
+
+        Returns:
+            4x4 tag-to-camera optical transform, or None when lookup fails.
+        """
         # Try configured frame name 'tag_{id}', then fallback to '{family}:{id}'
         candidate_frames = [f"tag_{tag_id}", f"{family}:{tag_id}"]
         for tag_frame in candidate_frames:
@@ -268,6 +324,14 @@ class VisualOdometryNode(Node):
 
 
 def main(args=None):
+    """Run this module through its command-line entry point.
+
+    Args:
+        args: Optional command-line arguments; None uses the process arguments.
+
+    Returns:
+        None. State changes and publications are performed in place.
+    """
     if not HAS_ROS2:
         print("ROS 2 packages not available.")
         return

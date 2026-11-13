@@ -14,7 +14,14 @@ class TestVisualOdometry(unittest.TestCase):
         self.vo = VisualMotionEstimator(extrinsics=self.extrinsics, max_dt_s=1.0)
 
     def test_forward_motion_single_tag(self):
-        """Test relative forward displacement estimation from a stationary tag."""
+        """Test relative forward displacement estimation from a stationary tag.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # Frame 1: Robot at x=0. Tag is at x=2.0 in front of camera
         # In optical coordinates: [0, 0, 2.0]
         det1 = [{
@@ -45,7 +52,14 @@ class TestVisualOdometry(unittest.TestCase):
         self.assertEqual(res2.matched_tag_ids, (0,))
 
     def test_pure_rotation_single_tag(self):
-        """Test relative yaw rotation estimation from a stationary tag."""
+        """Test relative yaw rotation estimation from a stationary tag.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # Stationary tag at (x=2.0, y=0.0) in world
         # Frame 1: Robot at origin with yaw=0
         # t_cam_tag at t1:
@@ -85,7 +99,14 @@ class TestVisualOdometry(unittest.TestCase):
         self.assertAlmostEqual(res.dtheta, angle, places=4)
 
     def test_multiple_tags_fusion(self):
-        """Test multiple tags fusion combines estimates and reduces uncertainty."""
+        """Test multiple tags fusion combines estimates and reduces uncertainty.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # Two tags: tag 0 straight ahead (Z=2.0), tag 1 slightly to the left (X=-0.5, Z=2.0)
         det1 = [
             {'id': 0, 't_cam_tag': make_transform(np.eye(3), [0.0, 0.0, 2.0]), 'margin': 50.0},
@@ -107,7 +128,14 @@ class TestVisualOdometry(unittest.TestCase):
         self.assertLess(res.covariance[0, 0], (self.vo.base_trans_noise_m * 2.0) ** 2)
 
     def test_outlier_rejection_multiple_tags(self):
-        """Test that an outlier tag observation with inconsistent jump is rejected."""
+        """Test that an outlier tag observation with inconsistent jump is rejected.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         det1 = [
             {'id': 0, 't_cam_tag': make_transform(np.eye(3), [0.0, 0.0, 2.0]), 'margin': 40.0},
             {'id': 1, 't_cam_tag': make_transform(np.eye(3), [-0.5, 0.0, 2.0]), 'margin': 40.0},
@@ -129,7 +157,14 @@ class TestVisualOdometry(unittest.TestCase):
         self.assertNotIn(2, res.matched_tag_ids)
 
     def test_no_common_tags_available(self):
-        """Test that no common tags results in valid=False without fabricated motion."""
+        """Test that no common tags results in valid=False without fabricated motion.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         det1 = [{'id': 0, 't_cam_tag': make_transform(np.eye(3), [0.0, 0.0, 2.0])}]
         self.vo.process_frame(stamp_s=1.0, detections=det1)
 

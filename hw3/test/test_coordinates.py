@@ -33,7 +33,14 @@ class TestCoordinates(unittest.TestCase):
         np.testing.assert_allclose(eye, np.eye(4), atol=1e-12)
 
     def test_quaternion_conversion(self):
-        """Test converting quaternion to rotation matrix."""
+        """Test converting quaternion to rotation matrix.
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
+        """
         # 90 deg rotation around Z
         qz = [0.0, 0.0, math.sin(math.pi / 4.0), math.cos(math.pi / 4.0)]
         r = quaternion_to_rotation_matrix(*qz)
@@ -51,6 +58,12 @@ class TestCoordinates(unittest.TestCase):
         +Z is forward (robot +X)
         +X is right (robot -Y)
         +Y is down (robot -Z)
+
+        Args:
+            None.
+
+        Returns:
+            None. Assertions verify the documented behavior.
         """
         # Mount with zero roll/pitch/yaw and mount height z=0.2m
         cam = CameraExtrinsics(x_m=0.0, y_m=0.0, z_m=0.2, roll_deg=0.0, pitch_deg=0.0, yaw_deg=0.0)

@@ -12,6 +12,14 @@ from hw3.visual_odometry import VisualMotionEstimator
 
 
 def main(args=None):
+    """Run this module through its command-line entry point.
+
+    Args:
+        args: Optional command-line arguments; None uses the process arguments.
+
+    Returns:
+        None. State changes and publications are performed in place.
+    """
     parser = argparse.ArgumentParser(description="Replay recorded data through VO and EKF-SLAM.")
     parser.add_argument('input', help="Path to input recorded JSON file")
     parser.add_argument('--output-dir', '-o', default='hw3_results', help="Directory to save exported CSVs")

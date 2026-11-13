@@ -19,7 +19,7 @@ setup(
             'config/hw3_params.yaml',
         ]),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'numpy', 'pyserial'],
     zip_safe=True,
     maintainer='ubuntu',
     maintainer_email='ubuntu@todo.todo',
@@ -34,6 +34,8 @@ setup(
         'console_scripts': [
             'visual_odometry_node = hw3.nodes.visual_odometry_node:main',
             'ekf_slam_node = hw3.nodes.ekf_slam_node:main',
+            'motor_control = hw3.nodes.motor_control:main',
+            'velocity_mapping = hw3.nodes.velocity_mapping:main',
             'navigation_node = hw3.nodes.navigation_node:main',
             'record_data = hw3.scripts.record_data:main',
             'replay_data = hw3.scripts.replay_data:main',

@@ -54,10 +54,38 @@ class EkfSlamNode(Node):
     """ROS 2 Node executing 2D EKF-SLAM and publishing visualization markers."""
 
     def __init__(self):
+        """Initialize EKF state, ROS adapters, and publication/recording timers.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         if not HAS_ROS2:
             raise RuntimeError("ROS 2 packages required.")
         super().__init__('ekf_slam_node')
+        self._declare_parameters()
+        self._load_settings()
+        self._create_extrinsics()
+        self._create_estimator()
+        self._create_vo_estimator()
+        self._create_tf()
+        self._create_subscriptions()
+        self._create_publishers()
+        self._create_pose_service()
+        self._initialize_history()
+        self._create_timers()
 
+    def _declare_parameters(self):
+        """Declare estimator, frame, covariance, and recording parameters.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         # Declare parameters
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('robot_frame', 'base_link')
@@ -73,6 +101,8 @@ class EkfSlamNode(Node):
         self.declare_parameter('ekf_slam.motion_prediction_source', 'visual_odometry')
         self.declare_parameter('ekf_slam.use_cmd_vel_fallback', True)
         self.declare_parameter('ekf_slam.cmd_vel_timeout_s', 0.5)
+        self.declare_parameter('ekf_slam.command_topic', '/cmd_vel')
+        self.declare_parameter('ekf_slam.command_hold_s', 0.15)
 
         self.declare_parameter('ekf_slam.initial_covariance.sigma_x_m', 0.001)
         self.declare_parameter('ekf_slam.initial_covariance.sigma_y_m', 0.001)
@@ -97,6 +127,15 @@ class EkfSlamNode(Node):
         self.declare_parameter('recording.default_output_dir', 'hw3_results')
         self.declare_parameter('recording.auto_export_csv', True)
 
+    def _load_settings(self):
+        """Load frame names and prediction-source settings.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         # Retrieve parameters
         self.map_frame = self.get_parameter('map_frame').value
         self.robot_frame = self.get_parameter('robot_frame').value
@@ -107,6 +146,19 @@ class EkfSlamNode(Node):
         self.use_cmd_fallback = self.get_parameter('ekf_slam.use_cmd_vel_fallback').value
         self.cmd_vel_timeout_s = self.get_parameter('ekf_slam.cmd_vel_timeout_s').value
 
+        self.command_prediction = self.get_parameter('ekf_slam.motion_prediction_source').value == 'cmd_vel'
+        self.command_hold_s = self.get_parameter('ekf_slam.command_hold_s').value
+        self.last_prediction_time = None
+
+    def _create_extrinsics(self):
+        """Construct the camera optical-to-base mount transform.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         # Build CameraExtrinsics
         self.extrinsics = CameraExtrinsics(
             x_m=self.get_parameter('camera_mount.x_m').value,
@@ -117,6 +169,15 @@ class EkfSlamNode(Node):
             yaw_deg=self.get_parameter('camera_mount.yaw_deg').value,
         )
 
+    def _create_estimator(self):
+        """Initialize EKF state and noise models from parameters.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         # Initialize EKF
         init_sigma = (
             self.get_parameter('ekf_slam.initial_covariance.sigma_x_m').value,
@@ -148,6 +209,15 @@ class EkfSlamNode(Node):
             mahalanobis_gate=self.get_parameter('ekf_slam.mahalanobis_gate').value,
         )
 
+    def _create_vo_estimator(self):
+        """Create the internal frame-to-frame visual motion estimator.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         # Synchronous internal Visual Motion Estimator (ensures prediction precedes update)
         self.vo_estimator = VisualMotionEstimator(
             extrinsics=self.extrinsics,
@@ -161,11 +231,22 @@ class EkfSlamNode(Node):
             base_rot_noise_rad=self.get_parameter('ekf_slam.process_noise.vo_sigma_theta_rad').value,
         )
 
+    def _create_tf(self):
+        """Create TF lookup and map-to-base publication interfaces."""
         # TF & Buffers
         self.tf_buffer = Buffer(node=self)
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_broadcaster = TransformBroadcaster(self)
 
+    def _create_subscriptions(self):
+        """Subscribe to relative motion, commands, and tag observations.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         # Subscriptions
         self.vo_sub = self.create_subscription(
             TwistWithCovarianceStamped,
@@ -175,7 +256,7 @@ class EkfSlamNode(Node):
         )
         self.cmd_sub = self.create_subscription(
             Twist,
-            '/cmd_vel',
+            self.get_parameter('ekf_slam.command_topic').value,
             self.on_cmd_vel,
             10
         )
@@ -186,6 +267,15 @@ class EkfSlamNode(Node):
             10
         )
 
+    def _create_publishers(self):
+        """Create pose, trajectory, landmark, and status publishers.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         # Publishers
         self.pose_pub = self.create_publisher(
             PoseWithCovarianceStamped,
@@ -208,6 +298,15 @@ class EkfSlamNode(Node):
             10
         )
 
+    def _create_pose_service(self):
+        """Expose the optional pose service when its interface is available.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         # Service /get_robot_pose compatible with HW2
         if GetRobotPose is not None:
             self.get_pose_srv = self.create_service(
@@ -219,6 +318,8 @@ class EkfSlamNode(Node):
         else:
             self.get_pose_srv = None
 
+    def _initialize_history(self):
+        """Initialize command times and empty trajectory histories."""
         # State tracking for fallback & trajectory history
         self.last_vo_time = 0.0
         self.last_cmd_time = 0.0
@@ -226,6 +327,8 @@ class EkfSlamNode(Node):
         self.trajectory_poses: List[PoseStamped] = []
         self.trajectory_records: List[dict] = []
 
+    def _create_timers(self):
+        """Create pose publication and optional CSV export timers."""
         # Periodic publish timer (10 Hz)
         self.pub_timer = self.create_timer(0.1, self.on_publish_timer)
 
@@ -242,22 +345,43 @@ class EkfSlamNode(Node):
         pass
 
     def on_cmd_vel(self, msg: Twist):
-        """Track commanded velocities for fallback prediction."""
+        """Integrate the previous held command before storing its replacement."""
         now_s = self.get_clock().now().nanoseconds * 1e-9
-        v = msg.linear.x
-        omega = msg.angular.z
-        self.last_cmd = (v, omega)
-
-        # If VO has not fired recently, use cmd_vel as fallback prediction
-        vo_idle_time = now_s - self.last_vo_time
-        if self.use_cmd_fallback and vo_idle_time > self.cmd_vel_timeout_s:
-            dt = 0.1 if self.last_cmd_time == 0.0 else max(1e-4, min(0.5, now_s - self.last_cmd_time))
-            if dt > 0.0 and (abs(v) > 1e-4 or abs(omega) > 1e-4):
-                self.ekf.predict_commanded_velocity(v, omega, dt)
+        self._predict_command_until(now_s)
+        self.last_cmd = (msg.linear.x, msg.angular.z)
         self.last_cmd_time = now_s
+        self.last_prediction_time = now_s
+
+    def _predict_command_until(self, now_s):
+        """Predict each held-command interval once, ending at the motor timeout.
+
+        Args:
+            now_s: Current ROS time in seconds; bounds the interval being integrated.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
+        if self.last_prediction_time is None:
+            return
+        start = max(self.last_prediction_time, self.last_cmd_time)
+        end = min(now_s, self.last_cmd_time + self.command_hold_s)
+        self.last_prediction_time = now_s
+        if not self.command_prediction:
+            if not self.use_cmd_fallback:
+                return
+            start = max(start, self.last_vo_time + self.cmd_vel_timeout_s)
+        if end > start:
+            self.ekf.predict_commanded_velocity(*self.last_cmd, end - start)
 
     def on_detections(self, msg: AprilTagDetectionArray):
-        """Handle tag detections: synchronously computes VO prediction first, then updates landmarks."""
+        """Handle tag detections: synchronously computes VO prediction first, then updates landmarks.
+
+        Args:
+            msg: Incoming ROS message for this callback, with its original timestamp and frame.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         stamp = msg.header.stamp
         stamp_s = stamp.sec + stamp.nanosec * 1e-9
         stamp_ns = stamp.sec * 10**9 + stamp.nanosec
@@ -288,21 +412,16 @@ class EkfSlamNode(Node):
             stamp_ns=stamp_ns,
         )
 
-        # Step 2: Prediction step ALWAYS precedes measurement update
-        if vo_est.valid:
+        # command-based navigation integrates the mapper's calibrated applied rate
+        if self.command_prediction:
+            self._predict_command_until(self.get_clock().now().nanoseconds * 1e-9)
+        elif vo_est.valid:
             self.ekf.predict_visual_odometry(
                 vo_est.dx, vo_est.dy, vo_est.dtheta, vo_est.covariance
             )
             self.last_vo_time = stamp_s
-        elif self.use_cmd_fallback and self.last_cmd_time > 0.0:
-            now_s = self.get_clock().now().nanoseconds * 1e-9
-            if (now_s - self.last_vo_time) > self.cmd_vel_timeout_s:
-                dt = 0.1 if self.last_cmd_time == 0.0 else max(1e-4, min(0.5, now_s - self.last_cmd_time))
-                v, omega = self.last_cmd
-                if dt > 0.0 and (abs(v) > 1e-4 or abs(omega) > 1e-4):
-                    self.ekf.predict_commanded_velocity(v, omega, dt)
         else:
-            # Untracked drift propagation during manual movement or VO dropout
+            self._predict_command_until(self.get_clock().now().nanoseconds * 1e-9)
             if self.last_vo_time > 0.0:
                 dt_blind = min(2.0, max(0.0, stamp_s - self.last_vo_time))
                 if dt_blind > 0.05:
@@ -323,8 +442,16 @@ class EkfSlamNode(Node):
             self.status_pub.publish(status)
 
     def on_publish_timer(self):
-        """Periodic publisher for pose, trajectory, landmarks, and TF."""
+        """Periodic publisher for pose, trajectory, landmarks, and TF.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         now = self.get_clock().now()
+        self._predict_command_until(now.nanoseconds * 1e-9)
         pose_est = self.ekf.get_robot_pose()
 
         # 1. Publish PoseWithCovarianceStamped
@@ -390,7 +517,14 @@ class EkfSlamNode(Node):
         self._publish_landmark_markers(now.to_msg())
 
     def _publish_landmark_markers(self, stamp):
-        """Create and publish MarkerArray for landmark positions, IDs, and ellipses."""
+        """Create and publish MarkerArray for landmark positions, IDs, and ellipses.
+
+        Args:
+            stamp: ROS observation timestamp used for lookup or publication.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         markers = []
         landmarks = self.ekf.get_all_landmarks()
 
@@ -467,7 +601,20 @@ class EkfSlamNode(Node):
         cov_2x2: np.ndarray,
         color: Optional[ColorRGBA] = None,
     ) -> Marker:
-        """Create a 2D confidence ellipse marker from a 2x2 covariance matrix."""
+        """Create a 2D confidence ellipse marker from a 2x2 covariance matrix.
+
+        Args:
+            stamp: ROS observation timestamp used for lookup or publication.
+            marker_id: Integer marker identifier within its namespace.
+            ns: Marker namespace used to identify this ellipse.
+            cx: Ellipse center x coordinate in the map frame, in meters.
+            cy: Ellipse center y coordinate in the map frame, in meters.
+            cov_2x2: 2x2 position covariance ordered [x, y], in square meters.
+            color: Optional ROS RGBA marker color; None uses the default landmark color.
+
+        Returns:
+            ROS Marker line strip in the configured map frame.
+        """
         m = Marker()
         m.header.stamp = stamp
         m.header.frame_id = self.map_frame
@@ -516,7 +663,17 @@ class EkfSlamNode(Node):
         family: str,
         stamp: Time,
     ) -> Optional[np.ndarray]:
-        """Look up 4x4 transform T_cam_tag from TF."""
+        """Look up 4x4 transform T_cam_tag from TF.
+
+        Args:
+            camera_frame: Name of the camera optical frame used for tag pose lookup.
+            tag_id: AprilTag integer ID used to associate the same stationary landmark.
+            family: AprilTag family string used to resolve the detector TF frame name.
+            stamp: ROS observation timestamp used for lookup or publication.
+
+        Returns:
+            4x4 tag-to-camera optical transform, or None when lookup fails.
+        """
         candidate_frames = [f"tag_{tag_id}", f"{family}:{tag_id}"]
         for tag_frame in candidate_frames:
             try:
@@ -544,7 +701,15 @@ class EkfSlamNode(Node):
         return None
 
     def on_get_robot_pose_request(self, request, response):
-        """Service callback for /get_robot_pose (HW2 controller compatibility)."""
+        """Service callback for /get_robot_pose (HW2 controller compatibility).
+
+        Args:
+            request: Pose service request; no input fields are required.
+            response: Pose service response to populate with the current estimate.
+
+        Returns:
+            The supplied response populated with current pose and known tag IDs.
+        """
         pose_est = self.ekf.get_robot_pose()
         now = self.get_clock().now()
 
@@ -564,7 +729,14 @@ class EkfSlamNode(Node):
         return response
 
     def export_to_csv(self):
-        """Export current trajectory and landmark map to CSV files."""
+        """Export current trajectory and landmark map to CSV files.
+
+        Args:
+            None.
+
+        Returns:
+            None. State changes and publications are performed in place.
+        """
         out_dir = Path(self.get_parameter('recording.default_output_dir').value)
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -590,6 +762,14 @@ class EkfSlamNode(Node):
 
 
 def main(args=None):
+    """Run this module through its command-line entry point.
+
+    Args:
+        args: Optional command-line arguments; None uses the process arguments.
+
+    Returns:
+        None. State changes and publications are performed in place.
+    """
     if not HAS_ROS2:
         print("ROS 2 packages not available.")
         return

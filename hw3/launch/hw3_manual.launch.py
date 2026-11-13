@@ -11,6 +11,12 @@ def generate_launch_description():
     Used when manually moving or sliding the robot (e.g. in a square).
     Relies purely on visual motion estimation from stationary AprilTags;
     cmd_vel fallback is disabled so no motion is fabricated when stationary.
+
+    Args:
+        None.
+
+    Returns:
+        LaunchDescription for this HW3 workflow.
     """
     params_file_arg = DeclareLaunchArgument(
         'params_file',
