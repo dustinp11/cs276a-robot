@@ -12,22 +12,20 @@ class VelocityToMotorNode(Node):
         self.wheel_base = 0.127  # [m]
 
         self.cmd_max = 1.5
-        self.left_linear_deadzone = 0.20
-        self.left_linear_slope = 2.3 
-        self.right_linear_deadzone = 0.20
-        self.right_linear_slope = 2.3 
-        
-        self.left_angular_deadzone = 0.225
-        self.left_angular_slope = 15.0
-        self.right_angular_deadzone = 0.22
-        self.right_angular_slope = 15.0
 
-        # Calibrated parameters: turn in place using motor input [-0.35, 0.35] (CCW) and [0.35, -0.35] (CW)
-        # Measured 360 deg turn times: CCW = 5.0s (1.2566 rad/s), CW = 4.8s (1.3090 rad/s)
-        self.ccw_turn_left_cmd = -0.35
-        self.ccw_turn_right_cmd = 0.35
-        self.cw_turn_left_cmd = 0.35
-        self.cw_turn_right_cmd = -0.35
+        # Calibrated parameters accounting for power discrepancy between left and right wheels:
+        # Linear movement: motor input [0.18, 0.15] produces 0.20 m/s
+        self.nominal_linear_velocity = 0.20  # [m/s]
+        self.forward_left_cmd = 0.18
+        self.forward_right_cmd = 0.15
+
+        # Angular movement: 90 deg/s (1.5708 rad/s)
+        # CCW turn in place: motor input [-0.40, 0.37]
+        # CW turn in place: motor input [0.37, -0.37]
+        self.ccw_turn_left_cmd = -0.40
+        self.ccw_turn_right_cmd = 0.37
+        self.cw_turn_left_cmd = 0.37
+        self.cw_turn_right_cmd = -0.37
 
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.motor_pub = self.create_publisher(Float32MultiArray, '/motor_commands', 10)
@@ -37,27 +35,25 @@ class VelocityToMotorNode(Node):
         v_left  = linear - half_b * angular
         v_right = linear + half_b * angular
         return v_left, v_right
-    
-    def _map_with_deadzone(self, value: float, deadzone: float, slope: float) -> float:
-        cmd_mag = deadzone + abs(value) / max(slope, 1e-9)
-        return np.copysign(cmd_mag, value)
 
     def cmd_vel_callback(self, msg: Twist):
         lin = float(msg.linear.x)
         ang = float(msg.angular.z)
         
-        
         v_left, v_right = self._wheel_velocities(lin, ang)
         if lin != 0.0:
-            left_cmd = self._map_with_deadzone(v_left, self.left_linear_deadzone, self.left_linear_slope)
-            right_cmd = self._map_with_deadzone(v_right, self.right_linear_deadzone, self.right_linear_slope)
+            # Scale motor commands based on calibrated [0.18, 0.15] at 0.20 m/s
+            scale_left = self.forward_left_cmd / self.nominal_linear_velocity
+            scale_right = self.forward_right_cmd / self.nominal_linear_velocity
+            left_cmd = float(np.clip(scale_left * v_left, -self.cmd_max, self.cmd_max))
+            right_cmd = float(np.clip(scale_right * v_right, -self.cmd_max, self.cmd_max))
         elif ang != 0.0:
             if ang > 0.0:
-                # CCW turn in place: calibrated [-0.35, 0.35] (360 deg in 5.0s)
+                # CCW turn in place: calibrated [-0.40, 0.37] (90 deg/s)
                 left_cmd = self.ccw_turn_left_cmd
                 right_cmd = self.ccw_turn_right_cmd
             else:
-                # CW turn in place: calibrated [0.35, -0.35] (360 deg in 4.8s)
+                # CW turn in place: calibrated [0.37, -0.37] (90 deg/s)
                 left_cmd = self.cw_turn_left_cmd
                 right_cmd = self.cw_turn_right_cmd
         else:

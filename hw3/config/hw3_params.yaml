@@ -88,11 +88,11 @@
     # Closed-Loop Square Navigation settings
     navigation:
       square_size_ft: 7.0             # Side length of the square in feet (7 ft = 2.1336 m)
-      max_linear_velocity: 0.30       # Maximum linear speed (m/s, brisk driving to prevent motor stall)
-      min_linear_velocity: 0.10       # Minimum linear speed to overcome motor deadzone (m/s)
-      angular_velocity_ccw: 1.2566    # Calibrated CCW angular speed (rad/s, 360 deg in 5.0s with [-0.35, 0.35])
-      angular_velocity_cw: 1.3090     # Calibrated CW angular speed (rad/s, 360 deg in 4.8s with [0.35, -0.35])
-      max_angular_velocity: 1.31      # Maximum angular turn speed (rad/s)
+      max_linear_velocity: 0.20       # Calibrated linear speed (0.20 m/s with [0.18, 0.15])
+      min_linear_velocity: 0.20       # Minimum linear speed (keeps constant 0.20 m/s throughout legs)
+      angular_velocity_ccw: 1.5708    # Calibrated CCW angular speed (90 deg/s with [-0.40, 0.37])
+      angular_velocity_cw: 1.5708     # Calibrated CW angular speed (90 deg/s with [0.37, -0.37])
+      max_angular_velocity: 1.5708    # Maximum angular turn speed (rad/s)
       min_angular_velocity: 0.20      # Minimum angular turn speed (rad/s)
       linear_kp: 0.60                 # Proportional gain on distance error
       angular_kp: 1.20                # Proportional gain on heading error
@@ -100,6 +100,7 @@
       heading_tolerance_rad: 0.10     # Heading tolerance for turn-in-place (~5.7 deg)
       heading_drive_threshold_rad: 0.45 # Heading error threshold to revert to turn-in-place (~26 deg)
       turn_step_deg: 90.0             # Option A: Single continuous 90 deg turn at corners
+      pre_turn_stop_time_s: 1.0       # Full stop duration (s) before each 90 deg corner turn
       turn_settle_time_s: 1.5         # Pause duration after turn for camera stabilization & tag discovery (s)
       pose_timeout_s: 0.60            # Maximum allowable age of EKF pose before halting (s)
       max_position_uncertainty_m: 0.40  # Maximum allowable robot position 1-sigma before halting (m)

@@ -26,11 +26,11 @@ class SquareNavigationNode(Node):
 
         # Declare parameters
         self.declare_parameter('square_size_ft', 7.0)
-        self.declare_parameter('max_linear_velocity', 0.30)
-        self.declare_parameter('min_linear_velocity', 0.10)
-        self.declare_parameter('angular_velocity_ccw', 1.2566)
-        self.declare_parameter('angular_velocity_cw', 1.3090)
-        self.declare_parameter('max_angular_velocity', 1.31)
+        self.declare_parameter('max_linear_velocity', 0.20)
+        self.declare_parameter('min_linear_velocity', 0.20)
+        self.declare_parameter('angular_velocity_ccw', 1.5708)
+        self.declare_parameter('angular_velocity_cw', 1.5708)
+        self.declare_parameter('max_angular_velocity', 1.5708)
         self.declare_parameter('min_angular_velocity', 0.20)
         self.declare_parameter('linear_kp', 0.60)
         self.declare_parameter('angular_kp', 1.20)
@@ -39,6 +39,7 @@ class SquareNavigationNode(Node):
         self.declare_parameter('heading_drive_threshold_rad', 0.45)
         self.declare_parameter('turn_step_deg', 90.0)
         self.declare_parameter('turn_settle_time_s', 1.5)
+        self.declare_parameter('pre_turn_stop_time_s', 1.0)
         self.declare_parameter('pose_timeout_s', 0.60)
         self.declare_parameter('max_position_uncertainty_m', 0.40)
         self.declare_parameter('max_heading_uncertainty_rad', 0.40)
@@ -63,6 +64,7 @@ class SquareNavigationNode(Node):
             heading_drive_threshold_rad=self.get_parameter('heading_drive_threshold_rad').value,
             turn_step_deg=self.get_parameter('turn_step_deg').value,
             turn_settle_time_s=self.get_parameter('turn_settle_time_s').value,
+            pre_turn_stop_time_s=self.get_parameter('pre_turn_stop_time_s').value,
             pose_timeout_s=self.get_parameter('pose_timeout_s').value,
             max_pos_uncertainty_m=self.get_parameter('max_position_uncertainty_m').value,
             max_heading_uncertainty_rad=self.get_parameter('max_heading_uncertainty_rad').value,
@@ -263,7 +265,7 @@ class SquareNavigationNode(Node):
                 pass
 
         # 5. Log periodically to terminal if active
-        if output.state in (NavigationState.DRIVING, NavigationState.TURNING, NavigationState.SETTLING):
+        if output.state in (NavigationState.DRIVING, NavigationState.TURNING, NavigationState.SETTLING, NavigationState.PRE_TURN_STOP):
             self.get_logger().info(
                 f"[{output.state.value} WP{output.waypoint_index}] dist={output.distance_error_m:.2f}m, "
                 f"head_err={math.degrees(output.heading_error_rad):.1f}°, "
