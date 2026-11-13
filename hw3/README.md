@@ -103,7 +103,7 @@ The square now uses the following phases on each of four sides:
   mapped tag. Missing/stale EKF messages use calibrated command prediction;
   high covariance does not block the mission.
 - Drive a nominal first 3 feet (0.9144 m, half the configured side length),
-  then stop for `navigation.midpoint_pause_s` (default 1.0 second). Callbacks
+  then stop for `navigation.midpoint_pause_s` (default 3.0 seconds). Callbacks
   remain active during the pause so delayed images and EKF updates can arrive.
 - At pause completion, project a fresh, sufficiently confident post-stop EKF
   position onto the original side axis. Subtract that progress from the total
@@ -117,10 +117,10 @@ The square now uses the following phases on each of four sides:
   displacement provide distance feedback. Forward speed prediction is fixed at 0.203 m/s and
   angular commands remain zero. The existing total-leg command budget still
   advances to the corner turn if the distance estimate stays frozen.
-- Stop for one second, then command a single continuous nominal 90° left turn
+- Stop for three seconds, then command a single continuous nominal 90° left turn
   using the measured CCW rate. There is no 360° scan. The nominal quarter-turn
   takes 1.0 second at the current calibration, with control-tick quantization.
-- Stop for another `navigation.turn_settle_s` (default 1 second), allowing delayed
+- Stop for another `navigation.turn_settle_s` (default 3 seconds), allowing delayed
   camera observations to arrive. A missing observation never extends this pause.
 - Prefer the same tag's face-normal orientation before and after turning to
   measure actual relative yaw change and correct that rotation toward 90°,

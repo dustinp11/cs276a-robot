@@ -60,7 +60,7 @@ class SquareNavigator:
                  heading_tolerance_rad=0.12, pose_timeout_s=0.60,
                  max_pos_uncertainty_m=0.40, max_heading_uncertainty_rad=0.40,
                  turn_calibration=None, turn_pulse_rad=math.pi / 12,
-                 turn_settle_s=1.0, policy=None, forward_calibration=None):
+                 turn_settle_s=3.0, policy=None, forward_calibration=None):
         """Configure a stopped four-leg mission without supplying a surveyed map.
 
         Args:

@@ -70,7 +70,7 @@ class SquareNavigationNode(Node):
         self.declare_parameter('navigation.log_csv', True)
 
         self.declare_parameter('navigation.turn_pulse_rad', math.pi / 12)
-        self.declare_parameter('navigation.turn_settle_s', 1.0)
+        self.declare_parameter('navigation.turn_settle_s', 3.0)
 
     def _create_navigator(self):
         """Build the pure square controller from shared calibration and parameters.

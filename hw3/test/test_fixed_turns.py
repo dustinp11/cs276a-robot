@@ -251,10 +251,34 @@ class TestFixedTurns(unittest.TestCase):
     def at_midpoint(self):
         """Prepare a half-traveled leg and enter its stopped midpoint phase."""
         nav = self.prepared(NavigationState.DRIVING)
+        nav.policy = NavigationPolicy(midpoint_pause_s=1.0)  # explicit fixture timing
         nav._reset_midpoint()
         nav.drive_used = nav.square_size_m / 2
         self.assertEqual(nav.step(2).state, NavigationState.MIDPOINT_PAUSE)
         return nav
+
+    def test_default_pauses_are_three_seconds_and_never_require_feedback(self):
+        """Both acquisition pauses remain stopped for three seconds, then continue.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks midpoint and post-turn timing without sensor observations.
+        """
+        nav = self.at_midpoint()
+        nav.policy = NavigationPolicy()
+        self.assertEqual(nav.policy.midpoint_pause_s, 3.0)
+        self.assertEqual(nav.step(4.99).state, NavigationState.MIDPOINT_PAUSE)
+        self.assertEqual(nav.step(5).state, NavigationState.DRIVING)
+        self.assertGreater(nav.step(5.05).linear_v_mps, 0)
+        nav = SquareNavigator(turn_calibration=self.calibration)
+        self.assertEqual(nav.turn_settle_s, 3.0)
+        nav.start()
+        nav.side_index = 1
+        nav._transition(NavigationState.CORNER_PAUSE, 1)
+        self.assertEqual(nav.step(3.99).state, NavigationState.CORNER_PAUSE)
+        self.assertEqual(nav.step(4).state, NavigationState.DRIVING)
 
     def test_midpoint_pause_accepts_ekf_undershoot_without_steering(self):
         """A shorter measured first half increases only the remaining forward distance.
