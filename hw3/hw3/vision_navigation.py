@@ -15,6 +15,7 @@ class NavigationPolicy:
 
     vision_timeout_s: float = 1.0
     corner_timeout_s: float = 18.0
+    corner_turn_duration_s: float = 0.9
     corner_min_correction_rad: float = math.pi / 18
     corner_correction_limit_rad: float = math.pi / 12
     corner_max_corrections: int = 2

@@ -64,14 +64,14 @@ class TestFixedTurns(unittest.TestCase):
         self.assertAlmostEqual(ccw.angular_radps * 1.0, math.pi / 2)
         self.assertAlmostEqual(cw.angular_radps * 1.0, -math.pi / 2)
 
-    def test_measured_asymmetric_quarter_turn_lasts_one_second(self):
-        """Exercise the nominal 90-degree command at the 20 Hz control frequency.
+    def test_measured_asymmetric_corner_pulse_lasts_point_nine_seconds(self):
+        """Exercise the shortened initial turn at the 20 Hz control frequency.
 
         Args:
             None.
 
         Returns:
-            None. Confirms exactly one second of [-0.40, +0.37] command prediction.
+            None. Confirms 0.9 seconds of [-0.40, +0.37] and an honest 81-degree prediction.
         """
         calibration = TurnCalibration(-0.40, 0.37, 0.37, -0.37, math.pi / 2, math.pi / 2)
         mapper = VelocityMapper(calibration)
@@ -89,8 +89,8 @@ class TestFixedTurns(unittest.TestCase):
                 self.assertAlmostEqual(motors.angular_radps, math.pi / 2)
             if cmd.state == NavigationState.CORNER_PAUSE:
                 break
-        self.assertEqual(moving_ticks, 20)
-        self.assertAlmostEqual(nav.corner_used, math.pi / 2)
+        self.assertEqual(moving_ticks, 18)
+        self.assertAlmostEqual(nav.corner_used, math.radians(81))
 
     def test_turn_calibration_rejects_wrong_direction_signs(self):
         for motors in [(0.4, 0.37, 0.4, -0.4), (-0.4, -0.37, 0.4, -0.4),
@@ -159,7 +159,8 @@ class TestFixedTurns(unittest.TestCase):
         Returns:
             None. Verifies sequence, heading, command separation, and approximate closure.
         """
-        nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
+        ideal_policy = NavigationPolicy(corner_turn_duration_s=math.pi / 2 / self.calibration.ccw_radps)
+        nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1, policy=ideal_policy)
         nav.start()
         x = y = yaw = 0.0
         states, previous, corners = set(), None, 0
@@ -192,7 +193,8 @@ class TestFixedTurns(unittest.TestCase):
         Returns:
             None. Verifies completion, no tag waits, four corners, and nominal command closure.
         """
-        nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1)
+        ideal_policy = NavigationPolicy(corner_turn_duration_s=math.pi / 2 / self.calibration.ccw_radps)
+        nav = SquareNavigator(turn_calibration=self.calibration, turn_settle_s=0.1, policy=ideal_policy)
         nav.start()
         x = y = yaw = 0.0
         corners, previous = 0, None
@@ -377,14 +379,14 @@ class TestFixedTurns(unittest.TestCase):
 
 
 
-    def test_corner_is_one_nominal_quarter_turn_then_camera_pause(self):
-        """Command one continuous quarter-turn without tags or intermediate scan stages.
+    def test_corner_is_one_short_left_pulse_then_camera_pause(self):
+        """Command one shortened pulse without tags or intermediate scan stages.
 
         Args:
             None.
 
         Returns:
-            None. Verifies approximately 90 degrees, a stopped pause, and continuation.
+            None. Verifies duration-times-rate rotation, a stopped pause, and continuation.
         """
         nav = self.prepared(NavigationState.TURNING)
         nav.turn_settle_s = 1.0
@@ -402,7 +404,8 @@ class TestFixedTurns(unittest.TestCase):
             if cmd.state == NavigationState.DRIVING:
                 break
         self.assertEqual(nav.state, NavigationState.DRIVING)
-        self.assertAlmostEqual(angle, math.pi / 2, delta=self.calibration.ccw_radps * 0.05)
+        self.assertAlmostEqual(angle, self.calibration.ccw_radps * nav.policy.corner_turn_duration_s,
+                               delta=self.calibration.ccw_radps * 0.05)
         self.assertGreaterEqual(now - stopped_at, 1.0 - 1e-8)
         self.assertEqual(nav.correction_count, 0)
 

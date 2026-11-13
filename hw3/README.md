@@ -118,9 +118,11 @@ The square now uses the following phases on each of four sides:
   and vision still aids corner corrections. Heading and motor pair stay unchanged.
 - Missing, stale, or uncertain EKF data use zero distance adjustment. The pause
   always ends after its fixed duration, and no tag observation is required.
-- Stop for three seconds, then command a single continuous nominal 90° left turn
-  using the measured CCW rate. There is no 360° scan. The nominal quarter-turn
-  takes 1.0 second at the current calibration, with control-tick quantization.
+- Stop for three seconds, then apply one initial left-turn pulse for
+  `navigation.corner_turn_duration_s` (default 0.9 seconds) using the measured
+  fixed CCW inputs. This shorter pulse aims to reduce physical overshoot. The
+  stored rate still predicts 81° for 0.9 seconds; the EKF and logs do not pretend
+  it measured 90°. There is no 360° scan. Duration has control-tick quantization.
 - Stop for another `navigation.turn_settle_s` (default 3 seconds), allowing delayed
   camera observations to arrive. A missing observation never extends this pause.
 - Prefer the same tag's face-normal orientation before and after turning to

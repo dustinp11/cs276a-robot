@@ -403,11 +403,12 @@ class SquareNavigator:
         self._transition(NavigationState.TURNING, now)
 
     def _turn_corner(self, now):
-        """Command a nominal 90-degree left turn, independently of the learned map."""
-        if self.corner_used + 1e-9 >= math.pi / 2 or now - self.phase_started >= self.policy.corner_timeout_s:
+        """Apply the shorter initial left pulse without fabricating a completed 90-degree turn."""
+        target_angle = self.turn_calibration.ccw_radps * self.policy.corner_turn_duration_s
+        if self.corner_used + 1e-9 >= target_angle or now - self.phase_started >= self.policy.corner_timeout_s:
             self._transition(NavigationState.CORNER_PAUSE, now)
-            return self._output('Quarter-turn finished; stopped for camera processing')
-        return self._output('Direct nominal 90-degree left turn', angular=self.turn_calibration.rate(1))
+            return self._output('Initial left-turn pulse finished; stopped for camera processing')
+        return self._output('Initial left-turn pulse toward 90-degree corner', angular=self.turn_calibration.rate(1))
 
     def _corner_error(self, now):
         """Prefer relative tag orientation, then optional fresh EKF heading corrections.
