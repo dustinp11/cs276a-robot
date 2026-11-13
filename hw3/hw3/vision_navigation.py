@@ -42,7 +42,7 @@ class VisualFeedback:
         """Initialize empty observations and no active leg anchors."""
         self.policy = policy
         self.stamp = self.valid_stamp = -math.inf
-        self.clearance = None
+        self.clearance, self.clearance_stamp = None, -math.inf
         self.samples = deque(maxlen=100)
         self.baselines = {}
         self.progress = None
@@ -73,8 +73,10 @@ class VisualFeedback:
         if stamp <= self.stamp:
             return
         self.stamp = stamp
+        if tags:
+            self.clearance, self.clearance_stamp = clearance, stamp
         if tags and known_ids:
-            self.valid_stamp, self.clearance = stamp, clearance
+            self.valid_stamp = stamp
         self.samples.append((stamp, set(known_ids), pose))
         if self.heading is not None:
             self._update_progress(tags, known_ids, pose[2], predicted_progress)
@@ -111,6 +113,12 @@ class VisualFeedback:
     def fresh(self, now):
         """Require a real image timestamp within the allowed age, not a pose timer."""
         return -0.05 <= now - self.valid_stamp <= self.policy.vision_timeout_s
+
+    def wall_too_close(self, now):
+        """Use fresh wall geometry even from a tag first discovered during this leg."""
+        return (self.clearance is not None
+                and -0.05 <= now - self.clearance_stamp <= self.policy.vision_timeout_s
+                and self.clearance <= self.policy.wall_stop_distance_m)
 
     def stable(self, now, since):
         """Require multiple known tags and stable poses from distinct stopped frames.

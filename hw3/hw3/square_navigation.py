@@ -79,7 +79,7 @@ class SquareNavigator:
             policy: NavigationPolicy with vision, stability, clearance, and time limits.
 
         Returns:
-            None. Motion starts only after start() and fresh visual localization.
+            None. The first leg needs a fresh estimator heartbeat, but no visible tags.
         """
         self.square_size_m = float(square_size_ft) * self.FEET_TO_METERS
         self.max_linear_v, self.min_linear_v = max_linear_v_mps, min_linear_v_mps
@@ -141,7 +141,7 @@ class SquareNavigator:
         if self.state != NavigationState.IDLE:
             return False, 'Mission already started; reset/relaunch for a new run.'
         self.is_active, self.state = True, NavigationState.WAITING_FOR_POSE
-        return True, 'Waiting for a pose and stable known-tag observations.'
+        return True, 'Starting first six-foot leg; no prior tags required.'
 
     def stop(self, reason='Manual stop requested'):
         """Latch a terminal stop; ordinary start requests cannot resume motion."""
@@ -209,10 +209,12 @@ class SquareNavigator:
             return 'Waiting for initial EKF pose'
         if not -0.05 <= now - self.latest_pose_stamp_s <= self.pose_timeout_s:
             return 'Pose feedback is stale or invalid'
-        if (self.latest_uncertainty[0] > self.max_pos_uncertainty_m
-                or self.latest_uncertainty[1] > self.max_heading_uncertainty_rad):
-            return 'Pose uncertainty exceeds navigation limits'
         return None
+
+    def _uncertainty_ok(self):
+        """Check EKF confidence for visually verified phases after the first scan."""
+        return (self.latest_uncertainty[0] <= self.max_pos_uncertainty_m
+                and self.latest_uncertainty[1] <= self.max_heading_uncertainty_rad)
 
     def _account_motion(self, now):
         """Bound command accounting by the motor watchdog; never assume a fixed tick."""
@@ -255,6 +257,9 @@ class SquareNavigator:
         problem = self._pose_problem(now)
         if problem and self.state != NavigationState.WAITING_FOR_POSE:
             return self._fail(problem)
+        if self.side_index > 0 and self.state in (NavigationState.DRIVING, NavigationState.ALIGNING):
+            if not self._uncertainty_ok():
+                return self._fail('Pose uncertainty exceeds navigation limits')
         handlers = {NavigationState.WAITING_FOR_POSE: self._wait_for_start,
                     NavigationState.DRIVING: self._drive, NavigationState.STOPPING: self._settle,
                     NavigationState.SCANNING: self._scan, NavigationState.LOCALIZING: self._localize,
@@ -262,13 +267,13 @@ class SquareNavigator:
         return handlers[self.state](now)
 
     def _wait_for_start(self, now):
-        """Require stable observed landmarks before authorizing the first straight leg."""
+        """Begin the first leg on a fresh pose heartbeat without any landmark prerequisite."""
         if now - self.phase_started > self.policy.localization_timeout_s:
-            return self._fail('Initial visual localization timed out')
-        if self._pose_problem(now) or not self.vision.stable(now, self.phase_started):
-            return self._output('Waiting for stable known-tag localization')
+            return self._fail('Initial estimator pose timed out')
+        if self._pose_problem(now):
+            return self._output('Waiting for initial estimator pose; tags are optional')
         self._begin_leg(now)
-        return self._output('Visual start verified; ready to drive')
+        return self._drive(now)
 
     def _begin_leg(self, now):
         """Anchor this side at the current pose without changing its absolute heading."""
@@ -289,15 +294,15 @@ class SquareNavigator:
         Returns:
             NavigationOutput for forward motion, arrival, or terminal feedback failure.
         """
-        if not self.vision.fresh(now):
+        if self.side_index > 0 and not self.vision.fresh(now):
             return self._fail('Lost fresh tag observations while driving')
-        if self.vision.clearance is not None and self.vision.clearance <= self.policy.wall_stop_distance_m:
+        if self.vision.wall_too_close(now):
             return self._fail('Visible wall inside forward clearance limit')
         if self.drive_used > self.policy.drive_budget_factor * self.square_size_m:
             return self._fail('Straight command budget exhausted before visual arrival')
-        self.progress = self._ekf_progress()
+        self.progress = self.drive_used if self.side_index == 0 else self._ekf_progress()
         if now - self.vision.progress_stamp <= self.policy.vision_timeout_s:
-            self.progress = self.vision.extrapolated_progress(self.progress)
+            self.progress = self.vision.extrapolated_progress(self._ekf_progress())
         remaining = self.square_size_m - self.progress
         if remaining <= self.waypoint_tolerance_m:
             self._transition(NavigationState.STOPPING, now)
@@ -305,7 +310,10 @@ class SquareNavigator:
         if abs(self._heading_error()) > self.policy.drive_heading_limit_rad:
             return self._fail('Heading drift exceeded limit during straight travel')
         speed = max(self.min_linear_v, min(self.max_linear_v, self.linear_kp * remaining))
-        return self._output('Driving straight with visual progress feedback', linear=speed)
+        source = 'timed first-leg prediction' if self.side_index == 0 else 'EKF prediction'
+        if now - self.vision.progress_stamp <= self.policy.vision_timeout_s:
+            source = 'visual progress feedback'
+        return self._output('Driving straight with ' + source, linear=speed)
 
     def _settle(self, now):
         """Stop for settling, then begin one bounded nominal full-turn scan."""
@@ -327,7 +335,7 @@ class SquareNavigator:
         """Require fresh stable mapped-tag observations after the scan, then align."""
         if now - self.phase_started > self.policy.localization_timeout_s:
             return self._fail('Post-scan visual localization timed out')
-        if not self.vision.stable(now, self.phase_started + self.turn_settle_s):
+        if not self._uncertainty_ok() or not self.vision.stable(now, self.phase_started + self.turn_settle_s):
             return self._output('Stopped; gathering stable post-scan known-tag updates')
         self.side_index += 1
         self.turn = None

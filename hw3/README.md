@@ -74,11 +74,15 @@ The square now uses the following phases on each of four sides:
 
 `DRIVE → STOPPING → SCANNING → LOCALIZING → ALIGNING → next DRIVE`
 
+- The first leg starts on a fresh estimator heartbeat without requiring visible
+  or previously mapped tags. It uses bounded command-integrated travel when
+  vision is unavailable; physical distance remains calibration-dependent.
 - Drive up to 6 feet (1.8288 m) at a maximum 0.12 m/s, with angular command zero.
   Travel is estimated from the change in relative positions of the same stationary
   tags, projected onto the fixed side heading using EKF yaw. Newly visible tags
   inherit a travel anchor; they cannot independently verify earlier displacement.
-  The EKF displacement is used briefly when relative travel is unavailable.
+  The first leg falls back to integrated forward commands; subsequent legs use
+  EKF displacement briefly when relative travel is unavailable.
 - Stop and settle for one second, then command one continuous nominal CCW 360°
   scan using the measured full-turn rate. This is a timed search, not proof of
   physical rotation. A watchdog-bounded angle budget and scan timeout end it.
@@ -91,8 +95,9 @@ The square now uses the following phases on each of four sides:
   charged against this quarter-turn budget. The fourth scan/alignment finishes
   stopped at the initial heading. The controller does not pivot mid-side.
 
-Navigation stops on stale pose, excessive covariance, loss of accepted known-tag
-feedback for one second during travel, excessive heading drift, exhausted motion
+Navigation stops on stale pose, excessive covariance after localization, loss of
+accepted known-tag feedback for one second during subsequent legs, excessive
+heading drift, exhausted motion
 budgets, or localization timeout. Stop is terminal until relaunch/reset.
 
 For visible wall-mounted tags with valid vertical face normals, a forward-ray/

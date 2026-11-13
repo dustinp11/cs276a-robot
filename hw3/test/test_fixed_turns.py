@@ -103,6 +103,38 @@ class TestFixedTurns(unittest.TestCase):
                 for tag, tx, ty in [(1, 5.0, 4.0), (3, -2.0, 3.0)]]
         nav.update_vision(now, tags, [1, 3], clearance)
 
+    def test_first_leg_requires_no_tags_and_reaches_scan_with_uncertain_pose(self):
+        """An empty map cannot block the bounded first leg or its following scan.
+
+        Args:
+            None.
+
+        Returns:
+            None. Confirms immediate forward commands and nominal first-leg distance.
+        """
+        nav = SquareNavigator(turn_calibration=self.calibration)
+        self.assertTrue(nav.start()[0])
+        for tick in range(500):
+            now = 1 + tick * 0.05
+            nav.update_ekf_pose(0, 0, 0, 1.0, 1.0, now)
+            cmd = nav.step(now)
+            if tick == 0:
+                self.assertGreater(cmd.linear_v_mps, 0)
+                self.assertEqual(cmd.angular_omega_radps, 0)
+            if cmd.state == NavigationState.SCANNING:
+                break
+        self.assertEqual(nav.state, NavigationState.SCANNING, nav.stop_reason)
+        self.assertAlmostEqual(nav.drive_used, nav.square_size_m, delta=0.11)
+        self.assertGreater(nav.step(now + 0.05).angular_omega_radps, 0)
+        self.assertEqual(nav.vision.valid_stamp, -math.inf)
+
+    def test_new_tag_can_stop_first_leg_for_close_wall(self):
+        nav = self.prepared(NavigationState.DRIVING)
+        nav.update_vision(1, [[99, 0.3, 0]], [], 0.3)
+        cmd = nav.step(1)
+        self.assertEqual(cmd.linear_v_mps, 0)
+        self.assertIn('clearance', nav.stop_reason)
+
     def test_square_has_four_scans_and_fixed_headings(self):
         """Simulate four visually observed legs and scans, including the final heading.
 
@@ -204,6 +236,7 @@ class TestFixedTurns(unittest.TestCase):
 
     def test_empty_detection_frames_do_not_refresh_vision(self):
         nav = self.prepared(NavigationState.DRIVING)
+        nav.side_index = 1
         self.feed_vision(nav, 1, (0, 0, 0))
         nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, 3)
         nav.update_vision(3, [], [], None)
@@ -228,10 +261,11 @@ class TestFixedTurns(unittest.TestCase):
             None. Checks terminal stop when displacement feedback remains frozen.
         """
         nav = self.prepared(NavigationState.DRIVING)
+        nav.side_index = 1
         for tick in range(600):
             now = 1 + tick * 0.05
-            nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, now)
-            self.feed_vision(nav, now, (0, 0, 0))
+            nav.update_ekf_pose(0, 0, math.pi / 2, 0.01, 0.01, now)
+            self.feed_vision(nav, now, (0, 0, math.pi / 2))
             cmd = nav.step(now)
             if not nav.is_active:
                 break
