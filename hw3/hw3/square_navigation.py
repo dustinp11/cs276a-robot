@@ -429,7 +429,8 @@ class SquareNavigator:
                 self.navigation_yaw = wrap_angle(self.corner_start_heading + measured)
                 self.heading_time, self.corner_source = now, 'same-tag face orientation'
                 return wrap_angle(math.pi / 2 - measured)
-        if (self.vision.valid_stamp >= self.phase_started and self.vision.fresh(now)
+        if (self.policy.corner_ekf_weight > 0
+                and self.vision.valid_stamp >= self.phase_started and self.vision.fresh(now)
                 and -0.05 <= now - self.latest_pose_stamp_s <= self.pose_timeout_s
                 and self._uncertainty_ok()):
             self.navigation_yaw = self.latest_slam_pose[2]

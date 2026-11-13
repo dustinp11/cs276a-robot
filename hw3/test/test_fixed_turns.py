@@ -427,9 +427,24 @@ class TestFixedTurns(unittest.TestCase):
             nav.update_vision(3.2, [[7, 2, 1]], [7], None)
             nav.update_ekf_pose(0, 0, math.pi / 2 - math.radians(error), 0.01, 0.01, 3.2)
             nav.step(3.2)
-            self.assertAlmostEqual(nav.corner_residual, math.radians(error) * weight)
+            if weight:
+                self.assertAlmostEqual(nav.corner_residual, math.radians(error) * weight)
+            else:
+                self.assertIsNone(nav.corner_residual)
             self.assertAlmostEqual(nav.correction_goal, math.radians(expected))
             self.assertEqual(nav.state == NavigationState.CORRECTING, expected > 0)
+
+    def test_default_policy_disables_ekf_turn_fallback(self):
+        nav = self.prepared(NavigationState.STOPPING)
+        nav._begin_corner(2)
+        nav._transition(NavigationState.CORNER_PAUSE, 3)
+        nav.update_vision(3.2, [[7, 2, 1]], [7], None)
+        nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, 3.2)
+        cmd = nav.step(3.2)
+        self.assertEqual(nav.policy.corner_ekf_weight, 0)
+        self.assertEqual(cmd.state, NavigationState.DRIVING)
+        self.assertEqual(nav.correction_count, 0)
+        self.assertIsNone(nav.corner_residual)
 
     def test_ekf_turn_weight_rejects_invalid_values(self):
         for weight in (-0.1, 1.1, math.nan, math.inf):

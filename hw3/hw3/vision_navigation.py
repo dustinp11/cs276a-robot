@@ -19,7 +19,7 @@ class NavigationPolicy:
     corner_min_correction_rad: float = math.pi / 18
     corner_correction_limit_rad: float = math.pi / 12
     corner_max_corrections: int = 2
-    corner_ekf_weight: float = 0.5
+    corner_ekf_weight: float = 0.0
     drive_budget_factor: float = 1.25
     midpoint_pause_s: float = 3.0
     midpoint_max_correction_m: float = 0.10

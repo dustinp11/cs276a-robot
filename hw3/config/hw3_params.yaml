@@ -119,7 +119,7 @@
       corner_min_correction_rad: 0.17453292519943295  # skip corrections smaller than 10 degrees
       corner_correction_limit_rad: 0.2617993877991494  # 15 degrees total optional correction
       corner_max_corrections: 2
-      corner_ekf_weight: 0.5           # fraction of EKF fallback heading error to correct
+      corner_ekf_weight: 0.0           # disabled; use timed turns and optional same-tag correction
       drive_budget_factor: 1.25
       midpoint_max_correction_m: 0.10   # maximum +/- distance adjustment at midpoint
       midpoint_pause_s: 3.0             # camera-processing pause halfway through each side
