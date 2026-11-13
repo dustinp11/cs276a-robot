@@ -43,7 +43,7 @@ class EkfSlam:
         cmd_process_noise: Tuple[float, float, float] = (0.15, 0.05, 0.20),
         base_measurement_noise: Tuple[float, float] = (0.05, 0.05),
         range_scale_dist_m: float = 2.0,
-        mahalanobis_gate: float = 9.21,
+        mahalanobis_gate: float = 35.0,
     ):
         """Initialize EKF-SLAM filter.
 
@@ -221,6 +221,34 @@ class EkfSlam:
             self.P[3:, :3] = p_rm_new.T
         else:
             self.P[:3, :3] = p_rr_new
+
+        self._ensure_covariance_symmetry()
+
+    def predict_untracked_drift(
+        self,
+        dt: float,
+        pos_drift_rate_mps: float = 0.05,
+        rot_drift_rate_radps: float = 0.35,
+    ):
+        """Propagate state covariance when robot motion is unobserved/untracked.
+
+        In visual-only setups without wheel encoders or IMU, if VO loses tracking
+        or landmarks are temporarily obscured while the robot moves or rotates,
+        uncertainty must grow to reflect unobserved drift. This allows subsequent
+        re-observations of known landmarks to be accepted rather than falsely
+        rejected by the Mahalanobis outlier gate.
+
+        Args:
+            dt: Elapsed time without tracking (seconds).
+            pos_drift_rate_mps: Position drift 1-sigma rate (m/s).
+            rot_drift_rate_radps: Heading drift 1-sigma rate (rad/s).
+        """
+        if dt <= 0.0:
+            return
+
+        self.P[0, 0] += (pos_drift_rate_mps * dt) ** 2
+        self.P[1, 1] += (pos_drift_rate_mps * dt) ** 2
+        self.P[2, 2] += (rot_drift_rate_radps * dt) ** 2
 
         self._ensure_covariance_symmetry()
 

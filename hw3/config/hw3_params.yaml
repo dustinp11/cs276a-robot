@@ -28,7 +28,7 @@
     # Visual Odometry settings
     visual_odometry:
       min_common_tags: 1             # At least 1 common tag required for relative motion
-      max_dt_s: 0.75                 # Maximum allowable time between consecutive frames for VO
+      max_dt_s: 1.5                  # Maximum allowable time between consecutive frames for VO
       max_trans_disagreement_m: 0.35 # Outlier rejection threshold for inter-tag agreement
       max_rot_disagreement_deg: 25.0 # Outlier rejection threshold for inter-tag agreement
       base_trans_noise_m: 0.02       # Base translation uncertainty per observation (1-sigma)
@@ -65,8 +65,8 @@
         # Noise distance scaling factor (uncertainty scales as 1 + (dist/dist_ref)^2)
         range_scale_dist_m: 2.0
 
-      # Outlier rejection (Chi-squared 2-DOF gate; 35.0 allows loop closures after turns)
-      mahalanobis_gate: 35.0
+      # Outlier rejection (Chi-squared 2-DOF gate)
+      mahalanobis_gate: 50.0
 
       # Measurement update mode:
       # 'all': update all visible mapped tags

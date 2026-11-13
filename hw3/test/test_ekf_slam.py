@@ -322,6 +322,32 @@ class TestEkfSlamSynthetic(unittest.TestCase):
             self.assertAlmostEqual(lm.x, gx, delta=0.08)
             self.assertAlmostEqual(lm.y, gy, delta=0.08)
 
+    def test_12_untracked_drift_heading_recovery(self):
+        """12. Re-observation of a known landmark recovers heading after untracked drift."""
+        # Initialize landmark 1 at (2.0, 0.0) from origin facing 0
+        self.ekf.update_landmark(tag_id=1, x_rel=2.0, y_rel=0.0)
+        lm = self.ekf.get_landmark_pose(1)
+        self.assertAlmostEqual(lm.x, 2.0, delta=0.05)
+        self.assertAlmostEqual(lm.y, 0.0, delta=0.05)
+
+        # Robot physically rotates 90 deg CCW without visual tracking (blind gap of 5s)
+        for _ in range(25):
+            self.ekf.predict_untracked_drift(dt=0.2)
+
+        # Heading uncertainty should have grown
+        self.assertGreater(math.degrees(math.sqrt(self.ekf.P[2, 2])), 15.0)
+
+        # Re-observe landmark 1: in physical frame (+90 deg), landmark is at bearing -90 deg
+        # (x_rel = 0, y_rel = -2.0)
+        success = self.ekf.update_landmark(tag_id=1, x_rel=0.0, y_rel=-2.0)
+        self.assertTrue(success)
+
+        # Robot heading should recover towards +90 deg (+pi/2)
+        pose = self.ekf.get_robot_pose()
+        self.assertAlmostEqual(pose.theta, math.pi / 2.0, delta=0.20)
+        # Heading uncertainty should collapse back down
+        self.assertLess(math.degrees(math.sqrt(self.ekf.P[2, 2])), 15.0)
+
 
 if __name__ == '__main__':
     unittest.main()

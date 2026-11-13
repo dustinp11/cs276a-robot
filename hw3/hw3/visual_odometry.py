@@ -59,7 +59,7 @@ class VisualMotionEstimator:
         self,
         extrinsics: Optional[CameraExtrinsics] = None,
         min_common_tags: int = 1,
-        max_dt_s: float = 0.75,
+        max_dt_s: float = 1.5,
         min_decision_margin: float = 20.0,
         max_hamming: int = 1,
         max_tag_distance_m: float = 5.0,

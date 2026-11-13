@@ -152,7 +152,7 @@ class EkfSlamNode(Node):
         self.vo_estimator = VisualMotionEstimator(
             extrinsics=self.extrinsics,
             min_common_tags=1,
-            max_dt_s=1.0,
+            max_dt_s=self.get_parameter('visual_odometry.max_dt_s').value if self.has_parameter('visual_odometry.max_dt_s') else 1.5,
             min_decision_margin=20.0,
             max_hamming=1,
             max_tag_distance_m=5.0,
@@ -301,6 +301,13 @@ class EkfSlamNode(Node):
                 v, omega = self.last_cmd
                 if dt > 0.0 and (abs(v) > 1e-4 or abs(omega) > 1e-4):
                     self.ekf.predict_commanded_velocity(v, omega, dt)
+        else:
+            # Untracked drift propagation during manual movement or VO dropout
+            if self.last_vo_time > 0.0:
+                dt_blind = min(2.0, max(0.0, stamp_s - self.last_vo_time))
+                if dt_blind > 0.05:
+                    self.ekf.predict_untracked_drift(dt_blind)
+            self.last_vo_time = stamp_s
 
         # Step 3: Measurement update step for all visible landmarks
         updated_tags = []
