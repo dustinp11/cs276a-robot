@@ -203,10 +203,6 @@ In another terminal, send velocity commands:
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ```
-Or launch SLAM + motors + keyboard teleop together:
-```bash
-ros2 launch hw3 hw3_teleop.launch.py
-```
 
 ### 3.5 Record Live AprilTag Observations
 
@@ -248,31 +244,40 @@ Generated CSVs:
 - `ekf_slam_trajectory.csv`: `timestamp_s, x_m, y_m, theta_rad, sigma_x_m, sigma_y_m, sigma_theta_rad`
 - `ekf_slam_landmarks.csv`: `tag_id, x_m, y_m, sigma_x_m, sigma_y_m, cov_xy`
 
-### 3.9 Recording Rosbag and Viewing in RViz After Manual Mode
+### 3.9 Viewing in RViz (Offline Map Publisher Node)
 
-There are two easy ways to record and view the landmarks and trajectory after running manual mode:
-
-#### Method 1: Live Rosbag Recording (Recommended)
-You can automatically record a ROS 2 bag during manual mode using the launch argument:
-```bash
-ros2 launch hw3 hw3_manual.launch.py record_bag:=true bag_name:=hw3_results/manual_square_bag
-```
-Or record in a separate terminal:
-```bash
-ros2 bag record /ekf_slam/landmarks /ekf_slam/trajectory /ekf_slam/pose /tf /tf_static -o hw3_results/manual_square_bag
-```
-After completing the manual run (Ctrl+C), replay the rosbag in a loop so it stays visible in RViz:
-```bash
-ros2 bag play hw3_results/manual_square_bag -l
-```
-Then start RViz (`rviz2`), set the Fixed Frame to `map`, and add `/ekf_slam/landmarks` (MarkerArray) and `/ekf_slam/trajectory` (Path).
-
-#### Method 2: Offline Map Publisher Node (No Rosbag Needed)
-If you already finished a run, the EKF node automatically saved the final landmarks and trajectory to `hw3_results/ekf_slam_landmarks.csv`. You can republish them directly to RViz with latched QoS:
+If you have completed a run, the EKF node automatically saves the final landmarks and trajectory to `hw3_results/ekf_slam_landmarks.csv` and `hw3_results/ekf_slam_trajectory.csv`. You can republish them directly to RViz with latched QoS (no rosbags required):
 ```bash
 ros2 run hw3 publish_map --landmarks hw3_results/ekf_slam_landmarks.csv --trajectory hw3_results/ekf_slam_trajectory.csv
 ```
-This continually broadcasts the static `map` frame and publishes all landmarks, tag IDs, covariance ellipses, and trajectory points so you can open RViz anytime and inspect the map!
+This continually broadcasts the static `map` frame and publishes all landmarks, tag IDs, covariance ellipses, and trajectory points so you can open RViz anytime (`rviz2`) and inspect the map!
+
+### 3.10 Closed-Loop Square Navigation (7 ft x 7 ft)
+
+The `square_navigation_node` drives the robot counterclockwise around a 7 ft × 7 ft square using closed-loop EKF-SLAM pose feedback:
+- Waypoints:
+  - WP0: `(0, 0)` ft [0.000, 0.000] m — Origin / Start
+  - WP1: `(7, 0)` ft [2.1336, 0.0000] m — Bottom-right (+X)
+  - WP2: `(7, 7)` ft [2.1336, 2.1336] m — Top-right (+X, +Y)
+  - WP3: `(0, 7)` ft [0.0000, 2.1336] m — Top-left (+Y)
+  - WP4: `(0, 0)` ft [0.0000, 0.0000] m — Return to start
+
+Launch all nodes (EKF-SLAM + motor hardware + navigation controller in IDLE mode):
+```bash
+ros2 launch hw3 hw3_navigation.launch.py
+```
+
+Start the square trajectory explicitly:
+```bash
+ros2 service call /start_navigation std_srvs/srv/Trigger
+# Or via topic:
+ros2 topic pub --once /start_navigation std_msgs/msg/Empty "{}"
+```
+
+Stop navigation at any time:
+```bash
+ros2 service call /stop_navigation std_srvs/srv/Trigger
+```
 
 ---
 

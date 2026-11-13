@@ -13,6 +13,7 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/hw3.launch.py',
             'launch/hw3_manual.launch.py',
+            'launch/hw3_navigation.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/hw3_params.yaml',
@@ -33,6 +34,7 @@ setup(
         'console_scripts': [
             'visual_odometry_node = hw3.nodes.visual_odometry_node:main',
             'ekf_slam_node = hw3.nodes.ekf_slam_node:main',
+            'navigation_node = hw3.nodes.navigation_node:main',
             'record_data = hw3.scripts.record_data:main',
             'replay_data = hw3.scripts.replay_data:main',
             'export_map = hw3.scripts.export_map:main',
