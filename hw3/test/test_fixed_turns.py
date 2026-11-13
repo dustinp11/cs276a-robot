@@ -410,6 +410,32 @@ class TestFixedTurns(unittest.TestCase):
         self.assertGreaterEqual(now - stopped_at, 1.0 - 1e-8)
         self.assertEqual(nav.correction_count, 0)
 
+    def test_ekf_turn_weight_scales_before_deadzone_and_budget(self):
+        """Reduce only EKF fallback corrections before applying physical pulse limits.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks half-weight, disabled feedback, and the minimum useful pulse.
+        """
+        for weight, error, expected in [(0.5, 20, 10), (0.5, 18, 0), (0, 30, 0), (1, 20, 15)]:
+            nav = self.prepared(NavigationState.STOPPING)
+            nav.policy = NavigationPolicy(corner_ekf_weight=weight)
+            nav._begin_corner(2)
+            nav._transition(NavigationState.CORNER_PAUSE, 3)
+            nav.update_vision(3.2, [[7, 2, 1]], [7], None)
+            nav.update_ekf_pose(0, 0, math.pi / 2 - math.radians(error), 0.01, 0.01, 3.2)
+            nav.step(3.2)
+            self.assertAlmostEqual(nav.corner_residual, math.radians(error) * weight)
+            self.assertAlmostEqual(nav.correction_goal, math.radians(expected))
+            self.assertEqual(nav.state == NavigationState.CORRECTING, expected > 0)
+
+    def test_ekf_turn_weight_rejects_invalid_values(self):
+        for weight in (-0.1, 1.1, math.nan, math.inf):
+            with self.assertRaises(ValueError):
+                NavigationPolicy(corner_ekf_weight=weight)
+
     def test_same_tag_orientation_corrects_without_a_learned_map(self):
         """A shared tag measures turn error independently of global landmark positions.
 

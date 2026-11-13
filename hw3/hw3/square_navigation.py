@@ -419,7 +419,7 @@ class SquareNavigator:
         Returns:
             Signed residual in radians, or None without useful vision. A same-tag
             comparison corrects relative rotation to 90 degrees; EKF fallback
-            corrects the absolute side heading.
+            corrects the absolute side heading scaled by corner_ekf_weight.
             Missing or stale observations never authorize extra corrective rotation.
         """
         if self.vision.yaw_stamp >= self.phase_started and now - self.vision.yaw_stamp <= self.policy.vision_timeout_s:
@@ -434,7 +434,7 @@ class SquareNavigator:
                 and self._uncertainty_ok()):
             self.navigation_yaw = self.latest_slam_pose[2]
             self.heading_time, self.corner_source = now, 'EKF with post-turn tag updates'
-            return self._heading_error()
+            return self.policy.corner_ekf_weight * self._heading_error()
         self.corner_source = 'calibrated turn prediction; no post-turn visual correction'
         return None
 

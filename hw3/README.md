@@ -132,7 +132,11 @@ The square now uses the following phases on each of four sides:
   no estimated global tag position. Reject likely PnP face flips and inconsistent
   matched-tag changes. Only images captured after stopping can correct the turn.
 - If no usable same-tag comparison exists, a fresh known-tag EKF correction may
-  provide the next absolute side-heading error. If neither is available, continue
+  provide the next absolute side-heading error. Only half of this error is
+  requested (`navigation.corner_ekf_weight: 0.5`), before the 10-degree minimum
+  pulse and 15-degree total cap are applied. Set the weight to zero to disable
+  EKF turn corrections. Same-tag relative corrections keep their full weight.
+  If neither is available, continue
   from calibrated turn prediction without any extra corrective spin.
 - Optional corrections use the measured fixed CW/CCW inputs. They never reduce
   motor magnitude to request a small turn. Residual errors below

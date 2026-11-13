@@ -19,6 +19,7 @@ class NavigationPolicy:
     corner_min_correction_rad: float = math.pi / 18
     corner_correction_limit_rad: float = math.pi / 12
     corner_max_corrections: int = 2
+    corner_ekf_weight: float = 0.5
     drive_budget_factor: float = 1.25
     midpoint_pause_s: float = 3.0
     midpoint_max_correction_m: float = 0.10
@@ -33,8 +34,10 @@ class NavigationPolicy:
             None. Raises ValueError for invalid phase timing, angles, or counts.
         """
         if not all(math.isfinite(getattr(self, f.name)) and getattr(self, f.name) > 0
-                   for f in fields(self)):
+                   for f in fields(self) if f.name != 'corner_ekf_weight'):
             raise ValueError('Navigation vision limits must be finite and positive.')
+        if not math.isfinite(self.corner_ekf_weight) or not 0 <= self.corner_ekf_weight <= 1:
+            raise ValueError('Corner EKF weight must be finite and between zero and one.')
         if self.drive_budget_factor < 1:
             raise ValueError('Drive budget factor must be at least one.')
         if self.corner_min_correction_rad > self.corner_correction_limit_rad:
