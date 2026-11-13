@@ -20,6 +20,7 @@ class NavigationPolicy:
     corner_max_corrections: int = 2
     drive_budget_factor: float = 1.25
     midpoint_pause_s: float = 3.0
+    midpoint_max_correction_m: float = 0.10
 
     def __post_init__(self):
         """Validate nominal motion limits and bounded optional corrections.

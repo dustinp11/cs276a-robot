@@ -328,8 +328,16 @@ class SquareNavigator:
             return self._ekf_progress(), 'fresh EKF'
         return self.drive_used, 'command prediction fallback'
 
+    def _apply_midpoint_correction(self, estimate):
+        """Clamp the EKF distance adjustment around nominal command-integrated travel."""
+        limit = min(self.policy.midpoint_max_correction_m, self.square_size_m / 4)
+        delta = estimate - self.drive_used
+        self.progress_correction_m = max(-limit, min(limit, delta))
+        self.progress = self.drive_used + self.progress_correction_m
+        self.midpoint_remaining_m = max(0.0, self.square_size_m - self.progress)
+
     def _midpoint_pause(self, now):
-        """Pause for camera processing, then adjust only the remaining forward distance.
+        """Pause for camera processing, then apply one bounded forward-distance adjustment.
 
         Args:
             now: Current ROS controller time in seconds.
@@ -341,16 +349,15 @@ class SquareNavigator:
         if now - self.phase_started < self.policy.midpoint_pause_s:
             return self._output('Midpoint pause; allowing camera and EKF updates')
         self.midpoint_progress_m, self.midpoint_source = self._midpoint_estimate(now)
-        self.progress_correction_m = self.midpoint_progress_m - self.drive_used
-        self.progress = self.midpoint_progress_m
-        self.midpoint_remaining_m = max(0.0, self.square_size_m - self.progress)
+        self._apply_midpoint_correction(self.midpoint_progress_m)
         self.midpoint_done = True
         self._transition(NavigationState.DRIVING, now)
         return self._output(f'Midpoint {self.midpoint_source}; '
+                            f'applied correction {self.progress_correction_m:+.3f} m; '
                             f'{self.midpoint_remaining_m:.3f} m remaining on same heading')
 
     def _drive(self, now):
-        """Drive two halves with one midpoint pause; wall range remains telemetry only.
+        """Drive the remainder from a frozen bounded midpoint correction; no live overrides.
 
         Args:
             now: ROS controller time in seconds.
@@ -361,8 +368,6 @@ class SquareNavigator:
         if not self.midpoint_done:
             return self._first_half(now)
         self.progress = self.drive_used + self.progress_correction_m
-        if now - self.vision.progress_stamp <= self.policy.vision_timeout_s:
-            self.progress = self.vision.extrapolated_progress(self._ekf_progress())
         remaining = self.square_size_m - self.progress
         budget_reached = self.drive_used >= self.policy.drive_budget_factor * self.square_size_m
         if remaining <= self.waypoint_tolerance_m or budget_reached:

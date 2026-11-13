@@ -297,7 +297,7 @@ class TestFixedTurns(unittest.TestCase):
         cmd = nav.step(3)
         self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
         self.assertAlmostEqual(nav.midpoint_progress_m, 0.75)
-        self.assertAlmostEqual(nav.midpoint_remaining_m, nav.square_size_m - 0.75)
+        self.assertAlmostEqual(nav.midpoint_remaining_m, nav.square_size_m / 2 + 0.10)
         self.assertEqual((nav.leg_origin, nav._heading(), nav.target), (origin, heading, target))
         cmd = nav.step(3.05)
         self.assertGreater(cmd.linear_v_mps, 0)
@@ -308,7 +308,7 @@ class TestFixedTurns(unittest.TestCase):
         nav = self.at_midpoint()
         nav.update_ekf_pose(1.1, 0, 0, 0.01, 0.01, 3)
         nav.step(3)
-        self.assertAlmostEqual(nav.midpoint_remaining_m, nav.square_size_m - 1.1)
+        self.assertAlmostEqual(nav.midpoint_remaining_m, nav.square_size_m / 2 - 0.10)
         self.assertGreater(nav.progress_correction_m, 0)
         self.assertEqual(nav.step(3.05).angular_omega_radps, 0)
 
@@ -583,28 +583,54 @@ class TestFixedTurns(unittest.TestCase):
         self.assertLessEqual(nav.drive_used, nav.policy.drive_budget_factor * nav.square_size_m + 0.01)
         self.assertEqual(cmd.linear_v_mps, 0)
 
-    def test_visual_progress_overrides_bad_ekf_distance(self):
-        """Verify visual progress overrides bad ekf distance.
+    def test_late_visual_progress_cannot_shorten_the_remaining_leg(self):
+        """A live tag/EKF jump cannot override the frozen midpoint distance plan.
 
         Args:
             None.
 
         Returns:
-            None. Assertions verify measured calibration and controller behavior.
+            None. Confirms continued forward travel despite misleading visual progress.
         """
         nav = self.prepared(NavigationState.DRIVING)
         nav.vision.begin_leg(0)
         nav.update_vision(1, [[1, 3, 0], [3, 3, 1]], [1, 3], None)
         nav.update_ekf_pose(0.1, 0, 0, 0.01, 0.01, 1.1)
-        nav.update_vision(1.1, [[1, 1.2, 0], [3, 1.2, 1]], [1, 3], None)
+        nav.update_vision(1.1, [[1, 0.1, 0], [3, 0.1, 1]], [1, 3], None)
         cmd = nav.step(1.1)
-        self.assertAlmostEqual(nav.progress, 1.8)
+        self.assertGreater(nav.vision.progress, nav.square_size_m)
+        self.assertAlmostEqual(nav.progress, nav.drive_used)
         self.assertGreater(cmd.linear_v_mps, 0)
-        nav.update_ekf_pose(0.1, 0, 0, 0.01, 0.01, 1.2)
-        nav.update_vision(1.2, [[1, 1.175, 0], [3, 1.175, 1]], [1, 3], None)
-        cmd = nav.step(1.2)
-        self.assertEqual(cmd.linear_v_mps, 0)
-        self.assertEqual(nav.state, NavigationState.STOPPING)
+        self.assertEqual(cmd.angular_omega_radps, 0)
+        self.assertEqual(nav.state, NavigationState.DRIVING)
+
+    def test_false_near_complete_ekf_midpoint_retains_about_three_feet(self):
+        """Reproduce the reported short second half and constrain the EKF's authority.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks a 1.77 m EKF estimate cannot reduce the remainder to 5 cm.
+        """
+        nav = self.at_midpoint()
+        nav.update_ekf_pose(1.77, 0, 0, 0.01, 0.01, 3)
+        nav.step(3)
+        self.assertAlmostEqual(nav.midpoint_progress_m, 1.77)
+        self.assertAlmostEqual(nav.progress_correction_m, 0.10)
+        self.assertAlmostEqual(nav.midpoint_remaining_m, 0.8144)
+        self.assertGreater(nav.step(3.05).linear_v_mps, 0)
+        self.assertEqual(nav.state, NavigationState.DRIVING)
+
+    def test_midpoint_correction_bounds_both_signs_and_honors_configuration(self):
+        for estimated, expected in [(-5, -0.05), (5, 0.05)]:
+            nav = self.at_midpoint()
+            nav.policy = NavigationPolicy(midpoint_pause_s=1, midpoint_max_correction_m=0.05)
+            nav.update_ekf_pose(estimated, 0, 0, 0.01, 0.01, 3)
+            nav.step(3)
+            self.assertAlmostEqual(nav.progress_correction_m, expected)
+            self.assertAlmostEqual(nav.midpoint_remaining_m, nav.square_size_m / 2 - expected)
+
 
 
 class TestVisionGeometry(unittest.TestCase):

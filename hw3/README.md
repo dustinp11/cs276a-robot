@@ -106,17 +106,16 @@ The square now uses the following phases on each of four sides:
   then stop for `navigation.midpoint_pause_s` (default 3.0 seconds). Callbacks
   remain active during the pause so delayed images and EKF updates can arrive.
 - At pause completion, project a fresh, sufficiently confident post-stop EKF
-  position onto the original side axis. Subtract that progress from the total
-  6-foot (1.8288 m) side to determine the remaining forward distance. A first
-  half estimated shorter than 3 feet increases the remainder; an estimated
-  overshoot reduces it. This adjusts distance only: no new target direction,
-  no turn, and no reset of the leg's original position/heading.
-- Missing, stale, or uncertain EKF data use nominal half-side travel instead.
-  The pause always ends after its fixed duration; visible tags are not required.
-  During the remainder, calibrated command travel and any usable relative-tag
-  displacement provide distance feedback. Forward speed prediction is fixed at 0.203 m/s and
-  angular commands remain zero. The existing total-leg command budget still
-  advances to the corner turn if the distance estimate stays frozen.
+  position onto the original side axis. Compare it with nominal traveled distance
+  and clamp the adjustment to `navigation.midpoint_max_correction_m` (default
+  +/-0.10 m, capped at one quarter of a side for smaller squares). The remainder
+  stays approximately 3 feet +/-10 cm; a bad estimate cannot reduce it to 5 cm.
+- Freeze this one adjustment for the second half and integrate the measured
+  0.203 m/s command from there. Continuous tag/EKF progress cannot override that
+  distance plan. EKF and relative-tag estimates remain recorded for comparison,
+  and vision still aids corner corrections. Heading and motor pair stay unchanged.
+- Missing, stale, or uncertain EKF data use zero distance adjustment. The pause
+  always ends after its fixed duration, and no tag observation is required.
 - Stop for three seconds, then command a single continuous nominal 90° left turn
   using the measured CCW rate. There is no 360° scan. The nominal quarter-turn
   takes 1.0 second at the current calibration, with control-tick quantization.
@@ -499,7 +498,8 @@ ros2 service call /stop_navigation std_srvs/srv/Trigger
 
 Navigation CSV adds `vision_age_s`, `visual_progress_m`, `ekf_progress_m`,
 `forward_clearance_m`, `corner_nominal_rad`, `corner_correction_rad`, `corner_feedback_source`, `corner_residual_rad`, `navigation_heading_rad`,
-`midpoint_progress_m`, `midpoint_remaining_m`, and `midpoint_source` to the existing columns. These
+`midpoint_progress_m`, `midpoint_remaining_m`, `midpoint_source`, and
+`midpoint_applied_correction_m` to the existing columns. These
 record visual freshness, competing travel estimates, wall clearance, and timed
 corner prediction, optional correction, navigation heading, and midpoint correction separately. Navigation heading can be
 model-predicted while the EKF pose remains uncertain. EKF landmark and trajectory CSV formats are unchanged.
