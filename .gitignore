@@ -10,6 +10,7 @@
 
 # Local experiment data and archived reference material
 /hw2_results/
+/runs/
 /coordinate.txt
 /coordinates.txt
 /coords*.txt
