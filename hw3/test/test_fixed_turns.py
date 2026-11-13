@@ -205,6 +205,65 @@ class TestFixedTurns(unittest.TestCase):
         self.assertEqual(result.angular_omega_radps, 0)
         self.assertIn('budget', nav.stop_reason)
 
+    def test_scan_has_eight_45_degree_stages_and_half_second_pauses(self):
+        """Check the actual scan commands at the robot's nominal 20 Hz control rate.
+
+        Args:
+            None.
+
+        Returns:
+            None. Verifies eight bounded turns, eight pauses, and final stopped completion.
+        """
+        nav = self.prepared(NavigationState.SCANNING)
+        nav.turn_calibration = TurnCalibration(0.43, 0.4, 2 * math.pi / 3.55, 2 * math.pi / 3.59)
+        previous, angle, pause_start = 0.0, 0.0, None
+        angles, pauses = [], []
+        for tick in range(400):
+            now = 1 + tick * 0.05
+            angle += previous * 0.05
+            nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, now)
+            command = nav.step(now)
+            omega = command.angular_omega_radps
+            self.assertEqual(command.linear_v_mps, 0)
+            if previous and not omega:
+                angles.append(angle)
+                angle, pause_start = 0.0, now
+            if pause_start is not None and (omega or command.state == NavigationState.LOCALIZING):
+                pauses.append(now - pause_start)
+                pause_start = None
+            previous = omega
+            if command.state == NavigationState.LOCALIZING:
+                break
+        self.assertEqual(nav.state, NavigationState.LOCALIZING)
+        self.assertEqual(len(angles), 8)
+        self.assertEqual(len(pauses), 8)
+        self.assertTrue(all(pause >= 0.5 - 1e-8 for pause in pauses))
+        self.assertTrue(all(abs(value - math.pi / 4) <= nav.turn_calibration.ccw_radps * 0.05
+                            for value in angles))
+        self.assertLessEqual(sum(angles), 2 * math.pi + nav.turn_calibration.ccw_radps * 0.05)
+
+    def test_scan_timeout_includes_stopped_camera_pauses(self):
+        """A stage pause cannot extend the overall scan deadline.
+
+        Args:
+            None.
+
+        Returns:
+            None. Verifies zero commands after timing out during a camera pause.
+        """
+        nav = self.prepared(NavigationState.SCANNING)
+        nav.policy = NavigationPolicy(scan_timeout_s=1.5)
+        for tick in range(40):
+            now = 1 + tick * 0.05
+            nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, now)
+            command = nav.step(now)
+            if not nav.is_active:
+                break
+        self.assertGreaterEqual(nav.scan_stage_index, 1)
+        self.assertEqual(nav.state, NavigationState.STOPPED)
+        self.assertEqual(command.angular_omega_radps, 0)
+        self.assertIn('time limit', nav.stop_reason)
+
     def test_timed_scan_cannot_authorize_drive_without_vision(self):
         """A nominal full rotation ends stopped and fails if localization is unavailable.
 

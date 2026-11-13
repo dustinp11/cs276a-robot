@@ -129,6 +129,7 @@ class SquareNavigator:
         self.x0_slam = self.y0_slam = self.theta0_slam = 0.0
         self.leg_origin, self.target = (0.0, 0.0), (self.square_size_m, 0.0)
         self.progress = self.drive_used = self.scan_used = 0.0
+        self.scan_stage_index, self.scan_ready_at = 0, 0.0
         self.last_command, self.last_tick = (0.0, 0.0), None
         self.phase_started = None
         self.turn = None
@@ -319,17 +320,37 @@ class SquareNavigator:
         """Stop for settling, then begin one bounded nominal full-turn scan."""
         if now - self.phase_started >= self.turn_settle_s:
             self.scan_used = 0.0
+            self.scan_stage_index, self.scan_ready_at = 0, now
             self._transition(NavigationState.SCANNING, now)
         return self._output('Stopped before full-turn scan')
 
     def _scan(self, now):
-        """Scan at the measured CCW input; timed completion is not visual verification."""
+        """Alternate bounded nominal turn stages with stopped camera-acquisition pauses.
+
+        Args:
+            now: Current ROS controller time in seconds.
+
+        Returns:
+            NavigationOutput for a stage, camera pause, timeout, or stopped completion.
+            Stage angles are command predictions, not measured physical rotation.
+        """
         if now - self.phase_started > self.policy.scan_timeout_s:
             return self._fail('Full-turn scan exceeded its time limit')
-        if self.scan_used >= 2 * math.pi:
+        if now < self.scan_ready_at:
+            return self._output('Scan paused; allowing camera frames to arrive')
+        if self.scan_stage_index >= math.ceil(2 * math.pi / self.policy.scan_step_rad):
             self._transition(NavigationState.LOCALIZING, now)
-            return self._output('Nominal 360 scan complete; waiting for visual localization')
-        return self._output('Nominal 360 scan; collecting tags', angular=self.turn_calibration.rate(1))
+            return self._output('Staged 360 scan complete; waiting for visual localization')
+        goal = min(2 * math.pi, (self.scan_stage_index + 1) * self.policy.scan_step_rad)
+        if self.scan_used >= goal:
+            return self._pause_scan_stage(now)
+        return self._output('Scan stage: fixed-rate turn', angular=self.turn_calibration.rate(1))
+
+    def _pause_scan_stage(self, now):
+        """Stop after each stage, including the last, before accepting another phase."""
+        self.scan_stage_index += 1
+        self.scan_ready_at = now + self.policy.scan_pause_s
+        return self._output(f'Scan stage {self.scan_stage_index} complete; stopped for camera')
 
     def _localize(self, now):
         """Require fresh stable mapped-tag observations after the scan, then align."""

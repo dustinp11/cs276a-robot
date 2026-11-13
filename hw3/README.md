@@ -83,9 +83,13 @@ The square now uses the following phases on each of four sides:
   inherit a travel anchor; they cannot independently verify earlier displacement.
   The first leg falls back to integrated forward commands; subsequent legs use
   EKF displacement briefly when relative travel is unavailable.
-- Stop and settle for one second, then command one continuous nominal CCW 360°
-  scan using the measured full-turn rate. This is a timed search, not proof of
-  physical rotation. A watchdog-bounded angle budget and scan timeout end it.
+- Stop and settle for one second, then scan in eight nominal CCW 45° stages,
+  stopping for 0.5 seconds after every stage, including the eighth. Set
+  `navigation.scan_step_rad` and `navigation.scan_pause_s` to adjust acquisition
+  time for camera latency/frame rate. The measured full-turn rate predicts each
+  stage; actual short-turn angles still need hardware verification. The 20-second
+  scan timeout includes turning and all eight pauses. Pauses do not fabricate
+  fresh images or waive the subsequent localization checks.
 - Remain stopped until at least three distinct images over 0.6 seconds provide
   successful updates of at least two previously mapped tag IDs, with stable EKF
   position and heading. Newly initialized tags alone cannot authorize movement.

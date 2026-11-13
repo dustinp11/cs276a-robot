@@ -119,6 +119,8 @@
       drive_heading_limit_rad: 0.35
       drive_budget_factor: 1.25
       scan_timeout_s: 20.0
+      scan_step_rad: 0.7853981633974483  # 45 nominal degrees per stage
+      scan_pause_s: 0.5                 # stopped time after every stage
       control_frequency_hz: 20.0      # Closed-loop control loop frequency (Hz)
       auto_start: false               # Require explicit start command
       output_dir: "hw3_results"       # Telemetry output directory

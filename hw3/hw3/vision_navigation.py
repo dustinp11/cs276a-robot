@@ -25,6 +25,8 @@ class NavigationPolicy:
     drive_heading_limit_rad: float = 0.35
     drive_budget_factor: float = 1.25
     scan_timeout_s: float = 20.0
+    scan_step_rad: float = math.pi / 4
+    scan_pause_s: float = 0.5
 
     def __post_init__(self):
         """Reject invalid limits rather than silently disabling motion guards."""
@@ -33,6 +35,8 @@ class NavigationPolicy:
             raise ValueError('Navigation vision limits must be finite and positive.')
         if self.min_frames < 3 or self.min_known_tags < 2 or self.drive_budget_factor < 1:
             raise ValueError('Require >=3 frames, >=2 known tags, and drive budget >=1.')
+        if self.scan_step_rad > math.pi / 2:
+            raise ValueError('Scan stages must be at most 90 nominal degrees.')
 
 
 class VisualFeedback:
