@@ -65,8 +65,8 @@
         # Noise distance scaling factor (uncertainty scales as 1 + (dist/dist_ref)^2)
         range_scale_dist_m: 2.0
 
-      # Outlier rejection (Chi-squared 2-DOF gate at 99%: 9.21)
-      mahalanobis_gate: 9.21
+      # Outlier rejection (Chi-squared 2-DOF gate; 35.0 allows loop closures after turns)
+      mahalanobis_gate: 35.0
 
       # Measurement update mode:
       # 'all': update all visible mapped tags

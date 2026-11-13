@@ -47,6 +47,7 @@ from hw3.coordinates import (
 )
 from hw3.data_recorder import export_landmarks_csv, export_trajectory_csv
 from hw3.ekf_slam import EkfSlam
+from hw3.visual_odometry import VisualMotionEstimator
 
 
 class EkfSlamNode(Node):
@@ -147,6 +148,19 @@ class EkfSlamNode(Node):
             mahalanobis_gate=self.get_parameter('ekf_slam.mahalanobis_gate').value,
         )
 
+        # Synchronous internal Visual Motion Estimator (ensures prediction precedes update)
+        self.vo_estimator = VisualMotionEstimator(
+            extrinsics=self.extrinsics,
+            min_common_tags=1,
+            max_dt_s=1.0,
+            min_decision_margin=20.0,
+            max_hamming=1,
+            max_tag_distance_m=5.0,
+            min_tag_distance_m=0.1,
+            base_trans_noise_m=self.get_parameter('ekf_slam.process_noise.vo_sigma_x_m').value,
+            base_rot_noise_rad=self.get_parameter('ekf_slam.process_noise.vo_sigma_theta_rad').value,
+        )
+
         # TF & Buffers
         self.tf_buffer = Buffer(node=self)
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -222,28 +236,10 @@ class EkfSlamNode(Node):
         self.get_logger().info("EKF-SLAM Node started successfully.")
 
     def on_vo_motion(self, msg: TwistWithCovarianceStamped):
-        """Handle inter-frame visual odometry prediction."""
-        stamp_s = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        dt = 0.1 if self.last_vo_time == 0.0 else max(1e-4, stamp_s - self.last_vo_time)
-        self.last_vo_time = stamp_s
-
-        vx = msg.twist.twist.linear.x
-        vy = msg.twist.twist.linear.y
-        omega = msg.twist.twist.angular.z
-
-        dx = vx * dt
-        dy = vy * dt
-        dtheta = omega * dt
-
-        # Reconstruct 3x3 covariance from 6x6
-        cov_6x6 = np.array(msg.twist.covariance).reshape((6, 6))
-        cov_3x3 = np.zeros((3, 3), dtype=float)
-        dt2 = dt ** 2
-        cov_3x3[0, 0] = cov_6x6[0, 0] * dt2
-        cov_3x3[1, 1] = cov_6x6[1, 1] * dt2
-        cov_3x3[2, 2] = cov_6x6[5, 5] * dt2
-
-        self.ekf.predict_visual_odometry(dx, dy, dtheta, cov_3x3)
+        """Optional subscriber for external VO if internal vo_estimator is not active."""
+        # When internal vo_estimator is used in on_detections, external on_vo_motion is ignored
+        # to guarantee strictly synchronous prediction-before-update ordering.
+        pass
 
     def on_cmd_vel(self, msg: Twist):
         """Track commanded velocities for fallback prediction."""
@@ -255,18 +251,20 @@ class EkfSlamNode(Node):
         # If VO has not fired recently, use cmd_vel as fallback prediction
         vo_idle_time = now_s - self.last_vo_time
         if self.use_cmd_fallback and vo_idle_time > self.cmd_vel_timeout_s:
-            dt = 0.1 if self.last_cmd_time == 0.0 else max(1e-4, min(1.0, now_s - self.last_cmd_time))
+            dt = 0.1 if self.last_cmd_time == 0.0 else max(1e-4, min(0.5, now_s - self.last_cmd_time))
             if dt > 0.0 and (abs(v) > 1e-4 or abs(omega) > 1e-4):
                 self.ekf.predict_commanded_velocity(v, omega, dt)
         self.last_cmd_time = now_s
 
     def on_detections(self, msg: AprilTagDetectionArray):
-        """Handle tag detections for EKF measurement update & landmark discovery."""
+        """Handle tag detections: synchronously computes VO prediction first, then updates landmarks."""
         stamp = msg.header.stamp
+        stamp_s = stamp.sec + stamp.nanosec * 1e-9
+        stamp_ns = stamp.sec * 10**9 + stamp.nanosec
         ros_time = Time(seconds=stamp.sec, nanoseconds=stamp.nanosec, clock_type=self.get_clock().clock_type)
         cam_frame = msg.header.frame_id if msg.header.frame_id else self.camera_frame
 
-        updated_tags = []
+        processed_detections = []
         for det in msg.detections:
             tag_id = det.id
             family = det.family
@@ -275,15 +273,46 @@ class EkfSlamNode(Node):
             if t_cam_tag is None:
                 continue
 
-            # Transform into robot base frame
-            x_rel, y_rel, _ = self.extrinsics.landmark_in_base_2d(t_cam_tag)
-            success = self.ekf.update_landmark(tag_id, x_rel, y_rel)
+            processed_detections.append({
+                'id': tag_id,
+                'family': family,
+                't_cam_tag': t_cam_tag,
+                'margin': det.decision_margin,
+                'hamming': det.hamming,
+            })
+
+        # Step 1: Synchronous Visual Odometry estimation
+        vo_est = self.vo_estimator.process_frame(
+            stamp_s=stamp_s,
+            detections=processed_detections,
+            stamp_ns=stamp_ns,
+        )
+
+        # Step 2: Prediction step ALWAYS precedes measurement update
+        if vo_est.valid:
+            self.ekf.predict_visual_odometry(
+                vo_est.dx, vo_est.dy, vo_est.dtheta, vo_est.covariance
+            )
+            self.last_vo_time = stamp_s
+        elif self.use_cmd_fallback and self.last_cmd_time > 0.0:
+            now_s = self.get_clock().now().nanoseconds * 1e-9
+            if (now_s - self.last_vo_time) > self.cmd_vel_timeout_s:
+                dt = 0.1 if self.last_cmd_time == 0.0 else max(1e-4, min(0.5, now_s - self.last_cmd_time))
+                v, omega = self.last_cmd
+                if dt > 0.0 and (abs(v) > 1e-4 or abs(omega) > 1e-4):
+                    self.ekf.predict_commanded_velocity(v, omega, dt)
+
+        # Step 3: Measurement update step for all visible landmarks
+        updated_tags = []
+        for det in processed_detections:
+            x_rel, y_rel, _ = self.extrinsics.landmark_in_base_2d(det['t_cam_tag'])
+            success = self.ekf.update_landmark(det['id'], x_rel, y_rel)
             if success:
-                updated_tags.append(tag_id)
+                updated_tags.append(det['id'])
 
         if updated_tags:
             status = String()
-            status.data = f"EKF updated with {len(updated_tags)} tags: {updated_tags}"
+            status.data = f"EKF updated with {len(updated_tags)} tags: {updated_tags} (VO valid: {vo_est.valid})"
             self.status_pub.publish(status)
 
     def on_publish_timer(self):
