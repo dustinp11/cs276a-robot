@@ -1,39 +1,25 @@
-"""Closed-loop square waypoint navigation controller using EKF-SLAM pose feedback.
-
-Directs the robot counterclockwise through a 6 ft x 6 ft square (or configurable size)
-using straight travel and calibrated fixed-rate pivot pulses:
-    WP0: (0, 0) ft     [0.0000, 0.0000] m - Start / Origin
-    WP1: (7, 0) ft     [2.1336, 0.0000] m - Bottom-right (+X)
-    WP2: (7, 7) ft     [2.1336, 2.1336] m - Top-right (+X, +Y)
-    WP3: (0, 7) ft     [0.0000, 2.1336] m - Top-left (+Y)
-    WP4: (0, 0) ft     [0.0000, 0.0000] m - Return to start (Origin)
-
-Coordinates are maintained in the local navigation frame anchored at the initial EKF
-pose upon start:
-    x_nav =  (x_slam - x_0) * cos(theta_0) + (y_slam - y_0) * sin(theta_0)
-    y_nav = -(x_slam - x_0) * sin(theta_0) + (y_slam - y_0) * cos(theta_0)
-    theta_nav = wrap_angle(theta_slam - theta_0)
-"""
+"""Four fixed-heading legs with corner scans and fresh visual verification."""
 
 from dataclasses import dataclass
 from enum import Enum
 import math
-from typing import Dict, List, Optional, Tuple
 
 from .coordinates import wrap_angle
-from hw3.turn_calibration import TurnCalibration
+from .turn_calibration import TurnCalibration
+from .vision_navigation import NavigationPolicy, VisualFeedback
 
 
 class NavigationState(Enum):
-    """Navigation controller state machine states."""
-    IDLE = "IDLE"
-    WAITING_FOR_POSE = "WAITING_FOR_POSE"
-    TURNING = "TURNING"
-    DRIVING = "DRIVING"
-    PAUSED_STALE_POSE = "PAUSED_STALE_POSE"
-    PAUSED_HIGH_UNCERTAINTY = "PAUSED_HIGH_UNCERTAINTY"
-    STOPPED = "STOPPED"
-    COMPLETED = "COMPLETED"
+    """Motion phases and terminal outcomes recorded in navigation_log.csv."""
+    IDLE = 'IDLE'
+    WAITING_FOR_POSE = 'WAITING_FOR_POSE'
+    DRIVING = 'DRIVING'
+    STOPPING = 'STOPPING'
+    SCANNING = 'SCANNING'
+    LOCALIZING = 'LOCALIZING'
+    ALIGNING = 'ALIGNING'
+    STOPPED = 'STOPPED'
+    COMPLETED = 'COMPLETED'
 
 
 @dataclass(frozen=True)
@@ -65,323 +51,323 @@ class NavigationOutput:
 
 
 class SquareNavigator:
-    """Manages closed-loop waypoint following for the square trajectory."""
+    """Execute six-foot legs using tag displacement and fixed initial-frame headings."""
 
     FEET_TO_METERS = 0.3048
 
-    def __init__(
-        self,
-        square_size_ft: float = 6.0,
-        max_linear_v_mps: float = 0.20,
-        min_linear_v_mps: float = 0.05,
-        linear_kp: float = 0.60,
-        waypoint_tolerance_m: float = 0.10,
-        heading_tolerance_rad: float = 0.12,  # ~7 degrees
-        pose_timeout_s: float = 0.60,
-        max_pos_uncertainty_m: float = 0.40,
-        max_heading_uncertainty_rad: float = 0.40,
-        turn_calibration: Optional[TurnCalibration] = None,
-        turn_pulse_rad: float = math.pi / 6,
-        turn_settle_s: float = 1.0,
-    ):
-        """Initialize local square waypoints, calibrated turning, and mission limits.
+    def __init__(self, square_size_ft=6.0, max_linear_v_mps=0.12,
+                 min_linear_v_mps=0.05, linear_kp=0.60, waypoint_tolerance_m=0.10,
+                 heading_tolerance_rad=0.12, pose_timeout_s=0.60,
+                 max_pos_uncertainty_m=0.40, max_heading_uncertainty_rad=0.40,
+                 turn_calibration=None, turn_pulse_rad=math.pi / 12,
+                 turn_settle_s=1.0, policy=None):
+        """Configure a stopped four-leg mission without supplying a surveyed map.
 
         Args:
-            square_size_ft: Square side length in feet, converted internally to meters.
-            max_linear_v_mps: Maximum requested straight speed in meters per second.
-            min_linear_v_mps: Minimum nonzero straight speed in meters per second.
-            linear_kp: Proportional distance gain for straight travel.
-            waypoint_tolerance_m: Distance from a target waypoint accepted as arrival, in meters.
-            heading_tolerance_rad: Maximum absolute heading error accepted as aligned, in radians.
-            pose_timeout_s: Maximum allowable pose age in seconds.
-            max_pos_uncertainty_m: Maximum allowable position standard deviation in meters.
-            max_heading_uncertainty_rad: Maximum allowable yaw standard deviation in radians.
-            turn_calibration: Measured fixed motor input and direction-specific yaw rates.
-            turn_pulse_rad: Maximum nominal angle of each timed turn pulse, in radians.
-            turn_settle_s: Stopped settling interval after each turn pulse, in seconds.
+            square_size_ft: Desired forward travel per side, in feet.
+            max_linear_v_mps: Maximum forward speed in meters per second.
+            min_linear_v_mps: Minimum forward speed in meters per second.
+            linear_kp: Gain converting remaining meters to requested speed.
+            waypoint_tolerance_m: Allowed shortfall per leg in meters.
+            heading_tolerance_rad: Allowed absolute side-heading error in radians.
+            pose_timeout_s: Maximum EKF pose age in seconds.
+            max_pos_uncertainty_m: Maximum position standard deviation in meters.
+            max_heading_uncertainty_rad: Maximum yaw standard deviation in radians.
+            turn_calibration: Measured direction-specific motor inputs and rad/s rates.
+            turn_pulse_rad: Maximum alignment correction pulse angle, in radians.
+            turn_settle_s: Stopped settling time after motion, in seconds.
+            policy: NavigationPolicy with vision, stability, clearance, and time limits.
 
         Returns:
-            None. State changes and publications are performed in place.
+            None. Motion starts only after start() and fresh visual localization.
         """
+        self.square_size_m = float(square_size_ft) * self.FEET_TO_METERS
+        self.max_linear_v, self.min_linear_v = max_linear_v_mps, min_linear_v_mps
+        self.linear_kp, self.waypoint_tolerance_m = linear_kp, waypoint_tolerance_m
+        self.heading_tolerance_rad, self.pose_timeout_s = heading_tolerance_rad, pose_timeout_s
+        self.max_pos_uncertainty_m = max_pos_uncertainty_m
+        self.max_heading_uncertainty_rad = max_heading_uncertainty_rad
         self.turn_calibration = turn_calibration
-        self.turn_pulse_rad = float(turn_pulse_rad)
-        self.turn_settle_s = float(turn_settle_s)
-        self.turn = None
-        self.stop_reason = "Navigation inactive"
-        if not 0 < self.turn_pulse_rad <= math.pi / 2 or not math.isfinite(self.turn_settle_s) or self.turn_settle_s < 0:
-            raise ValueError("Use a positive turn pulse <= pi/2 and nonnegative settle time.")
-        self.square_size_ft = float(square_size_ft)
-        self.square_size_m = self.square_size_ft * self.FEET_TO_METERS
-
-        self.max_linear_v = float(max_linear_v_mps)
-        self.min_linear_v = float(min_linear_v_mps)
-
-        self.linear_kp = float(linear_kp)
-
-        self.waypoint_tolerance_m = float(waypoint_tolerance_m)
-        self.heading_tolerance_rad = float(heading_tolerance_rad)
-
-        self.pose_timeout_s = float(pose_timeout_s)
-        self.max_pos_uncertainty_m = float(max_pos_uncertainty_m)
-        self.max_heading_uncertainty_rad = float(max_heading_uncertainty_rad)
-
-        # Build waypoints: counterclockwise square starting at (0, 0)
-        s = self.square_size_m
-        self.waypoints: List[Waypoint] = [
-            Waypoint(0, 0.0, 0.0, "WP0: Bottom-left (Start)"),
-            Waypoint(1, s, 0.0, "WP1: Bottom-right (+X)"),
-            Waypoint(2, s, s, "WP2: Top-right (+X, +Y)"),
-            Waypoint(3, 0.0, s, "WP3: Top-left (+Y)"),
-            Waypoint(4, 0.0, 0.0, "WP4: Bottom-left (Return to origin)"),
-        ]
-
-        self.current_wp_idx = 1  # First destination is WP1
-        self.state = NavigationState.IDLE
-        self.is_active = False
-
-        # Anchor origin (latched upon start)
-        self.origin_latched = False
-        self.x0_slam = 0.0
-        self.y0_slam = 0.0
-        self.theta0_slam = 0.0
-
-        # Latest received EKF pose
-        self.latest_slam_pose: Optional[Tuple[float, float, float]] = None
-        self.latest_uncertainty: Tuple[float, float] = (0.0, 0.0)  # (sigma_pos, sigma_theta)
-        self.latest_pose_stamp_s: float = 0.0
+        self.turn_pulse_rad, self.turn_settle_s = turn_pulse_rad, turn_settle_s
+        self.policy = policy or NavigationPolicy()
         self._validate_motion()
+        self.reset()
 
     def _validate_motion(self):
-        """Reject nonfinite or nonpositive motion settings before any command."""
-        values = (self.square_size_m, self.max_linear_v, self.min_linear_v,
-                  self.pose_timeout_s, self.heading_tolerance_rad, self.linear_kp,
-                  self.max_pos_uncertainty_m, self.max_heading_uncertainty_rad)
-        if not all(math.isfinite(v) and v > 0 for v in values):
-            raise ValueError('Navigation distances, speeds, tolerances, and limits must be positive.')
-        if self.min_linear_v > self.max_linear_v:
-            raise ValueError('Minimum linear velocity must not exceed maximum velocity.')
-
-    def start(self) -> Tuple[bool, str]:
-        """Start or resume the square navigation mission.
+        """Reject invalid motion settings before the first command.
 
         Args:
             None.
 
         Returns:
-            (success, message), indicating whether navigation may begin or resume.
+            None. Raises ValueError for invalid limits.
         """
-        if self.turn_calibration is None:
-            return False, "Set measured CCW and CW turn calibration before starting."
-        if self.state == NavigationState.COMPLETED:
-            return False, "Mission already completed. Reset navigator to run again."
-
-        if self.state == NavigationState.STOPPED and self.turn is not None:
-            return False, "Turn stopped; reset before restarting the mission."
-        self.is_active = True
-        if not self.origin_latched:
-            self.state = NavigationState.WAITING_FOR_POSE
-            return True, "Navigation started. Waiting for initial EKF pose to anchor origin."
-        else:
-            self.state = NavigationState.TURNING
-            return True, f"Navigation resumed towards Waypoint {self.current_wp_idx}."
-
-    def stop(self, reason: str = "Manual stop requested") -> Tuple[bool, str]:
-        """Stop the robot immediately and halt navigation."""
-        self.stop_reason = reason
-        self.is_active = False
-        self.state = NavigationState.STOPPED
-        return True, f"Navigation stopped: {reason}"
+        limits = (self.square_size_m, self.max_linear_v, self.min_linear_v, self.linear_kp,
+                  self.waypoint_tolerance_m, self.heading_tolerance_rad, self.pose_timeout_s,
+                  self.max_pos_uncertainty_m, self.max_heading_uncertainty_rad,
+                  self.turn_pulse_rad, self.turn_settle_s)
+        if not all(math.isfinite(v) and v > 0 for v in limits):
+            raise ValueError('Navigation limits must be finite and positive.')
+        if self.min_linear_v > self.max_linear_v or self.turn_pulse_rad > math.pi / 2:
+            raise ValueError('Invalid speed range or turn pulse larger than 90 degrees.')
 
     def reset(self):
-        """Reset navigator state to initial unstarted condition."""
-        self.is_active = False
-        self.state = NavigationState.IDLE
-        self.origin_latched = False
-        self.current_wp_idx = 1
-        self.latest_slam_pose = None
-        self.latest_pose_stamp_s = 0.0
-        self.turn = None
-        self.stop_reason = "Navigation inactive"
-
-    def update_ekf_pose(
-        self,
-        x_slam: float,
-        y_slam: float,
-        theta_slam: float,
-        sigma_pos_m: float,
-        sigma_theta_rad: float,
-        stamp_s: float,
-    ):
-        """Update latest robot pose and uncertainty estimate from EKF-SLAM.
+        """Clear the mission, including visual references and timed-motion budgets.
 
         Args:
-            x_slam: Estimated robot x coordinate in the SLAM frame, in meters.
-            y_slam: Estimated robot y coordinate in the SLAM frame, in meters.
-            theta_slam: Estimated robot yaw in the SLAM frame, in radians.
-            sigma_pos_m: Robot planar position standard deviation, in meters.
-            sigma_theta_rad: Robot yaw standard deviation, in radians.
-            stamp_s: Observation or pose timestamp in seconds in the ROS clock domain.
+            None.
 
         Returns:
-            None. State changes and publications are performed in place.
+            None. Leaves the controller idle with no motion request.
+        """
+        self.state, self.is_active = NavigationState.IDLE, False
+        self.stop_reason = 'Navigation inactive'
+        self.current_wp_idx, self.side_index = 1, 0
+        self.latest_slam_pose, self.latest_pose_stamp_s = None, -math.inf
+        self.latest_uncertainty = (math.inf, math.inf)
+        self.origin_latched = False
+        self.x0_slam = self.y0_slam = self.theta0_slam = 0.0
+        self.leg_origin, self.target = (0.0, 0.0), (self.square_size_m, 0.0)
+        self.progress = self.drive_used = self.scan_used = 0.0
+        self.last_command, self.last_tick = (0.0, 0.0), None
+        self.phase_started = None
+        self.turn = None
+        self.vision = VisualFeedback(self.policy)
+
+    def start(self):
+        """Start only an idle mission; a stopped run requires reset/relaunch."""
+        if self.turn_calibration is None:
+            return False, 'Set measured CCW and CW calibration first.'
+        if self.state != NavigationState.IDLE:
+            return False, 'Mission already started; reset/relaunch for a new run.'
+        self.is_active, self.state = True, NavigationState.WAITING_FOR_POSE
+        return True, 'Waiting for a pose and stable known-tag observations.'
+
+    def stop(self, reason='Manual stop requested'):
+        """Latch a terminal stop; ordinary start requests cannot resume motion."""
+        self.stop_reason, self.is_active = reason, False
+        self.state = NavigationState.STOPPED
+        return True, reason
+
+    def update_ekf_pose(self, x_slam, y_slam, theta_slam, sigma_pos_m, sigma_theta_rad, stamp_s):
+        """Cache finite SLAM pose and latch its origin after an explicit start.
+
+        Args:
+            x_slam: Robot x coordinate in the SLAM frame, in meters.
+            y_slam: Robot y coordinate in the SLAM frame, in meters.
+            theta_slam: SLAM yaw in radians, positive counterclockwise.
+            sigma_pos_m: Planar position standard deviation in meters.
+            sigma_theta_rad: Heading standard deviation in radians.
+            stamp_s: ROS pose time in seconds.
+
+        Returns:
+            None. Invalid feedback invalidates the cached timestamp.
         """
         values = (x_slam, y_slam, theta_slam, sigma_pos_m, sigma_theta_rad, stamp_s)
         if not all(math.isfinite(v) for v in values) or min(sigma_pos_m, sigma_theta_rad) < 0:
             self.latest_pose_stamp_s = -math.inf
             return
-        self.latest_slam_pose = (float(x_slam), float(y_slam), wrap_angle(float(theta_slam)))
-        self.latest_uncertainty = (float(sigma_pos_m), float(sigma_theta_rad))
-        self.latest_pose_stamp_s = float(stamp_s)
-
-        # Latch initial pose as origin if waiting for it
+        self.latest_slam_pose = (x_slam, y_slam, wrap_angle(theta_slam))
+        self.latest_uncertainty, self.latest_pose_stamp_s = (sigma_pos_m, sigma_theta_rad), stamp_s
         if self.is_active and not self.origin_latched:
-            if (sigma_pos_m <= self.max_pos_uncertainty_m and
-                    sigma_theta_rad <= self.max_heading_uncertainty_rad):
-                self.x0_slam = float(x_slam)
-                self.y0_slam = float(y_slam)
-                self.theta0_slam = wrap_angle(float(theta_slam))
-                self.origin_latched = True
-                self.current_wp_idx = 1
-                self.state = NavigationState.TURNING
+            self.x0_slam, self.y0_slam, self.theta0_slam = self.latest_slam_pose
+            self.origin_latched = True
 
-    def slam_to_nav_frame(
-        self,
-        x_slam: float,
-        y_slam: float,
-        theta_slam: float,
-    ) -> Tuple[float, float, float]:
-        """Transform coordinates from global EKF SLAM frame to local navigation frame.
+    def slam_to_nav_frame(self, x_slam, y_slam, theta_slam):
+        """Return (x_m, y_m, yaw_rad) in the initial robot-centered frame."""
+        dx, dy = x_slam - self.x0_slam, y_slam - self.y0_slam
+        c, s = math.cos(self.theta0_slam), math.sin(self.theta0_slam)
+        return c * dx + s * dy, -s * dx + c * dy, wrap_angle(theta_slam - self.theta0_slam)
 
-        Args:
-            x_slam: Estimated robot x coordinate in the SLAM frame, in meters.
-            y_slam: Estimated robot y coordinate in the SLAM frame, in meters.
-            theta_slam: Estimated robot yaw in the SLAM frame, in radians.
+    def update_vision(self, stamp, tags, known_ids, clearance):
+        """Pass timestamped base-frame observations to the independent vision tracker."""
+        if self.latest_slam_pose is not None:
+            self.vision.update(stamp, tags, known_ids, clearance,
+                               self.latest_slam_pose, self._ekf_progress())
 
-        Returns:
-            (x_m, y_m, yaw_rad) relative to the latched navigation origin.
-        """
-        if not self.origin_latched:
-            return 0.0, 0.0, 0.0
+    def _heading(self):
+        """Return the absolute SLAM heading anchored to the initial robot direction."""
+        return self.theta0_slam + self.side_index * math.pi / 2
 
-        dx = x_slam - self.x0_slam
-        dy = y_slam - self.y0_slam
-        c0 = math.cos(self.theta0_slam)
-        s0 = math.sin(self.theta0_slam)
+    def _heading_error(self):
+        """Return wrapped error to the fixed side heading, never to a moving waypoint."""
+        return wrap_angle(self._heading() - self.latest_slam_pose[2])
 
-        x_nav = dx * c0 + dy * s0
-        y_nav = -dx * s0 + dy * c0
-        theta_nav = wrap_angle(theta_slam - self.theta0_slam)
-        return x_nav, y_nav, theta_nav
+    def _ekf_progress(self):
+        """Project the current EKF position onto this leg's fixed forward axis."""
+        x, y, _ = self.latest_slam_pose
+        return ((x - self.leg_origin[0]) * math.cos(self._heading())
+                + (y - self.leg_origin[1]) * math.sin(self._heading()))
 
-    def _output(self, message, linear=0.0, angular=0.0):
-        """Build telemetry in the local frame for a moving or stopped command."""
-        target = self.waypoints[self.current_wp_idx]
-        pose = self.slam_to_nav_frame(*self.latest_slam_pose) if self.latest_slam_pose else (0, 0, 0)
-        dx, dy = target.x_m - pose[0], target.y_m - pose[1]
-        error = wrap_angle(math.atan2(dy, dx) - pose[2])
-        return NavigationOutput(linear, angular, self.state, message, self.current_wp_idx,
-                                target.x_m, target.y_m, *pose, math.hypot(dx, dy), error,
-                                *self.latest_uncertainty)
+    def _transition(self, state, now):
+        """Enter a phase and restart its elapsed-time deadline."""
+        self.state, self.phase_started = state, now
 
     def _pose_problem(self, now):
-        """Return a pause reason when feedback is missing, invalid, stale, or uncertain.
-
-        Args:
-            now: Current controller time in seconds in the same clock domain as pose stamps.
-
-        Returns:
-            (pause_state, reason), or None when pose feedback is usable.
-        """
+        """Return the reason feedback cannot authorize motion, or None."""
         if not self.origin_latched or self.latest_slam_pose is None:
-            return NavigationState.WAITING_FOR_POSE, 'Waiting for initial EKF pose'
-        values = (*self.latest_slam_pose, *self.latest_uncertainty, self.latest_pose_stamp_s)
-        if not all(math.isfinite(v) for v in values):
-            return NavigationState.PAUSED_STALE_POSE, 'Invalid pose feedback'
-        age = now - self.latest_pose_stamp_s
-        if age < -0.05 or age > self.pose_timeout_s:
-            return NavigationState.PAUSED_STALE_POSE, 'Pose feedback is stale'
-        if (self.latest_uncertainty[0] > self.max_pos_uncertainty_m or
-                self.latest_uncertainty[1] > self.max_heading_uncertainty_rad):
-            return NavigationState.PAUSED_HIGH_UNCERTAINTY, 'Pose uncertainty is too high'
+            return 'Waiting for initial EKF pose'
+        if not -0.05 <= now - self.latest_pose_stamp_s <= self.pose_timeout_s:
+            return 'Pose feedback is stale or invalid'
+        if (self.latest_uncertainty[0] > self.max_pos_uncertainty_m
+                or self.latest_uncertainty[1] > self.max_heading_uncertainty_rad):
+            return 'Pose uncertainty exceeds navigation limits'
         return None
 
-    def _target_error(self):
-        """Return distance and signed heading error to the current waypoint."""
-        x, y, yaw = self.slam_to_nav_frame(*self.latest_slam_pose)
-        target = self.waypoints[self.current_wp_idx]
-        dx, dy = target.x_m - x, target.y_m - y
-        return math.hypot(dx, dy), wrap_angle(math.atan2(dy, dx) - yaw)
+    def _account_motion(self, now):
+        """Bound command accounting by the motor watchdog; never assume a fixed tick."""
+        dt = 0.0 if self.last_tick is None else max(0.0, min(now - self.last_tick, 0.15))
+        self.drive_used += abs(self.last_command[0]) * dt
+        if self.state == NavigationState.SCANNING:
+            self.scan_used += abs(self.last_command[1]) * dt
+        self.last_tick = now
 
-    def _advance_waypoint(self):
-        """Advance to another corner or finish the square, clearing turn state."""
-        self.turn = None
-        if self.current_wp_idx == len(self.waypoints) - 1:
-            self.state, self.is_active = NavigationState.COMPLETED, False
-        else:
-            self.current_wp_idx += 1
-            self.state = NavigationState.TURNING
+    def _output(self, message, linear=0.0, angular=0.0):
+        """Build telemetry and remember the issued command for budget accounting."""
+        pose = self.slam_to_nav_frame(*self.latest_slam_pose) if self.latest_slam_pose else (0, 0, 0)
+        target = self.slam_to_nav_frame(*self.target, self._heading())[:2]
+        error = self._heading_error() if self.latest_slam_pose else 0.0
+        self.last_command = linear, angular
+        return NavigationOutput(linear, angular, self.state, message, self.current_wp_idx,
+                                *target, *pose, max(0.0, self.square_size_m - self.progress),
+                                error, *self.latest_uncertainty)
 
-    def _turn_command(self, now, error):
-        """Use timed fixed-rate pulses with settle intervals and a hard angle budget.
+    def _fail(self, reason):
+        """Latch failure and return an immediate zero command."""
+        self.stop(reason)
+        return self._output(reason)
 
-        Args:
-            now: Current controller time in seconds in the same clock domain as pose stamps.
-            error: Signed heading error to the target, in radians.
-
-        Returns:
-            NavigationOutput containing a fixed-rate pulse or a stopped command.
-        """
-        if self.turn is None:
-            self.turn = FixedTurnPulse(self.turn_calibration, abs(error),
-                                       self.turn_pulse_rad, self.turn_settle_s)
-        omega, message = self.turn.step(now, error, self.heading_tolerance_rad)
-        if self.turn.exhausted:
-            self.stop('Turn budget exhausted; check calibration and heading feedback')
-            return self._output(self.stop_reason)
-        if self.turn.done:
-            self.turn = None
-            self.state = NavigationState.DRIVING
-        return self._output(message, angular=omega)
-
-    def step(self, current_time_s: float) -> NavigationOutput:
-        """Compute one nonblocking straight/turn command, with stops during settling.
+    def step(self, current_time_s):
+        """Advance one nonblocking phase with stale-data and bounded-motion guards.
 
         Args:
-            current_time_s: Current controller time in seconds in the pose timestamp clock domain.
+            current_time_s: ROS controller time in seconds.
 
         Returns:
-            NavigationOutput or (yaw_rate_radps, status) for the controller being stepped.
+            NavigationOutput with stopped commands on idle, waits, completion, or failure.
         """
         now = float(current_time_s)
+        self._account_motion(now)
         if not self.is_active:
             return self._output(self.stop_reason)
+        if self.phase_started is None:
+            self.phase_started = now
         problem = self._pose_problem(now)
-        if problem:
-            self.state, message = problem
-            if self.turn:
-                self.turn.pause(now)
-            return self._output(message)
-        return self._step_target(now)
+        if problem and self.state != NavigationState.WAITING_FOR_POSE:
+            return self._fail(problem)
+        handlers = {NavigationState.WAITING_FOR_POSE: self._wait_for_start,
+                    NavigationState.DRIVING: self._drive, NavigationState.STOPPING: self._settle,
+                    NavigationState.SCANNING: self._scan, NavigationState.LOCALIZING: self._localize,
+                    NavigationState.ALIGNING: self._align}
+        return handlers[self.state](now)
 
-    def _step_target(self, now):
-        """Handle waypoint arrival and select straight travel or pivoting.
+    def _wait_for_start(self, now):
+        """Require stable observed landmarks before authorizing the first straight leg."""
+        if now - self.phase_started > self.policy.localization_timeout_s:
+            return self._fail('Initial visual localization timed out')
+        if self._pose_problem(now) or not self.vision.stable(now, self.phase_started):
+            return self._output('Waiting for stable known-tag localization')
+        self._begin_leg(now)
+        return self._output('Visual start verified; ready to drive')
+
+    def _begin_leg(self, now):
+        """Anchor this side at the current pose without changing its absolute heading."""
+        self.leg_origin = self.latest_slam_pose[:2]
+        c, s = math.cos(self._heading()), math.sin(self._heading())
+        self.target = (self.leg_origin[0] + c * self.square_size_m,
+                       self.leg_origin[1] + s * self.square_size_m)
+        self.progress = self.drive_used = 0.0
+        self.vision.begin_leg(self._heading())
+        self._transition(NavigationState.DRIVING, now)
+
+    def _drive(self, now):
+        """Prefer same-tag travel, stop at clearance limits, and never pivot mid-side.
 
         Args:
-            now: Current controller time in seconds in the same clock domain as pose stamps.
+            now: ROS controller time in seconds.
 
         Returns:
-            NavigationOutput for arrival, a pivot pulse, or straight travel.
+            NavigationOutput for forward motion, arrival, or terminal feedback failure.
         """
-        distance, error = self._target_error()
-        if distance <= self.waypoint_tolerance_m:
-            self._advance_waypoint()
-            return self._output('Waypoint reached; stopped before next phase')
-        if self.turn is not None or abs(error) > self.heading_tolerance_rad:
-            self.state = NavigationState.TURNING
-            return self._turn_command(now, error)
-        self.state = NavigationState.DRIVING
-        speed = max(self.min_linear_v, min(self.max_linear_v, self.linear_kp * distance))
-        return self._output('Driving straight', linear=speed)
+        if not self.vision.fresh(now):
+            return self._fail('Lost fresh tag observations while driving')
+        if self.vision.clearance is not None and self.vision.clearance <= self.policy.wall_stop_distance_m:
+            return self._fail('Visible wall inside forward clearance limit')
+        if self.drive_used > self.policy.drive_budget_factor * self.square_size_m:
+            return self._fail('Straight command budget exhausted before visual arrival')
+        self.progress = self._ekf_progress()
+        if now - self.vision.progress_stamp <= self.policy.vision_timeout_s:
+            self.progress = self.vision.extrapolated_progress(self.progress)
+        remaining = self.square_size_m - self.progress
+        if remaining <= self.waypoint_tolerance_m:
+            self._transition(NavigationState.STOPPING, now)
+            return self._output('Six-foot leg reached; stopping before scan')
+        if abs(self._heading_error()) > self.policy.drive_heading_limit_rad:
+            return self._fail('Heading drift exceeded limit during straight travel')
+        speed = max(self.min_linear_v, min(self.max_linear_v, self.linear_kp * remaining))
+        return self._output('Driving straight with visual progress feedback', linear=speed)
+
+    def _settle(self, now):
+        """Stop for settling, then begin one bounded nominal full-turn scan."""
+        if now - self.phase_started >= self.turn_settle_s:
+            self.scan_used = 0.0
+            self._transition(NavigationState.SCANNING, now)
+        return self._output('Stopped before full-turn scan')
+
+    def _scan(self, now):
+        """Scan at the measured CCW input; timed completion is not visual verification."""
+        if now - self.phase_started > self.policy.scan_timeout_s:
+            return self._fail('Full-turn scan exceeded its time limit')
+        if self.scan_used >= 2 * math.pi:
+            self._transition(NavigationState.LOCALIZING, now)
+            return self._output('Nominal 360 scan complete; waiting for visual localization')
+        return self._output('Nominal 360 scan; collecting tags', angular=self.turn_calibration.rate(1))
+
+    def _localize(self, now):
+        """Require fresh stable mapped-tag observations after the scan, then align."""
+        if now - self.phase_started > self.policy.localization_timeout_s:
+            return self._fail('Post-scan visual localization timed out')
+        if not self.vision.stable(now, self.phase_started + self.turn_settle_s):
+            return self._output('Stopped; gathering stable post-scan known-tag updates')
+        self.side_index += 1
+        self.turn = None
+        self._transition(NavigationState.ALIGNING, now)
+        return self._output('Localized; aligning to initial heading plus 90-degree side increments')
+
+    def _align(self, now):
+        """Apply bounded fixed-rate pulses and verify alignment with stopped vision.
+
+        Args:
+            now: ROS controller time in seconds.
+
+        Returns:
+            NavigationOutput; no leg begins on timed prediction alone.
+        """
+        if now - self.phase_started > self.policy.localization_timeout_s + 10:
+            return self._fail('Alignment or visual verification timed out')
+        if self.turn is None:
+            self.turn = FixedTurnPulse(self.turn_calibration, abs(self._heading_error()),
+                                       self.turn_pulse_rad, self.turn_settle_s)
+        omega, message = self.turn.step(now, self._heading_error(), self.heading_tolerance_rad)
+        if self.turn.exhausted:
+            return self._fail('Alignment angle budget exhausted')
+        if omega and not self.vision.fresh(now):
+            self.turn.pause(now)
+            return self._output('Stopped alignment; waiting for fresh tags')
+        verified = self.turn.done and omega == 0 and abs(self._heading_error()) <= self.heading_tolerance_rad
+        if verified and self.vision.stable(now, max(self.phase_started, self.turn.ready_at)):
+            return self._finish_alignment(now)
+        return self._output(message, angular=omega)
+
+    def _finish_alignment(self, now):
+        """Finish four sides at the initial heading or begin the next fixed-heading leg."""
+        self.turn = None
+        if self.side_index == 4:
+            self.state, self.is_active = NavigationState.COMPLETED, False
+            return self._output('Four legs and scans complete; final heading visually verified')
+        self.current_wp_idx = self.side_index + 1
+        self._begin_leg(now)
+        return self._output('Next side visually aligned; ready to drive')
 
 
 class FixedTurnPulse:

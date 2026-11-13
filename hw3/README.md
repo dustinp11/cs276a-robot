@@ -70,20 +70,51 @@ interval before a stop; it does not also integrate VO motion. Tag observations
 still correct the robot/landmark state. These are model-based velocities, not
 encoder measurements. Manual visual-only mode retains its VO prediction source.
 
-Pivots run in pulses of at most 30 nominal degrees with a one-second stopped
-settle interval. A turn can consume only its initial heading error plus 30 nominal
-degrees, capped at 180 degrees; exhausting that budget stops the mission rather
-than repeatedly spinning. Reset by restarting the navigation launch after
-checking calibration and feedback. Pose age and uncertainty stops remain active.
-Actual angles depend on the calibration and surface; these limits do not measure
-physical rotation. Check a quarter-turn before trusting a full lap.
+The square now uses the following phases on each of four sides:
+
+`DRIVE → STOPPING → SCANNING → LOCALIZING → ALIGNING → next DRIVE`
+
+- Drive up to 6 feet (1.8288 m) at a maximum 0.12 m/s, with angular command zero.
+  Travel is estimated from the change in relative positions of the same stationary
+  tags, projected onto the fixed side heading using EKF yaw. Newly visible tags
+  inherit a travel anchor; they cannot independently verify earlier displacement.
+  The EKF displacement is used briefly when relative travel is unavailable.
+- Stop and settle for one second, then command one continuous nominal CCW 360°
+  scan using the measured full-turn rate. This is a timed search, not proof of
+  physical rotation. A watchdog-bounded angle budget and scan timeout end it.
+- Remain stopped until at least three distinct images over 0.6 seconds provide
+  successful updates of at least two previously mapped tag IDs, with stable EKF
+  position and heading. Newly initialized tags alone cannot authorize movement.
+- Align to initial heading + 90°, 180°, 270°, then 360° after the final side.
+  Alignment uses pulses of at most 15 nominal degrees, followed by stopped vision
+  verification. Its separate angle budget is capped at 180°; the full scan is not
+  charged against this quarter-turn budget. The fourth scan/alignment finishes
+  stopped at the initial heading. The controller does not pivot mid-side.
+
+Navigation stops on stale pose, excessive covariance, loss of accepted known-tag
+feedback for one second during travel, excessive heading drift, exhausted motion
+budgets, or localization timeout. Stop is terminal until relaunch/reset.
+
+For visible wall-mounted tags with valid vertical face normals, a forward-ray/
+wall-plane intersection supplies an independent clearance check. At 0.45 m from
+robot center the mission stops; include body dimensions and braking margin when
+adjusting `navigation.wall_stop_distance_m`. This is not an obstacle sensor and
+cannot protect against untagged walls or objects. No surveyed map is loaded.
+
+The EKF uses higher-uncertainty command prediction plus gated tag observations.
+Command covariance grows with elapsed time rather than shrinking with callback
+frequency. Vision updates require fresh images, exact-time TF, 36h11 family, and
+configured margin/hamming/range checks; stale latest-TF fallback is disabled.
+The relative-travel check still depends on EKF yaw, and all scan/alignment motor
+rates remain subject to acceleration, battery, and surface error. Test a short
+leg and scan/alignment before another full lap; hardware validation is pending.
 
 For recording/debugging, include the applied commands as well as outputs:
 
 ```bash
 ros2 bag record /cmd_vel /cmd_vel_applied /motor_commands \
   /ekf_slam/pose /ekf_slam/trajectory /ekf_slam/landmarks \
-  /detections /tf /tf_static -o hw3_results/fixed_turn_square
+  /ekf_slam/vision_feedback /detections /tf /tf_static -o hw3_results/scan_square
 ```
 
 Local synthetic checks (no ROS or hardware): `python3 hw3/run_tests.py`.
@@ -115,6 +146,7 @@ hw3/
 │   ├── visual_odometry.py        # Core visual motion estimator from stationary AprilTags
 │   ├── ekf_slam.py               # Core EKF-SLAM state filter, Jacobians, and dynamic landmarks
 │   ├── square_navigation.py       # Pure waypoint and bounded turn-pulse controller
+│   ├── vision_navigation.py       # Fresh-tag verification, relative travel, wall-plane geometry
 │   ├── turn_calibration.py        # Shared fixed input and measured CW/CCW rates
 │   ├── velocity_mapping.py        # Pure command-to-motor mapping
 │   ├── data_recorder.py          # Observation/command recorder, replayer, and CSV exporters
@@ -359,7 +391,10 @@ This continually broadcasts the static `map` frame and publishes all landmarks, 
 
 ### 3.10 Closed-Loop Square Navigation (6 ft x 6 ft)
 
-The `square_navigation_node` drives the robot counterclockwise around a 6 ft × 6 ft square using closed-loop EKF-SLAM pose feedback:
+The `square_navigation_node` drives four 6 ft legs with initial-frame headings,
+full scans, and visual verification as described above. Ideal corners are shown
+below; actual leg origins come from the current post-scan pose, so the controller
+does not fabricate a corrected corner or guarantee physical closure:
 - Waypoints:
   - WP0: `(0, 0)` ft [0.000, 0.000] m — Origin / Start
   - WP1: `(6, 0)` ft [1.8288, 0.0000] m — Bottom-right (+X)
@@ -406,3 +441,8 @@ ros2 service call /stop_navigation std_srvs/srv/Trigger
 2. **Double-Counting Correlation**: When VO motion prediction and landmark measurement updates are both derived from the same tag in the same frame, the inter-frame measurement is partially reused. Process and measurement noise parameters ($Q$ and $R$) are tuned to prevent filter overconfidence.
 3. **Planar Assumption**: Operates in 2D $(x, y, \theta)$. Extreme pitch or roll (>35 deg, e.g. picking up the robot at a steep tilt) will violate the planar motion model.
 4. **Lighting & Motion Blur**: Fast manual movements or low lighting may cause AprilTag detection drops, temporarily pausing VO.
+
+Navigation CSV adds `vision_age_s`, `visual_progress_m`, `ekf_progress_m`,
+`forward_clearance_m`, and `scan_nominal_rad` to the existing columns. These
+record visual freshness, competing travel estimates, wall clearance, and timed
+scan prediction separately. EKF landmark and trajectory CSV formats are unchanged.

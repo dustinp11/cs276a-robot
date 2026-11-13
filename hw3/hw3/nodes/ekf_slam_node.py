@@ -14,6 +14,7 @@ Publishes:
 - Optional service /get_robot_pose (hw2_interfaces/srv/GetRobotPose)
 """
 
+import json
 import math
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -48,6 +49,7 @@ from hw3.coordinates import (
 from hw3.data_recorder import export_landmarks_csv, export_trajectory_csv
 from hw3.ekf_slam import EkfSlam
 from hw3.visual_odometry import VisualMotionEstimator
+from hw3.vision_navigation import forward_wall_clearance
 
 
 class EkfSlamNode(Node):
@@ -87,6 +89,10 @@ class EkfSlamNode(Node):
             None. State changes and publications are performed in place.
         """
         # Declare parameters
+        self.declare_parameter('quality.min_decision_margin', 20.0)
+        self.declare_parameter('quality.max_hamming', 1)
+        self.declare_parameter('quality.min_tag_distance_m', 0.1)
+        self.declare_parameter('quality.max_tag_distance_m', 5.0)
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('robot_frame', 'base_link')
         self.declare_parameter('camera_frame', 'camera_frame')
@@ -276,7 +282,8 @@ class EkfSlamNode(Node):
         Returns:
             None. State changes and publications are performed in place.
         """
-        # Publishers
+        self.vision_pub = self.create_publisher(String, '/ekf_slam/vision_feedback', 10)
+        # publishers
         self.pose_pub = self.create_publisher(
             PoseWithCovarianceStamped,
             '/ekf_slam/pose',
@@ -321,6 +328,7 @@ class EkfSlamNode(Node):
     def _initialize_history(self):
         """Initialize command times and empty trajectory histories."""
         # State tracking for fallback & trajectory history
+        self.last_detection_stamp_s = -math.inf
         self.last_vo_time = 0.0
         self.last_cmd_time = 0.0
         self.last_cmd = (0.0, 0.0)
@@ -374,72 +382,124 @@ class EkfSlamNode(Node):
             self.ekf.predict_commanded_velocity(*self.last_cmd, end - start)
 
     def on_detections(self, msg: AprilTagDetectionArray):
-        """Handle tag detections: synchronously computes VO prediction first, then updates landmarks.
+        """Apply one fresh image once, then report actual accepted visual constraints.
 
         Args:
-            msg: Incoming ROS message for this callback, with its original timestamp and frame.
+            msg: Tag36h11 detections stamped in the camera optical frame.
 
         Returns:
-            None. State changes and publications are performed in place.
+            None. Updates EKF and publishes timestamped relative tag feedback.
         """
         stamp = msg.header.stamp
         stamp_s = stamp.sec + stamp.nanosec * 1e-9
-        stamp_ns = stamp.sec * 10**9 + stamp.nanosec
-        ros_time = Time(seconds=stamp.sec, nanoseconds=stamp.nanosec, clock_type=self.get_clock().clock_type)
-        cam_frame = msg.header.frame_id if msg.header.frame_id else self.camera_frame
+        now_s = self.get_clock().now().nanoseconds * 1e-9
+        if stamp_s <= self.last_detection_stamp_s or not -0.05 <= now_s - stamp_s <= 0.5:
+            return
+        self.last_detection_stamp_s = stamp_s
+        detections = self._accepted_detections(msg)
+        self._predict_observation(stamp_s, detections)
+        known_ids = self._update_observed_landmarks(detections)
+        self._publish_vision_feedback(stamp_s, detections, known_ids)
 
-        processed_detections = []
+    def _accepted_detections(self, msg):
+        """Filter quality and obtain only transforms at the original image time.
+
+        Args:
+            msg: Original stamped AprilTagDetectionArray.
+
+        Returns:
+            Detection dictionaries with finite optical-to-tag transforms.
+        """
+        stamp = msg.header.stamp
+        time = Time(seconds=stamp.sec, nanoseconds=stamp.nanosec,
+                    clock_type=self.get_clock().clock_type)
+        frame = msg.header.frame_id or self.camera_frame
+        records = []
         for det in msg.detections:
-            tag_id = det.id
-            family = det.family
-
-            t_cam_tag = self._lookup_tag_transform(cam_frame, tag_id, family, ros_time)
-            if t_cam_tag is None:
+            if not self._detection_quality(det):
                 continue
+            transform = self._lookup_tag_transform(frame, det.id, det.family, time)
+            if transform is not None and self._valid_tag_range(transform):
+                records.append({'id': det.id, 'family': det.family, 't_cam_tag': transform,
+                                'margin': det.decision_margin, 'hamming': det.hamming})
+        return records
 
-            processed_detections.append({
-                'id': tag_id,
-                'family': family,
-                't_cam_tag': t_cam_tag,
-                'margin': det.decision_margin,
-                'hamming': det.hamming,
-            })
+    def _detection_quality(self, detection):
+        """Accept only the requested family and finite margin/hamming quality."""
+        margin = float(detection.decision_margin)
+        return (str(detection.family).removeprefix('tag') == '36h11'
+                and math.isfinite(margin)
+                and margin >= self.get_parameter('quality.min_decision_margin').value
+                and 0 <= detection.hamming <= self.get_parameter('quality.max_hamming').value)
 
-        # Step 1: Synchronous Visual Odometry estimation
-        vo_est = self.vo_estimator.process_frame(
-            stamp_s=stamp_s,
-            detections=processed_detections,
-            stamp_ns=stamp_ns,
-        )
+    def _valid_tag_range(self, transform):
+        """Reject nonfinite, behind-camera, or out-of-range optical tag poses."""
+        distance = np.linalg.norm(transform[:3, 3])
+        return (np.all(np.isfinite(transform)) and transform[2, 3] > 0
+                and self.get_parameter('quality.min_tag_distance_m').value <= distance
+                <= self.get_parameter('quality.max_tag_distance_m').value)
 
-        # command-based navigation integrates the mapper's calibrated applied rate
+    def _predict_observation(self, stamp_s, detections):
+        """Use one prediction source per image; navigation retains a weak command model.
+
+        Args:
+            stamp_s: Original ROS image time in seconds.
+            detections: Quality-filtered relative tag observations.
+
+        Returns:
+            None. Command prediction and tag-derived VO are never both integrated.
+        """
+        vo = self.vo_estimator.process_frame(stamp_s=stamp_s, detections=detections,
+                                             stamp_ns=round(stamp_s * 1e9))
         if self.command_prediction:
             self._predict_command_until(self.get_clock().now().nanoseconds * 1e-9)
-        elif vo_est.valid:
-            self.ekf.predict_visual_odometry(
-                vo_est.dx, vo_est.dy, vo_est.dtheta, vo_est.covariance
-            )
+        elif vo.valid:
+            self.ekf.predict_visual_odometry(vo.dx, vo.dy, vo.dtheta, vo.covariance)
             self.last_vo_time = stamp_s
         else:
             self._predict_command_until(self.get_clock().now().nanoseconds * 1e-9)
-            if self.last_vo_time > 0.0:
-                dt_blind = min(2.0, max(0.0, stamp_s - self.last_vo_time))
-                if dt_blind > 0.05:
-                    self.ekf.predict_untracked_drift(dt_blind)
+            if self.last_vo_time > 0:
+                self.ekf.predict_untracked_drift(min(2.0, max(0.0, stamp_s - self.last_vo_time)))
             self.last_vo_time = stamp_s
 
-        # Step 3: Measurement update step for all visible landmarks
-        updated_tags = []
-        for det in processed_detections:
-            x_rel, y_rel, _ = self.extrinsics.landmark_in_base_2d(det['t_cam_tag'])
-            success = self.ekf.update_landmark(det['id'], x_rel, y_rel)
-            if success:
-                updated_tags.append(det['id'])
+    def _update_observed_landmarks(self, detections):
+        """Distinguish map initialization from accepted reobservations of known tags.
 
-        if updated_tags:
-            status = String()
-            status.data = f"EKF updated with {len(updated_tags)} tags: {updated_tags} (VO valid: {vo_est.valid})"
-            self.status_pub.publish(status)
+        Args:
+            detections: Filtered optical-frame tag observations.
+
+        Returns:
+            IDs successfully corrected that existed before this image's updates.
+        """
+        known_before = set(self.ekf.tag_id_to_idx)
+        accepted = []
+        for det in detections:
+            x, y, _ = self.extrinsics.landmark_in_base_2d(det['t_cam_tag'])
+            if self.ekf.update_landmark(det['id'], x, y) and det['id'] in known_before:
+                accepted.append(det['id'])
+        return accepted
+
+    def _publish_vision_feedback(self, stamp_s, detections, known_ids):
+        """Report base-frame geometry independently of the pose publication timer.
+
+        Args:
+            stamp_s: Original accepted image time in ROS seconds.
+            detections: Finite quality-filtered optical tag transforms.
+            known_ids: Successfully reobserved mapped tag IDs.
+
+        Returns:
+            None. Publishes a JSON String; clearance is from robot center in meters.
+        """
+        tags, clearances = [], []
+        for det in detections:
+            base_tag = self.extrinsics.camera_to_base_transform(det['t_cam_tag'])
+            tags.append([int(det['id']), float(base_tag[0, 3]), float(base_tag[1, 3])])
+            clearance = forward_wall_clearance(base_tag)
+            if clearance is not None:
+                clearances.append(clearance)
+        payload = {'stamp_s': stamp_s, 'tags': tags, 'known_ids': known_ids,
+                   'forward_clearance_m': min(clearances) if clearances else None}
+        self.vision_pub.publish(String(data=json.dumps(payload, allow_nan=False)))
 
     def on_publish_timer(self):
         """Periodic publisher for pose, trajectory, landmarks, and TF.
@@ -678,18 +738,6 @@ class EkfSlamNode(Node):
         for tag_frame in candidate_frames:
             try:
                 tf_res = self.tf_buffer.lookup_transform(camera_frame, tag_frame, stamp)
-                t = tf_res.transform.translation
-                q = tf_res.transform.rotation
-                rot = quaternion_to_rotation_matrix(q.x, q.y, q.z, q.w)
-                pos = [t.x, t.y, t.z]
-                return make_transform(rot, pos)
-            except TransformException:
-                continue
-
-        # Fallback to latest
-        for tag_frame in candidate_frames:
-            try:
-                tf_res = self.tf_buffer.lookup_transform(camera_frame, tag_frame, Time())
                 t = tf_res.transform.translation
                 q = tf_res.transform.rotation
                 rot = quaternion_to_rotation_matrix(q.x, q.y, q.z, q.w)

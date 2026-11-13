@@ -51,7 +51,8 @@ class EkfSlam:
             initial_robot_pose: (x, y, theta) initial coordinate frame anchor.
             initial_robot_sigma: (sigma_x, sigma_y, sigma_theta) initial robot uncertainty.
             vo_process_noise: (sigma_x, sigma_y, sigma_theta) process noise per VO step.
-            cmd_process_noise: (sigma_v, sigma_lat, sigma_omega) rate noise for cmd_vel.
+            cmd_process_noise: One-second noise std [forward_m, lateral_m, yaw_rad];
+                variance grows linearly with elapsed time while commanding motion.
             base_measurement_noise: (sigma_range_m, sigma_bearing_rad) at 1 meter.
             range_scale_dist_m: Reference distance for scaling range uncertainty.
             mahalanobis_gate: Chi-square threshold for 2-DOF outlier rejection (99% = 9.21).
@@ -188,13 +189,10 @@ class EkfSlam:
         dy = 0.0
         dtheta = omega * dt
 
-        # Commanded velocity noise increases with dt
-        # Higher uncertainty reflecting physical motor variance
-        q_cmd = np.diag([
-            (self.cmd_process_noise[0] * dt) ** 2,
-            (self.cmd_process_noise[1] * dt) ** 2,
-            (self.cmd_process_noise[2] * dt) ** 2,
-        ])
+        # one-second velocity noise defines diffusion, independent of callback rate
+        # stopped commands introduce no model motion uncertainty
+        active = float(abs(v) > 0 or abs(omega) > 0)
+        q_cmd = np.diag(self.cmd_process_noise ** 2) * dt * active
 
         x_r = self.x[0]
         y_r = self.x[1]

@@ -1,10 +1,11 @@
 """ROS 2 Navigation Node for Closed-Loop Square Trajectory.
 
 Consumes estimated robot pose from /ekf_slam/pose and commands /cmd_vel
-using closed-loop feedback through all 4 waypoints of a 6 ft x 6 ft square.
+using fixed-heading six-foot legs with corner scans and visual verification.
 """
 
 import csv
+import json
 import math
 from pathlib import Path
 from typing import Optional
@@ -17,6 +18,8 @@ from std_srvs.srv import Trigger
 
 from hw3.square_navigation import NavigationState, SquareNavigator
 from hw3.turn_calibration import read_turn_calibration
+from hw3.vision_navigation import NavigationPolicy
+from dataclasses import fields
 
 
 class SquareNavigationNode(Node):
@@ -51,9 +54,11 @@ class SquareNavigationNode(Node):
         Returns:
             None. State changes and publications are performed in place.
         """
+        for field in fields(NavigationPolicy):
+            self.declare_parameter('navigation.' + field.name, field.default)
         # declare parameters
         self.declare_parameter('navigation.square_size_ft', 6.0)
-        self.declare_parameter('navigation.max_linear_velocity', 0.20)
+        self.declare_parameter('navigation.max_linear_velocity', 0.12)
         self.declare_parameter('navigation.min_linear_velocity', 0.05)
         self.declare_parameter('navigation.linear_kp', 0.60)
         self.declare_parameter('navigation.waypoint_tolerance_m', 0.10)
@@ -66,7 +71,7 @@ class SquareNavigationNode(Node):
         self.declare_parameter('navigation.output_dir', 'hw3_results')
         self.declare_parameter('navigation.log_csv', True)
 
-        self.declare_parameter('navigation.turn_pulse_rad', math.pi / 6)
+        self.declare_parameter('navigation.turn_pulse_rad', math.pi / 12)
         self.declare_parameter('navigation.turn_settle_s', 1.0)
 
     def _create_navigator(self):
@@ -79,7 +84,10 @@ class SquareNavigationNode(Node):
             None. State changes and publications are performed in place.
         """
         # initialize squarenavigator controller
+        policy = NavigationPolicy(**{field.name: self.get_parameter('navigation.' + field.name).value
+                                     for field in fields(NavigationPolicy)})
         self.navigator = SquareNavigator(
+            policy=policy,
             turn_calibration=self.calibration,
             turn_pulse_rad=self.get_parameter('navigation.turn_pulse_rad').value,
             turn_settle_s=self.get_parameter('navigation.turn_settle_s').value,
@@ -110,6 +118,8 @@ class SquareNavigationNode(Node):
         Returns:
             None. State changes and publications are performed in place.
         """
+        self.vision_sub = self.create_subscription(
+            String, '/ekf_slam/vision_feedback', self.on_vision_feedback, 10)
         # subscribers
         self.pose_sub = self.create_subscription(
             PoseWithCovarianceStamped,
@@ -209,6 +219,8 @@ class SquareNavigationNode(Node):
                     'cmd_omega_radps',
                     'state',
                     'status_message',
+                    'vision_age_s', 'visual_progress_m', 'ekf_progress_m',
+                    'forward_clearance_m', 'scan_nominal_rad',
                 ])
             self.csv_initialized = True
         except Exception as e:
@@ -253,6 +265,32 @@ class SquareNavigationNode(Node):
             sigma_theta_rad=sigma_theta,
             stamp_s=stamp_s,
         )
+
+    def on_vision_feedback(self, message):
+        """Validate stamped base-frame geometry before handing it to navigation.
+
+        Args:
+            message: JSON String from the EKF's accepted image callback.
+
+        Returns:
+            None. Malformed feedback is ignored and cannot refresh vision age.
+        """
+        try:
+            data = json.loads(message.data)
+            stamp = float(data['stamp_s'])
+            tags = [[int(tag), float(x), float(y)] for tag, x, y in data['tags']]
+            known_ids = [int(tag) for tag in data['known_ids']]
+            clearance = data['forward_clearance_m']
+            values = [stamp] + [float(v) for tag in tags for v in tag]
+            if clearance is not None:
+                values.append(float(clearance))
+            if not all(math.isfinite(v) for v in values):
+                return
+            if any(tag < 0 for tag in known_ids) or any(tag[0] < 0 for tag in tags):
+                return
+            self.navigator.update_vision(stamp, tags, known_ids, clearance)
+        except (ValueError, TypeError, KeyError, OverflowError):
+            self.get_logger().warn('Ignoring malformed vision feedback')
 
     def on_start_topic(self, _msg: Empty):
         """Handle start trigger via topic publish."""
@@ -337,7 +375,7 @@ class SquareNavigationNode(Node):
 
 
     def _publish_target(self, output):
-        """Publish the target in the navigation origin frame.
+        """Publish the target in the SLAM map frame.
 
         Args:
             output: NavigationOutput with positions in meters and angles in radians.
@@ -349,8 +387,7 @@ class SquareNavigationNode(Node):
         wp_msg = PointStamped()
         wp_msg.header.stamp = self.get_clock().now().to_msg()
         wp_msg.header.frame_id = "map"
-        wp_msg.point.x = output.target_x_m
-        wp_msg.point.y = output.target_y_m
+        wp_msg.point.x, wp_msg.point.y = self.navigator.target
         wp_msg.point.z = 0.0
         self.waypoint_pub.publish(wp_msg)
 
@@ -384,9 +421,14 @@ class SquareNavigationNode(Node):
                         f"{output.angular_omega_radps:.4f}",
                         output.state.value,
                         output.status_message,
+                        now_s - self.navigator.vision.valid_stamp,
+                        self.navigator.vision.progress,
+                        self.navigator._ekf_progress() if self.navigator.latest_slam_pose else '',
+                        self.navigator.vision.clearance,
+                        self.navigator.scan_used,
                     ])
-            except Exception:
-                pass
+            except OSError as error:
+                self.get_logger().warn(f'Navigation CSV write failed: {error}', throttle_duration_sec=5.0)
 
 
     def _report_progress(self, output):
@@ -399,7 +441,7 @@ class SquareNavigationNode(Node):
             None.
         """
         # 5. log periodically to terminal if active
-        if output.state in (NavigationState.DRIVING, NavigationState.TURNING):
+        if output.state in (NavigationState.DRIVING, NavigationState.ALIGNING, NavigationState.SCANNING):
             self.get_logger().info(
                 f"[WP{output.waypoint_index}] dist={output.distance_error_m:.2f}m, "
                 f"head_err={math.degrees(output.heading_error_rad):.1f}°, "
