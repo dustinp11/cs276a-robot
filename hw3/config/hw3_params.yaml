@@ -95,7 +95,7 @@
 
     # Closed-Loop Square Navigation settings
     navigation:
-      square_size_ft: 7.0             # Side length of the square in feet (7 ft = 2.1336 m)
+      square_size_ft: 6.0             # Side length of the square in feet (6 ft = 1.8288 m)
       max_linear_velocity: 0.20       # Maximum linear speed (m/s, conservative from HW2)
       min_linear_velocity: 0.05       # Minimum linear speed to overcome motor deadzone (m/s)
       # pivots use turn_calibration rates; straight segments have angular velocity zero

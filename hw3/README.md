@@ -31,19 +31,27 @@ root on the robot (its directory name does not matter):
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-colcon build --packages-select hw3
+colcon build --base-paths hw3 --packages-select hw3
 source install/setup.bash
 ```
 
-Start the existing camera and 36h11 detector in separate terminals, as in section
-3.3. In a third terminal, from the same repository root, run:
+Stop previously launched camera, detector, motor, and controller nodes.
+From the repository root, launch the complete experiment in one terminal:
 
 ```bash
 source /opt/ros/jazzy/setup.bash
+source rubikpi_ros2/install/setup.bash
 source install/setup.bash
 ros2 launch hw3 hw3_navigation.launch.py \
-  params_file:="$(pwd)/hw3/config/hw3_params.yaml" square_size_ft:=7.0
+  params_file:="$(pwd)/hw3/config/hw3_params.yaml" square_size_ft:=6.0
 ```
+
+The launch includes the camera and tag36h11 detector. It installs the existing
+`config/camera_parameter.yaml` calibration with HW3; override it with
+`camera_parameter_path:=/absolute/path/to/calibration.yaml` when needed.
+Use `launch_sensors:=false` only when your camera and detector are already running.
+A shorter square changes the target distance; it does not correct linear calibration
+or braking error that caused overshoot.
 
 Using the source YAML path means later calibration edits require a **launch
 restart**, not another build. Once the nodes are ready, start the square from
@@ -248,7 +256,7 @@ From the repository root:
 source /opt/ros/jazzy/setup.bash
 
 # Build hw3
-colcon build --packages-select hw3
+colcon build --base-paths hw3 --packages-select hw3
 
 # Source overlay
 source install/setup.bash
@@ -349,14 +357,14 @@ ros2 run hw3 publish_map --landmarks hw3_results/ekf_slam_landmarks.csv --trajec
 ```
 This continually broadcasts the static `map` frame and publishes all landmarks, tag IDs, covariance ellipses, and trajectory points so you can open RViz anytime (`rviz2`) and inspect the map!
 
-### 3.10 Closed-Loop Square Navigation (7 ft x 7 ft)
+### 3.10 Closed-Loop Square Navigation (6 ft x 6 ft)
 
-The `square_navigation_node` drives the robot counterclockwise around a 7 ft × 7 ft square using closed-loop EKF-SLAM pose feedback:
+The `square_navigation_node` drives the robot counterclockwise around a 6 ft × 6 ft square using closed-loop EKF-SLAM pose feedback:
 - Waypoints:
   - WP0: `(0, 0)` ft [0.000, 0.000] m — Origin / Start
-  - WP1: `(7, 0)` ft [2.1336, 0.0000] m — Bottom-right (+X)
-  - WP2: `(7, 7)` ft [2.1336, 2.1336] m — Top-right (+X, +Y)
-  - WP3: `(0, 7)` ft [0.0000, 2.1336] m — Top-left (+Y)
+  - WP1: `(6, 0)` ft [1.8288, 0.0000] m — Bottom-right (+X)
+  - WP2: `(6, 6)` ft [1.8288, 1.8288] m — Top-right (+X, +Y)
+  - WP3: `(0, 6)` ft [0.0000, 1.8288] m — Top-left (+Y)
   - WP4: `(0, 0)` ft [0.0000, 0.0000] m — Return to start
 
 Launch all nodes (EKF-SLAM + motor hardware + navigation controller in IDLE mode):

@@ -1,6 +1,6 @@
 """Closed-loop square waypoint navigation controller using EKF-SLAM pose feedback.
 
-Directs the robot counterclockwise through a 7 ft x 7 ft square (or configurable size)
+Directs the robot counterclockwise through a 6 ft x 6 ft square (or configurable size)
 using straight travel and calibrated fixed-rate pivot pulses:
     WP0: (0, 0) ft     [0.0000, 0.0000] m - Start / Origin
     WP1: (7, 0) ft     [2.1336, 0.0000] m - Bottom-right (+X)
@@ -71,7 +71,7 @@ class SquareNavigator:
 
     def __init__(
         self,
-        square_size_ft: float = 7.0,
+        square_size_ft: float = 6.0,
         max_linear_v_mps: float = 0.20,
         min_linear_v_mps: float = 0.05,
         linear_kp: float = 0.60,

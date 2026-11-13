@@ -1,114 +1,102 @@
+"""Launch camera, 36h11 detection, estimation, and a calibrated six-foot square."""
+
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
-def generate_launch_description():
-    """Launch file for Homework 3: Closed-Loop Square Navigation with EKF-SLAM.
+def _config_path(filename):
+    """Resolve an installed HW3 configuration file."""
+    return PathJoinSubstitution([FindPackageShare('hw3'), 'config', filename])
 
-    Starts:
-    1. Visual Odometry Node (inter-frame motion estimation)
-    2. EKF-SLAM Node (dynamic landmark discovery & robot pose estimation)
-    3. Motor Controller Node (hardware serial interface to /dev/ttyUSB0)
-    4. Velocity Mapping Node (converts /cmd_vel into left/right /motor_commands)
-    5. Square Navigation Node (closed-loop 7ft x 7ft square waypoint controller)
+
+def _launch_arguments():
+    """Declare shared configuration, sensors, and explicit mission-start options.
 
     Args:
         None.
 
     Returns:
-        LaunchDescription for this HW3 workflow.
+        List of launch argument declarations; square lengths are in feet.
     """
-    params_file_arg = DeclareLaunchArgument(
-        'params_file',
-        default_value=PathJoinSubstitution([
-            FindPackageShare('hw3'),
-            'config',
-            'hw3_params.yaml',
-        ]),
-        description='Path to HW3 parameters YAML file'
-    )
+    return [
+        DeclareLaunchArgument('params_file', default_value=_config_path('hw3_params.yaml')),
+        DeclareLaunchArgument('camera_parameter_path', default_value=EnvironmentVariable(
+            'CAMERA_CALIBRATION', default_value=_config_path('camera_parameter.yaml'))),
+        DeclareLaunchArgument('launch_sensors', default_value='true',
+                              description='Start camera and 36h11 detector together'),
+        DeclareLaunchArgument('auto_start', default_value='false',
+                              description='Start motion automatically instead of waiting for the service'),
+        DeclareLaunchArgument('square_size_ft', default_value='6.0',
+                              description='Square side length in feet'),
+    ]
 
-    auto_start_arg = DeclareLaunchArgument(
-        'auto_start',
-        default_value='false',
-        description='Whether to start square navigation immediately on launch'
-    )
 
-    square_size_ft_arg = DeclareLaunchArgument(
-        'square_size_ft',
-        default_value='7.0',
-        description='Side length of the square trajectory in feet (default 7.0 ft)'
-    )
+def _include_sensor(package, filename, arguments):
+    """Include a sensor launch when launch_sensors is enabled."""
+    source = PythonLaunchDescriptionSource(PathJoinSubstitution([
+        FindPackageShare(package), 'launch', filename]))
+    return IncludeLaunchDescription(source, launch_arguments=arguments.items(),
+                                    condition=IfCondition(LaunchConfiguration('launch_sensors')))
 
-    # 1. Visual Odometry Node
-    vo_node = Node(
-        package='hw3',
-        executable='visual_odometry_node',
-        name='visual_odometry_node',
-        output='screen',
-        emulate_tty=True,
-        parameters=[LaunchConfiguration('params_file')],
-    )
 
-    # 2. EKF-SLAM Node
-    ekf_node = Node(
-        package='hw3',
-        executable='ekf_slam_node',
-        name='ekf_slam_node',
-        output='screen',
-        emulate_tty=True,
-        parameters=[LaunchConfiguration('params_file'), {
+def _sensor_nodes():
+    """Reuse the camera and AprilTag launches with the existing rectified topics.
+
+    Args:
+        None.
+
+    Returns:
+        Camera and tag36h11 detector launch inclusions.
+    """
+    camera = _include_sensor('robot_vision_camera', 'robot_vision_camera.launch.py', {
+        'image_rectify': 'true',
+        'camera_parameter_path': LaunchConfiguration('camera_parameter_path'),
+    })
+    detector = _include_sensor('apriltag_ros', 'apriltag_launch.py', {
+        'image_topic': '/camera/image_raw',
+        'camera_info_topic': '/camera/camera_info',
+        'config_file': 'tags_36h11.yaml',
+    })
+    return [camera, detector]
+
+
+def _hw3_node(executable, name=None, overrides=None):
+    """Create an HW3 node using shared parameters and optional per-node overrides."""
+    return Node(package='hw3', executable=executable, name=name or executable,
+                output='screen', emulate_tty=True,
+                parameters=[LaunchConfiguration('params_file'), overrides or {}])
+
+
+def _control_nodes():
+    """Connect sensor estimation to calibrated mapping, serial motors, and navigation.
+
+    Args:
+        None.
+
+    Returns:
+        Five ROS nodes; navigation remains idle unless explicitly started.
+    """
+    return [
+        _hw3_node('visual_odometry_node'),
+        _hw3_node('ekf_slam_node', overrides={
             'ekf_slam.motion_prediction_source': 'cmd_vel',
             'ekf_slam.command_topic': '/cmd_vel_applied',
-        }],
-    )
+        }),
+        _hw3_node('motor_control'),
+        _hw3_node('velocity_mapping', overrides={'turn_calibration.enabled': True}),
+        _hw3_node('navigation_node', name='square_navigation_node', overrides={
+            'turn_calibration.enabled': True,
+            'navigation.auto_start': LaunchConfiguration('auto_start'),
+            'navigation.square_size_ft': LaunchConfiguration('square_size_ft'),
+        }),
+    ]
 
-    # 3. Motor Controller (hardware serial interface from hw3)
-    motor_node = Node(
-        package='hw3',
-        executable='motor_control',
-        name='motor_control',
-        output='screen',
-        emulate_tty=True,
-    )
 
-    # 4. Velocity Mapping (/cmd_vel -> /motor_commands from hw3)
-    velocity_node = Node(
-        package='hw3',
-        executable='velocity_mapping',
-        name='velocity_mapping',
-        parameters=[LaunchConfiguration('params_file'), {'turn_calibration.enabled': True}],
-        output='screen',
-        emulate_tty=True,
-    )
-
-    # 5. Closed-Loop Square Navigation Controller
-    navigation_node = Node(
-        package='hw3',
-        executable='navigation_node',
-        name='square_navigation_node',
-        output='screen',
-        emulate_tty=True,
-        parameters=[
-            LaunchConfiguration('params_file'),
-            {
-                'turn_calibration.enabled': True,
-                'navigation.auto_start': LaunchConfiguration('auto_start'),
-                'navigation.square_size_ft': LaunchConfiguration('square_size_ft'),
-            }
-        ],
-    )
-
-    return LaunchDescription([
-        params_file_arg,
-        auto_start_arg,
-        square_size_ft_arg,
-        vo_node,
-        ekf_node,
-        motor_node,
-        velocity_node,
-        navigation_node,
-    ])
+def generate_launch_description():
+    """Launch the complete square experiment, including its camera and detector."""
+    return LaunchDescription(_launch_arguments() + _sensor_nodes() + _control_nodes())

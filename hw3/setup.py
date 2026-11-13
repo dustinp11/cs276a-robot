@@ -17,6 +17,7 @@ setup(
         ]),
         ('share/' + package_name + '/config', [
             'config/hw3_params.yaml',
+            '../config/camera_parameter.yaml',
         ]),
     ],
     install_requires=['setuptools', 'numpy', 'pyserial'],

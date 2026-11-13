@@ -1,7 +1,7 @@
 """ROS 2 Navigation Node for Closed-Loop Square Trajectory.
 
 Consumes estimated robot pose from /ekf_slam/pose and commands /cmd_vel
-using closed-loop feedback through all 4 waypoints of a 7 ft x 7 ft square.
+using closed-loop feedback through all 4 waypoints of a 6 ft x 6 ft square.
 """
 
 import csv
@@ -52,7 +52,7 @@ class SquareNavigationNode(Node):
             None. State changes and publications are performed in place.
         """
         # declare parameters
-        self.declare_parameter('navigation.square_size_ft', 7.0)
+        self.declare_parameter('navigation.square_size_ft', 6.0)
         self.declare_parameter('navigation.max_linear_velocity', 0.20)
         self.declare_parameter('navigation.min_linear_velocity', 0.05)
         self.declare_parameter('navigation.linear_kp', 0.60)
