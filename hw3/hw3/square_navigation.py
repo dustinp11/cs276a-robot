@@ -28,6 +28,7 @@ class NavigationState(Enum):
     IDLE = "IDLE"
     WAITING_FOR_POSE = "WAITING_FOR_POSE"
     TURNING = "TURNING"
+    SETTLING = "SETTLING"
     DRIVING = "DRIVING"
     PAUSED_STALE_POSE = "PAUSED_STALE_POSE"
     PAUSED_HIGH_UNCERTAINTY = "PAUSED_HIGH_UNCERTAINTY"
@@ -73,13 +74,17 @@ class SquareNavigator:
         square_size_ft: float = 7.0,
         max_linear_v_mps: float = 0.20,
         min_linear_v_mps: float = 0.05,
-        max_angular_omega_radps: float = 0.80,
+        angular_velocity_ccw_radps: float = 1.77,  # Calibrated: 360 deg in 3.55s (motor [-0.43, 0.43])
+        angular_velocity_cw_radps: float = 1.75,   # Calibrated: 360 deg in 3.59s (motor [0.4, -0.4])
+        max_angular_omega_radps: float = 1.77,
         min_angular_omega_radps: float = 0.20,
         linear_kp: float = 0.60,
         angular_kp: float = 1.20,
-        waypoint_tolerance_m: float = 0.10,
+        waypoint_tolerance_m: float = 0.15,
         heading_tolerance_rad: float = 0.12,  # ~7 degrees
-        heading_drive_threshold_rad: float = 0.40,  # ~23 degrees
+        heading_drive_threshold_rad: float = 0.45,  # ~26 degrees
+        turn_step_deg: float = 30.0,  # Turn 30 deg three times at corners to allow camera catch-up
+        turn_settle_time_s: float = 1.0,  # Pause duration (s) between sub-turns for stable camera frames
         pose_timeout_s: float = 0.60,
         max_pos_uncertainty_m: float = 0.40,
         max_heading_uncertainty_rad: float = 0.40,
@@ -89,6 +94,8 @@ class SquareNavigator:
 
         self.max_linear_v = float(max_linear_v_mps)
         self.min_linear_v = float(min_linear_v_mps)
+        self.angular_velocity_ccw = float(angular_velocity_ccw_radps)
+        self.angular_velocity_cw = float(angular_velocity_cw_radps)
         self.max_angular_omega = float(max_angular_omega_radps)
         self.min_angular_omega = float(min_angular_omega_radps)
 
@@ -98,6 +105,10 @@ class SquareNavigator:
         self.waypoint_tolerance_m = float(waypoint_tolerance_m)
         self.heading_tolerance_rad = float(heading_tolerance_rad)
         self.heading_drive_threshold_rad = float(heading_drive_threshold_rad)
+
+        self.turn_step_deg = float(turn_step_deg)
+        self.turn_settle_time_s = float(turn_settle_time_s)
+        self.num_subturns = max(1, int(round(90.0 / self.turn_step_deg)))
 
         self.pose_timeout_s = float(pose_timeout_s)
         self.max_pos_uncertainty_m = float(max_pos_uncertainty_m)
@@ -113,9 +124,23 @@ class SquareNavigator:
             Waypoint(4, 0.0, 0.0, "WP4: Bottom-left (Return to origin)"),
         ]
 
+        # Nominal segment headings for legs 1..4
+        # Leg 1 (WP0 -> WP1): 0 rad (+X)
+        # Leg 2 (WP1 -> WP2): +pi/2 rad (+Y)
+        # Leg 3 (WP2 -> WP3): pi rad (-X)
+        # Leg 4 (WP3 -> WP4): -pi/2 rad (-Y)
+        self.nominal_leg_headings = [0.0, math.pi / 2.0, math.pi, -math.pi / 2.0]
+
         self.current_wp_idx = 1  # First destination is WP1
         self.state = NavigationState.IDLE
         self.is_active = False
+
+        # Corner sub-turn state tracking (30 deg x 3 at corners with settling)
+        self.in_corner_turn = False
+        self.corner_subturn_idx = 0
+        self.corner_incoming_heading = 0.0
+        self.corner_step_target_heading = 0.0
+        self.settle_start_time = 0.0
 
         # Anchor origin (latched upon start)
         self.origin_latched = False
@@ -155,6 +180,11 @@ class SquareNavigator:
         self.current_wp_idx = 1
         self.latest_slam_pose = None
         self.latest_pose_stamp_s = 0.0
+        self.in_corner_turn = False
+        self.corner_subturn_idx = 0
+        self.corner_incoming_heading = 0.0
+        self.corner_step_target_heading = 0.0
+        self.settle_start_time = 0.0
 
     def update_ekf_pose(
         self,
@@ -316,84 +346,145 @@ class SquareNavigator:
         rx, ry, rtheta = self.slam_to_nav_frame(*self.latest_slam_pose)
         target_wp = self.waypoints[self.current_wp_idx]
 
-        # 6. Compute distance and heading errors to current waypoint
+        # 6. Compute distance to current waypoint
         dx = target_wp.x_m - rx
         dy = target_wp.y_m - ry
         dist = math.hypot(dx, dy)
-        theta_goal = math.atan2(dy, dx)
-        alpha = wrap_angle(theta_goal - rtheta)
 
-        # 7. Check if current waypoint is reached
-        if dist <= self.waypoint_tolerance_m:
-            if self.current_wp_idx >= len(self.waypoints) - 1:
-                # Reached final waypoint (WP4: return to start)
-                self.state = NavigationState.COMPLETED
-                self.is_active = False
-                return NavigationOutput(
-                    linear_v_mps=0.0,
-                    angular_omega_radps=0.0,
-                    state=NavigationState.COMPLETED,
-                    status_message=f"Waypoint {self.current_wp_idx} reached! Square completed.",
-                    waypoint_index=self.current_wp_idx,
-                    target_x_m=target_wp.x_m,
-                    target_y_m=target_wp.y_m,
-                    robot_x_m=rx,
-                    robot_y_m=ry,
-                    robot_theta_rad=rtheta,
-                    distance_error_m=dist,
-                    heading_error_rad=alpha,
-                    sigma_pos_m=sigma_pos,
-                    sigma_theta_rad=sigma_theta,
+        # 7. Check if current waypoint is reached (if not already executing a corner turn)
+        if not self.in_corner_turn:
+            reached = False
+            if dist <= self.waypoint_tolerance_m:
+                reached = True
+            elif self.current_wp_idx == 1 and rx >= target_wp.x_m:
+                reached = True
+            elif self.current_wp_idx == 2 and ry >= target_wp.y_m:
+                reached = True
+            elif self.current_wp_idx == 3 and rx <= target_wp.x_m:
+                reached = True
+            elif self.current_wp_idx == 4 and ry <= target_wp.y_m:
+                reached = True
+
+            if reached:
+                if self.current_wp_idx >= len(self.waypoints) - 1:
+                    # Reached final waypoint (WP4: return to start)
+                    self.state = NavigationState.COMPLETED
+                    self.is_active = False
+                    return NavigationOutput(
+                        linear_v_mps=0.0,
+                        angular_omega_radps=0.0,
+                        state=NavigationState.COMPLETED,
+                        status_message=f"Waypoint {self.current_wp_idx} reached! Square completed.",
+                        waypoint_index=self.current_wp_idx,
+                        target_x_m=target_wp.x_m,
+                        target_y_m=target_wp.y_m,
+                        robot_x_m=rx,
+                        robot_y_m=ry,
+                        robot_theta_rad=rtheta,
+                        distance_error_m=dist,
+                        heading_error_rad=0.0,
+                        sigma_pos_m=sigma_pos,
+                        sigma_theta_rad=sigma_theta,
+                    )
+                else:
+                    # Corner 1, 2, or 3 reached: start step-wise corner turn (30 deg x 3)
+                    self.in_corner_turn = True
+                    self.corner_subturn_idx = 0
+                    self.corner_incoming_heading = self.nominal_leg_headings[self.current_wp_idx - 1]
+                    step_rad = math.radians(self.turn_step_deg)
+                    self.corner_step_target_heading = wrap_angle(self.corner_incoming_heading + step_rad)
+                    self.state = NavigationState.TURNING
+
+        # 8. Controller execution: Corner turn sequence vs Leg navigation
+        if self.in_corner_turn:
+            target_heading = self.corner_step_target_heading
+            alpha = wrap_angle(target_heading - rtheta)
+
+            if self.state in (NavigationState.TURNING, NavigationState.PAUSED_STALE_POSE, NavigationState.PAUSED_HIGH_UNCERTAINTY):
+                if abs(alpha) <= self.heading_tolerance_rad:
+                    # Reached the sub-turn angle! Begin camera settle period
+                    self.state = NavigationState.SETTLING
+                    self.settle_start_time = current_time_s
+                    cmd_v = 0.0
+                    cmd_omega = 0.0
+                    msg = (
+                        f"Corner WP{self.current_wp_idx} sub-turn {self.corner_subturn_idx + 1}/{self.num_subturns} "
+                        f"reached ({math.degrees(rtheta):.1f}°). Settling camera feed..."
+                    )
+                else:
+                    cmd_v = 0.0
+                    cmd_omega = self.angular_velocity_ccw if alpha > 0 else -self.angular_velocity_cw
+                    msg = (
+                        f"Corner WP{self.current_wp_idx} sub-turn {self.corner_subturn_idx + 1}/{self.num_subturns}: "
+                        f"turning to {math.degrees(target_heading):.1f}° (err: {math.degrees(alpha):.1f}°)"
+                    )
+
+            elif self.state == NavigationState.SETTLING:
+                cmd_v = 0.0
+                cmd_omega = 0.0
+                elapsed = current_time_s - self.settle_start_time
+                if elapsed >= self.turn_settle_time_s:
+                    # Settle time complete! Advance to next sub-turn or finish corner
+                    self.corner_subturn_idx += 1
+                    if self.corner_subturn_idx < self.num_subturns:
+                        step_rad = math.radians((self.corner_subturn_idx + 1) * self.turn_step_deg)
+                        self.corner_step_target_heading = wrap_angle(self.corner_incoming_heading + step_rad)
+                        self.state = NavigationState.TURNING
+                        msg = (
+                            f"Corner WP{self.current_wp_idx} starting sub-turn {self.corner_subturn_idx + 1}/{self.num_subturns} "
+                            f"(target: {math.degrees(self.corner_step_target_heading):.1f}°)"
+                        )
+                    else:
+                        # Completed all sub-turns (full 90 deg corner turn finished)
+                        self.in_corner_turn = False
+                        self.current_wp_idx += 1
+                        target_wp = self.waypoints[self.current_wp_idx]
+                        self.state = NavigationState.DRIVING
+                        msg = f"Corner WP{self.current_wp_idx - 1} 90° turn completed. Driving to WP{self.current_wp_idx}."
+                else:
+                    msg = (
+                        f"Corner WP{self.current_wp_idx} sub-turn {self.corner_subturn_idx + 1}/{self.num_subturns} "
+                        f"settling ({elapsed:.1f}s / {self.turn_settle_time_s:.1f}s)"
+                    )
+            else:
+                cmd_v = 0.0
+                cmd_omega = 0.0
+                msg = f"Controller in state {self.state.value}"
+
+        else:
+            # Driving towards target_wp or initial alignment
+            theta_goal = math.atan2(dy, dx)
+            alpha = wrap_angle(theta_goal - rtheta)
+
+            if self.state in (NavigationState.TURNING, NavigationState.PAUSED_STALE_POSE, NavigationState.PAUSED_HIGH_UNCERTAINTY):
+                if abs(alpha) <= self.heading_tolerance_rad:
+                    self.state = NavigationState.DRIVING
+                else:
+                    self.state = NavigationState.TURNING
+
+            # If driving but heading drifts significantly, turn in place to realign
+            if self.state == NavigationState.DRIVING and abs(alpha) > self.heading_drive_threshold_rad:
+                self.state = NavigationState.TURNING
+
+            if self.state == NavigationState.TURNING:
+                cmd_v = 0.0
+                cmd_omega = self.angular_velocity_ccw if alpha > 0 else -self.angular_velocity_cw
+                msg = f"Aligning heading towards WP{self.current_wp_idx} (heading err: {math.degrees(alpha):.1f}°)"
+
+            elif self.state == NavigationState.DRIVING:
+                raw_v = self.linear_kp * dist
+                clamped_v = max(self.min_linear_v, min(self.max_linear_v, raw_v))
+                heading_factor = max(0.0, math.cos(alpha))
+                cmd_v = clamped_v * heading_factor
+                cmd_omega = max(-self.max_angular_omega, min(self.max_angular_omega, self.angular_kp * alpha))
+                msg = (
+                    f"Driving to WP{self.current_wp_idx} "
+                    f"(dist: {dist:.2f}m, heading err: {math.degrees(alpha):.1f}°, v: {cmd_v:.2f}m/s)"
                 )
             else:
-                # Advance to next corner waypoint and pivot
-                self.current_wp_idx += 1
-                target_wp = self.waypoints[self.current_wp_idx]
-                dx = target_wp.x_m - rx
-                dy = target_wp.y_m - ry
-                dist = math.hypot(dx, dy)
-                theta_goal = math.atan2(dy, dx)
-                alpha = wrap_angle(theta_goal - rtheta)
-                self.state = NavigationState.TURNING
-
-        # 8. Controller state machine: TURNING vs DRIVING
-        if self.state in (NavigationState.TURNING, NavigationState.PAUSED_STALE_POSE, NavigationState.PAUSED_HIGH_UNCERTAINTY):
-            # Check if aligned with target heading
-            if abs(alpha) <= self.heading_tolerance_rad:
-                self.state = NavigationState.DRIVING
-            else:
-                self.state = NavigationState.TURNING
-
-        # If driving but heading error becomes excessive, revert to turn-in-place
-        if self.state == NavigationState.DRIVING and abs(alpha) > self.heading_drive_threshold_rad:
-            self.state = NavigationState.TURNING
-
-        # 9. Compute motor commands based on active state
-        if self.state == NavigationState.TURNING:
-            cmd_v = 0.0
-            # Proportional rotation with deadzone clamping and direction
-            raw_omega = self.angular_kp * abs(alpha)
-            clamped_omega = max(self.min_angular_omega, min(self.max_angular_omega, raw_omega))
-            cmd_omega = math.copysign(clamped_omega, alpha)
-            msg = f"Turning in place towards WP{self.current_wp_idx} (heading err: {math.degrees(alpha):.1f}°)"
-
-        elif self.state == NavigationState.DRIVING:
-            # Proportional linear speed scaled by cosine of heading error
-            raw_v = self.linear_kp * dist
-            clamped_v = max(self.min_linear_v, min(self.max_linear_v, raw_v))
-            heading_factor = max(0.0, math.cos(alpha))
-            cmd_v = clamped_v * heading_factor
-
-            # Proportional angular steering correction
-            cmd_omega = max(-self.max_angular_omega, min(self.max_angular_omega, self.angular_kp * alpha))
-            msg = (
-                f"Driving to WP{self.current_wp_idx} "
-                f"(dist: {dist:.2f}m, heading err: {math.degrees(alpha):.1f}°, v: {cmd_v:.2f}m/s)"
-            )
-        else:
-            cmd_v = 0.0
-            cmd_omega = 0.0
-            msg = f"Controller in state {self.state.value}"
+                cmd_v = 0.0
+                cmd_omega = 0.0
+                msg = f"Controller in state {self.state.value}"
 
         return NavigationOutput(
             linear_v_mps=cmd_v,

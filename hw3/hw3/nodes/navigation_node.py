@@ -28,13 +28,17 @@ class SquareNavigationNode(Node):
         self.declare_parameter('square_size_ft', 7.0)
         self.declare_parameter('max_linear_velocity', 0.20)
         self.declare_parameter('min_linear_velocity', 0.05)
-        self.declare_parameter('max_angular_velocity', 0.80)
+        self.declare_parameter('angular_velocity_ccw', 1.77)
+        self.declare_parameter('angular_velocity_cw', 1.75)
+        self.declare_parameter('max_angular_velocity', 1.77)
         self.declare_parameter('min_angular_velocity', 0.20)
         self.declare_parameter('linear_kp', 0.60)
         self.declare_parameter('angular_kp', 1.20)
-        self.declare_parameter('waypoint_tolerance_m', 0.10)
+        self.declare_parameter('waypoint_tolerance_m', 0.15)
         self.declare_parameter('heading_tolerance_rad', 0.12)
-        self.declare_parameter('heading_drive_threshold_rad', 0.40)
+        self.declare_parameter('heading_drive_threshold_rad', 0.45)
+        self.declare_parameter('turn_step_deg', 30.0)
+        self.declare_parameter('turn_settle_time_s', 1.0)
         self.declare_parameter('pose_timeout_s', 0.60)
         self.declare_parameter('max_position_uncertainty_m', 0.40)
         self.declare_parameter('max_heading_uncertainty_rad', 0.40)
@@ -48,6 +52,8 @@ class SquareNavigationNode(Node):
             square_size_ft=self.get_parameter('square_size_ft').value,
             max_linear_v_mps=self.get_parameter('max_linear_velocity').value,
             min_linear_v_mps=self.get_parameter('min_linear_velocity').value,
+            angular_velocity_ccw_radps=self.get_parameter('angular_velocity_ccw').value,
+            angular_velocity_cw_radps=self.get_parameter('angular_velocity_cw').value,
             max_angular_omega_radps=self.get_parameter('max_angular_velocity').value,
             min_angular_omega_radps=self.get_parameter('min_angular_velocity').value,
             linear_kp=self.get_parameter('linear_kp').value,
@@ -55,6 +61,8 @@ class SquareNavigationNode(Node):
             waypoint_tolerance_m=self.get_parameter('waypoint_tolerance_m').value,
             heading_tolerance_rad=self.get_parameter('heading_tolerance_rad').value,
             heading_drive_threshold_rad=self.get_parameter('heading_drive_threshold_rad').value,
+            turn_step_deg=self.get_parameter('turn_step_deg').value,
+            turn_settle_time_s=self.get_parameter('turn_settle_time_s').value,
             pose_timeout_s=self.get_parameter('pose_timeout_s').value,
             max_pos_uncertainty_m=self.get_parameter('max_position_uncertainty_m').value,
             max_heading_uncertainty_rad=self.get_parameter('max_heading_uncertainty_rad').value,
@@ -255,9 +263,9 @@ class SquareNavigationNode(Node):
                 pass
 
         # 5. Log periodically to terminal if active
-        if output.state in (NavigationState.DRIVING, NavigationState.TURNING):
+        if output.state in (NavigationState.DRIVING, NavigationState.TURNING, NavigationState.SETTLING):
             self.get_logger().info(
-                f"[WP{output.waypoint_index}] dist={output.distance_error_m:.2f}m, "
+                f"[{output.state.value} WP{output.waypoint_index}] dist={output.distance_error_m:.2f}m, "
                 f"head_err={math.degrees(output.heading_error_rad):.1f}°, "
                 f"cmd=(v={output.linear_v_mps:.2f}m/s, w={output.angular_omega_radps:.2f}rad/s)",
                 throttle_duration_sec=1.0
