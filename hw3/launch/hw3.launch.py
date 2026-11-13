@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -15,6 +16,12 @@ def generate_launch_description():
             'hw3_params.yaml',
         ]),
         description='Path to HW3 parameters YAML file'
+    )
+
+    launch_motors_arg = DeclareLaunchArgument(
+        'launch_motors',
+        default_value='false',
+        description='Whether to start the hardware motor_control and velocity_mapping nodes'
     )
 
     # 1. Visual Odometry Node
@@ -37,8 +44,30 @@ def generate_launch_description():
         parameters=[LaunchConfiguration('params_file')],
     )
 
+    # Optional Hardware Nodes (when driving robot motors)
+    motor_node = Node(
+        condition=IfCondition(LaunchConfiguration('launch_motors')),
+        package='robot_testing',
+        executable='motor_control',
+        name='motor_control',
+        output='screen',
+        emulate_tty=True,
+    )
+
+    velocity_node = Node(
+        condition=IfCondition(LaunchConfiguration('launch_motors')),
+        package='robot_testing',
+        executable='velocity_mapping',
+        name='velocity_mapping',
+        output='screen',
+        emulate_tty=True,
+    )
+
     return LaunchDescription([
         params_file_arg,
+        launch_motors_arg,
         vo_node,
         ekf_node,
+        motor_node,
+        velocity_node,
     ])

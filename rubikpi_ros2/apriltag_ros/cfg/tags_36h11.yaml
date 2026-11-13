@@ -18,7 +18,7 @@
         pose_estimation_method: "pnp"   # method for estimating the tag pose
 
         # optional list of tags
-        tag:
-            ids: [0, 1, 2, 3, 4, 5, 6, 7]            # tag ID
-            frames: [tag_0, tag_1, tag_2, tag_3, tag_4, tag_5, tag_6, tag_7]  # optional frame name
-            sizes: [0.172, 0.172, 0.172, 0.172, 0.172, 0.172, 0.172, 0.172]   # optional tag-specific edge size
+        # tag:
+        #     ids: [0, 1, 2, 3, 4, 5, 6, 7]            # tag ID
+        #     frames: [tag_0, tag_1, tag_2, tag_3, tag_4, tag_5, tag_6, tag_7]  # optional frame name
+        #     sizes: [0.172, 0.172, 0.172, 0.172, 0.172, 0.172, 0.172, 0.172]   # optional tag-specific edge size

@@ -183,14 +183,29 @@ From the repository root in separate terminals:
 
 ### 3.4 Launch HW3 Nodes
 
-**Option A: Normal Operation (VO + cmd_vel fallback)**:
+**Option A: State Estimation Only (Default HW3 Steps 2 & 3)**:
 ```bash
 ros2 launch hw3 hw3.launch.py
 ```
+*(Estimates VO and SLAM. Robot does not move on its own since this is an estimator, not a controller).*
 
 **Option B: Manual Pick-and-Walk Testing (Pure VO, no motor control)**:
 ```bash
 ros2 launch hw3 hw3_manual.launch.py
+```
+
+**Option C: HW3 SLAM + Hardware Motors Enabled**:
+If you want to drive the robot with `/cmd_vel` or teleop while running SLAM:
+```bash
+ros2 launch hw3 hw3.launch.py launch_motors:=true
+```
+In another terminal, send velocity commands:
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+Or launch SLAM + motors + keyboard teleop together:
+```bash
+ros2 launch hw3 hw3_teleop.launch.py
 ```
 
 ### 3.5 Record Live AprilTag Observations
