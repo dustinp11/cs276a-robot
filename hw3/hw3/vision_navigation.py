@@ -16,10 +16,12 @@ class NavigationPolicy:
     vision_timeout_s: float = 1.0
     corner_timeout_s: float = 18.0
     corner_turn_duration_s: float = 0.95
-    corner_min_correction_rad: float = math.pi / 18
+    corner_min_correction_rad: float = math.pi / 36
     corner_correction_limit_rad: float = math.pi / 12
-    corner_max_corrections: int = 2
-    corner_ekf_weight: float = 0.0
+    corner_max_corrections: int = 3
+    corner_ekf_weight: float = 0.5
+    corner_landmark_sigma_m: float = 0.03
+    corner_heading_sigma_rad: float = math.pi / 18
     drive_budget_factor: float = 1.25
     midpoint_pause_s: float = 3.0
     midpoint_max_correction_m: float = 0.10
@@ -61,6 +63,7 @@ class VisualFeedback:
         self.progress_stamp, self.progress_prediction = -math.inf, 0.0
         self.heading = None
         self.tag_yaws, self.yaw_stamp = {}, -math.inf
+        self.known_ids, self.landmark_sigmas, self.ekf_heading = set(), {}, None
 
     def begin_leg(self, heading):
         """Reset relative tag travel anchors for a fixed SLAM-frame heading."""
@@ -69,7 +72,8 @@ class VisualFeedback:
         self.progress, self.progress_stamp = None, -math.inf
         self.progress_prediction = 0.0
 
-    def update(self, stamp, tags, known_ids, clearance, pose, predicted_progress, tag_yaws=None):
+    def update(self, stamp, tags, known_ids, clearance, pose, predicted_progress, tag_yaws=None,
+               landmark_sigmas=None, ekf_heading=None):
         """Cache one distinct accepted frame and estimate travel from stationary tags.
 
         Args:
@@ -80,6 +84,8 @@ class VisualFeedback:
             pose: Current SLAM-frame (x_m, y_m, yaw_rad) estimate.
             predicted_progress: EKF forward displacement since this leg began, in meters.
             tag_yaws: Optional [tag_id, face_normal_yaw_rad] pairs in the robot base frame.
+            landmark_sigmas: Pre-update [tag_id, major-axis standard deviation in meters].
+            ekf_heading: Post-image [SLAM yaw, yaw standard deviation], in radians.
 
         Returns:
             None. Updates optional geometry, orientation snapshots, freshness, and travel.
@@ -87,6 +93,9 @@ class VisualFeedback:
         if stamp <= self.stamp:
             return
         self.stamp = stamp
+        self.known_ids = set(known_ids)
+        self.landmark_sigmas = dict(landmark_sigmas or [])
+        self.ekf_heading = ekf_heading
         self.tag_yaws = dict(tag_yaws or [])
         self.yaw_stamp = stamp if self.tag_yaws else -math.inf
         if tags:
@@ -95,6 +104,29 @@ class VisualFeedback:
             self.valid_stamp = stamp
         if self.heading is not None:
             self._update_progress(tags, known_ids, pose[2], predicted_progress)
+
+    def confident_ekf_yaw(self, now, stopped_at):
+        """Select an image-associated heading only when every updated known tag is confident.
+
+        Args:
+            now: Current ROS time in seconds.
+            stopped_at: Start of the current stopped acquisition interval, in seconds.
+
+        Returns:
+            SLAM yaw in radians, or None for stale, missing, or uncertain feedback.
+            Landmark confidence uses pre-update covariance, including its cross term.
+        """
+        if self.stamp < stopped_at or not 0 <= now - self.stamp <= self.policy.vision_timeout_s:
+            return None
+        if not self.known_ids or self.ekf_heading is None:
+            return None
+        sigmas = [self.landmark_sigmas.get(tag, math.inf) for tag in self.known_ids]
+        if not all(math.isfinite(v) and 0 <= v <= self.policy.corner_landmark_sigma_m for v in sigmas):
+            return None
+        yaw, sigma = self.ekf_heading
+        if math.isfinite(yaw) and math.isfinite(sigma) and 0 <= sigma <= self.policy.corner_heading_sigma_rad:
+            return yaw
+        return None
 
     def _update_progress(self, tags, known_ids, yaw, predicted_progress):
         """Project same-tag displacement along the fixed leg heading.

@@ -22,8 +22,9 @@ Eight repetitions: drive 75 cm → stop → turn left 45° → stop.
 The final turn restores the nominal starting orientation. The measured left
 pivot uses `[-0.35, +0.35]` for 0.5 seconds (nominal pi/2 rad/s). The profile is
 in `launch/hw3_navigation.launch.py`; the octagon launch reuses that stack.
-EKF turn corrections are disabled. Same-tag relative corrections remain optional
-and now target 45°. Missing tags never block progress. Straight travel retains
+EKF turn corrections require confident post-stop mapped-tag observations (see
+the covariance gate below). Same-tag relative corrections remain optional
+and target 45°. Missing tags never block progress. Straight travel retains
 the midpoint pause at 37.5 cm and the bounded EKF distance adjustment; therefore
 75 cm is the nominal commanded side, not a guaranteed physical distance.
 All pauses remain 3 seconds. Straight inputs remain `[+0.185, +0.15]` at the
@@ -163,19 +164,32 @@ The square now uses the following phases on each of four sides:
   camera optical coordinates into robot-base coordinates. This comparison uses
   no estimated global tag position. Reject likely PnP face flips and inconsistent
   matched-tag changes. Only images captured after stopping can correct the turn.
-- If no usable same-tag comparison exists, continue from calibrated turn prediction
-  without extra corrective rotation. EKF turn fallback is disabled by default
-  (`navigation.corner_ekf_weight: 0.0`) so global heading bias cannot request an
-  additional turn. Same-tag relative corrections keep their full weight. EKF
-  estimation, logging, and bounded midpoint distance adjustments remain active.
+- If no usable same-tag comparison exists, EKF turn feedback is permitted only
+  from a fresh image captured after the current stop. Every accepted known tag
+  updated by that image must have a pre-update largest positional standard
+  deviation of at most `navigation.corner_landmark_sigma_m` (default 0.03 m).
+  This uses the largest eigenvalue of the full 2x2 covariance, including cov_xy;
+  it is independent of map-axis orientation. One confident tag is sufficient;
+  there are no hard-coded tag IDs. Missing covariance or mixed-confidence updates
+  cause the EKF fallback to be skipped.
+- The image-associated EKF yaw must also have standard deviation at most
+  `navigation.corner_heading_sigma_rad` (default 10 degrees). Apply half the
+  resulting absolute heading error (`navigation.corner_ekf_weight: 0.5`), then
+  enforce the pulse and total-angle limits. Set weight to zero to disable this
+  fallback. A new post-stop image is required after each pulse; timer-published
+  predictions alone cannot authorize another correction. Source tag IDs are
+  recorded in `corner_feedback_source`. Covariance is model confidence, not
+  independent proof of map or heading accuracy.
 - Optional corrections use the measured fixed CW/CCW inputs. They never reduce
   motor magnitude to request a small turn. Residual errors below
-  `navigation.corner_min_correction_rad` (default 10 degrees) are accepted without
-  motion because short pulses may fail to overcome the deadzone. A remaining
+  `navigation.corner_min_correction_rad` (default 5 degrees) are accepted without
+  motion because smaller pulses are not requested. Five-degree pulses are a physical
+  trial; the existing 20 Hz controller quantizes duration to about 4.5 degrees
+  at the nominal 90 deg/s rate, and motor deadzones may still prevent movement. A remaining
   correction budget below that minimum is skipped rather than rounded upward.
   Corrections total at most
   `navigation.corner_correction_limit_rad` (default 15 nominal degrees), in at most
-  `navigation.corner_max_corrections` pulses (default 2). Pause after each pulse
+  `navigation.corner_max_corrections` pulses (default 3). Pause after each pulse
   before considering another observation. Timer quantization may add up to one
   control interval of motion. Noisy map estimates cannot authorize repeated spins.
 - Side targets remain anchored to initial heading + 90°, 180°, 270°, and 360°.

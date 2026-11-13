@@ -462,6 +462,11 @@ class EkfSlamNode(Node):
                 self.ekf.predict_untracked_drift(min(2.0, max(0.0, stamp_s - self.last_vo_time)))
             self.last_vo_time = stamp_s
 
+    def _landmark_sigma(self, tag_id):
+        """Return the largest positional standard deviation in meters, independent of axes."""
+        landmark = self.ekf.get_landmark_pose(tag_id)
+        return math.sqrt(max(0.0, float(np.linalg.eigvalsh(landmark.covariance).max())))
+
     def _update_observed_landmarks(self, detections):
         """Distinguish map initialization from accepted reobservations of known tags.
 
@@ -470,9 +475,11 @@ class EkfSlamNode(Node):
 
         Returns:
             IDs successfully corrected that existed before this image's updates.
+            Caches their pre-image major-axis standard deviations in meters.
         """
         known_before = set(self.ekf.tag_id_to_idx)
         accepted = []
+        self.frame_landmark_sigmas = {tag: self._landmark_sigma(tag) for tag in known_before}
         for det in detections:
             x, y, _ = self.extrinsics.landmark_in_base_2d(det['t_cam_tag'])
             if self.ekf.update_landmark(det['id'], x, y) and det['id'] in known_before:
@@ -500,7 +507,12 @@ class EkfSlamNode(Node):
             clearance = forward_wall_clearance(base_tag)
             if clearance is not None:
                 clearances.append(clearance)
-        payload = {'stamp_s': stamp_s, 'tags': tags, 'known_ids': known_ids, 'tag_yaws': tag_yaws,
+        pose = self.ekf.get_robot_pose()
+        sigmas = [[tag, self.frame_landmark_sigmas[tag]] for tag in known_ids
+                  if tag in self.frame_landmark_sigmas]
+        payload = {'landmark_sigmas': sigmas,
+                   'ekf_heading': [pose.theta, math.sqrt(max(0.0, float(pose.covariance[2, 2])))],
+                   'stamp_s': stamp_s, 'tags': tags, 'known_ids': known_ids, 'tag_yaws': tag_yaws,
                    'forward_clearance_m': min(clearances) if clearances else None}
         self.vision_pub.publish(String(data=json.dumps(payload, allow_nan=False)))
 

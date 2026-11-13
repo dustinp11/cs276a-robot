@@ -283,15 +283,21 @@ class SquareNavigationNode(Node):
             tags = [[int(tag), float(x), float(y)] for tag, x, y in data['tags']]
             known_ids = [int(tag) for tag in data['known_ids']]
             tag_yaws = [[int(tag), float(yaw)] for tag, yaw in data.get('tag_yaws', [])]
+            landmark_sigmas = [[int(tag), float(sigma)] for tag, sigma in data.get('landmark_sigmas', [])]
+            ekf_heading = data.get('ekf_heading')
+            ekf_heading = [float(v) for v in ekf_heading] if ekf_heading is not None else None
+            if ekf_heading is not None and len(ekf_heading) != 2:
+                return
             clearance = data['forward_clearance_m']
-            values = [stamp] + [float(v) for tag in tags + tag_yaws for v in tag]
+            values = [stamp] + [float(v) for tag in tags + tag_yaws + landmark_sigmas for v in tag] + (ekf_heading or [])
             if clearance is not None:
                 values.append(float(clearance))
             if not all(math.isfinite(v) for v in values):
                 return
             if any(tag < 0 for tag in known_ids) or any(tag[0] < 0 for tag in tags):
                 return
-            self.navigator.update_vision(stamp, tags, known_ids, clearance, tag_yaws)
+            self.navigator.update_vision(stamp, tags, known_ids, clearance, tag_yaws,
+                                         landmark_sigmas, ekf_heading)
         except (ValueError, TypeError, KeyError, OverflowError):
             self.get_logger().warn('Ignoring malformed vision feedback')
 

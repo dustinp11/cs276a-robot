@@ -198,10 +198,11 @@ class SquareNavigator:
         c, s = math.cos(self.theta0_slam), math.sin(self.theta0_slam)
         return c * dx + s * dy, -s * dx + c * dy, wrap_angle(theta_slam - self.theta0_slam)
 
-    def update_vision(self, stamp, tags, known_ids, clearance, tag_yaws=None):
+    def update_vision(self, stamp, tags, known_ids, clearance, tag_yaws=None,
+                      landmark_sigmas=None, ekf_heading=None):
         """Pass timestamped base-frame observations to the independent vision tracker."""
         self.vision.update(stamp, tags, known_ids, clearance,
-                           self._best_pose(), self._ekf_progress(), tag_yaws)
+                           self._best_pose(), self._ekf_progress(), tag_yaws, landmark_sigmas, ekf_heading)
 
     def _heading(self):
         """Return the absolute SLAM heading anchored to the initial robot direction."""
@@ -427,8 +428,9 @@ class SquareNavigator:
 
         Returns:
             Signed residual in radians, or None without useful vision. A same-tag
-            comparison corrects relative rotation to the configured exterior angle; EKF fallback
-            corrects the absolute side heading scaled by corner_ekf_weight.
+            comparison corrects relative rotation to the configured exterior angle. EKF
+            fallback uses an image-associated heading only with confident mapped tags,
+            scaled by corner_ekf_weight.
             Missing or stale observations never authorize extra corrective rotation.
         """
         if self.vision.yaw_stamp >= self.phase_started and now - self.vision.yaw_stamp <= self.policy.vision_timeout_s:
@@ -438,12 +440,11 @@ class SquareNavigator:
                 self.navigation_yaw = wrap_angle(self.corner_start_heading + measured)
                 self.heading_time, self.corner_source = now, 'same-tag face orientation'
                 return wrap_angle(self.corner_angle_rad - measured)
-        if (self.policy.corner_ekf_weight > 0
-                and self.vision.valid_stamp >= self.phase_started and self.vision.fresh(now)
-                and -0.05 <= now - self.latest_pose_stamp_s <= self.pose_timeout_s
-                and self._uncertainty_ok()):
-            self.navigation_yaw = self.latest_slam_pose[2]
-            self.heading_time, self.corner_source = now, 'EKF with post-turn tag updates'
+        yaw = self.vision.confident_ekf_yaw(now, self.phase_started)
+        if self.policy.corner_ekf_weight > 0 and yaw is not None:
+            self.navigation_yaw = yaw
+            self.heading_time = now
+            self.corner_source = f'EKF with confident post-turn landmarks {sorted(self.vision.known_ids)}'
             return self.policy.corner_ekf_weight * self._heading_error()
         self.corner_source = 'calibrated turn prediction; no post-turn visual correction'
         return None
@@ -464,7 +465,7 @@ class SquareNavigator:
         error = self._corner_error(now)
         self.corner_residual = error
         remaining = self.policy.corner_correction_limit_rad - self.correction_used
-        minimum = max(self.policy.corner_min_correction_rad, self.heading_tolerance_rad)
+        minimum = self.policy.corner_min_correction_rad
         angle = min(abs(error), self.turn_pulse_rad, remaining) if error is not None else 0.0
         if angle + 1e-9 < minimum or self.correction_count >= self.policy.corner_max_corrections:
             return self._finish_corner(now)

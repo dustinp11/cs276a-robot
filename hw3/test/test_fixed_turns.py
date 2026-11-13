@@ -468,12 +468,14 @@ class TestFixedTurns(unittest.TestCase):
         Returns:
             None. Checks half-weight, disabled feedback, and the minimum useful pulse.
         """
-        for weight, error, expected in [(0.5, 20, 10), (0.5, 18, 0), (0, 30, 0), (1, 20, 15)]:
+        for weight, error, expected in [(0.5, 20, 10), (0.5, 10, 5), (0.5, 8, 0), (0, 30, 0), (1, 20, 15)]:
             nav = self.prepared(NavigationState.STOPPING)
             nav.policy = NavigationPolicy(corner_ekf_weight=weight)
             nav._begin_corner(2)
             nav._transition(NavigationState.CORNER_PAUSE, 3)
-            nav.update_vision(3.2, [[7, 2, 1]], [7], None)
+            nav.update_vision(3.2, [[7, 2, 1]], [7], None,
+                              landmark_sigmas=[[7, 0.02]],
+                              ekf_heading=[math.pi / 2 - math.radians(error), 0.02])
             nav.update_ekf_pose(0, 0, math.pi / 2 - math.radians(error), 0.01, 0.01, 3.2)
             nav.step(3.2)
             if weight:
@@ -483,17 +485,70 @@ class TestFixedTurns(unittest.TestCase):
             self.assertAlmostEqual(nav.correction_goal, math.radians(expected))
             self.assertEqual(nav.state == NavigationState.CORRECTING, expected > 0)
 
-    def test_default_policy_disables_ekf_turn_fallback(self):
+    def test_default_policy_rejects_ekf_without_landmark_confidence(self):
         nav = self.prepared(NavigationState.STOPPING)
         nav._begin_corner(2)
         nav._transition(NavigationState.CORNER_PAUSE, 3)
         nav.update_vision(3.2, [[7, 2, 1]], [7], None)
         nav.update_ekf_pose(0, 0, 0, 0.01, 0.01, 3.2)
         cmd = nav.step(3.2)
-        self.assertEqual(nav.policy.corner_ekf_weight, 0)
+        self.assertEqual(nav.policy.corner_ekf_weight, 0.5)
         self.assertEqual(cmd.state, NavigationState.DRIVING)
         self.assertEqual(nav.correction_count, 0)
         self.assertIsNone(nav.corner_residual)
+
+    def test_confidence_gate_requires_fresh_low_covariance_for_all_updated_tags(self):
+        """Reject mixed-confidence frames, missing metadata, and uncertain heading snapshots.
+
+        Args:
+            None.
+
+        Returns:
+            None. One confident mapped tag suffices; no tag is required to continue.
+        """
+        cases = [([7], [[7, 0.02]], [0.3, 0.02], 3.2, 0.3),
+                 ([7], [[7, 0.04]], [0.3, 0.02], 3.2, None),
+                 ([7, 4], [[7, 0.02], [4, 0.2]], [0.3, 0.02], 3.2, None),
+                 ([7], [], [0.3, 0.02], 3.2, None),
+                 ([7], [[7, 0.02]], [0.3, 0.3], 3.2, None),
+                 ([7], [[7, 0.02]], [0.3, 0.02], 2.9, None),
+                 ([7], [[7, 0.02]], [0.3, 0.02], 1.0, None)]
+        for ids, sigmas, heading, stamp, expected in cases:
+            feedback = VisualFeedback(NavigationPolicy())
+            feedback.update(stamp, [[7, 2, 1]], ids, None, (0, 0, 0), 0,
+                            landmark_sigmas=sigmas, ekf_heading=heading)
+            self.assertEqual(feedback.confident_ekf_yaw(3.2, 3.0), expected)
+
+    def test_five_degree_same_tag_correction_in_both_directions(self):
+        for measured, direction in ((85, 1), (95, -1)):
+            nav = self.corner_with_measured_turn(measured)
+            nav.step(3.2)
+            self.assertEqual(nav.state, NavigationState.CORRECTING)
+            self.assertAlmostEqual(nav.correction_goal, math.radians(5))
+            self.assertGreater(nav.correction_omega * direction, 0)
+
+    def test_corner_never_selects_more_than_three_corrections(self):
+        """Persistent fresh error cannot authorize a fourth corrective pulse.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks the count limit independently of the total angular budget.
+        """
+        nav = self.corner_with_measured_turn(85)
+        nav.policy = NavigationPolicy(corner_correction_limit_rad=math.pi / 6)
+        nav.turn_pulse_rad = math.radians(5)
+        for attempt in range(4):
+            now = 3.2 + attempt
+            nav._transition(NavigationState.CORNER_PAUSE, now - 0.2)
+            nav.update_vision(now, [[7, 2, 1]], [], None, [[7, 0.4 - math.radians(85)]])
+            nav._corner_pause(now)
+            self.assertEqual(nav.correction_count, min(attempt + 1, 3))
+            if attempt < 3:
+                self.assertEqual(nav.state, NavigationState.CORRECTING)
+                nav.correction_used = nav.correction_goal
+        self.assertEqual(nav.state, NavigationState.DRIVING)
 
     def test_ekf_turn_weight_rejects_invalid_values(self):
         for weight in (-0.1, 1.1, math.nan, math.inf):
@@ -544,8 +599,8 @@ class TestFixedTurns(unittest.TestCase):
         nav.update_vision(3.2, [[7, 2, 1]], [], None, [[7, 0.4 - math.radians(angle_degrees)]])
         return nav
 
-    def test_sub_ten_degree_corrections_are_skipped_in_both_directions(self):
-        for observed in (81, 85, 89, 91, 95, 99):
+    def test_sub_five_degree_corrections_are_skipped_in_both_directions(self):
+        for observed in (86, 89, 91, 94):
             nav = self.corner_with_measured_turn(observed)
             cmd = nav.step(3.2)
             self.assertEqual(cmd.state, NavigationState.DRIVING)
@@ -572,9 +627,9 @@ class TestFixedTurns(unittest.TestCase):
         self.assertAlmostEqual(abs(command.angular_radps), math.pi / 2)
         self.assertAlmostEqual(nav.correction_goal, math.radians(10))
 
-    def test_remaining_correction_budget_below_ten_degrees_is_skipped(self):
+    def test_remaining_correction_budget_below_five_degrees_is_skipped(self):
         nav = self.corner_with_measured_turn(70)
-        nav.correction_used = math.radians(6)
+        nav.correction_used = math.radians(11)
         cmd = nav.step(3.2)
         self.assertEqual(cmd.state, NavigationState.DRIVING)
         self.assertEqual(cmd.angular_omega_radps, 0)
@@ -745,6 +800,36 @@ class TestVisionGeometry(unittest.TestCase):
         self.assertEqual(feedback.valid_stamp, 1)
         self.assertFalse(feedback.fresh(3))
 
+    def test_landmark_confidence_includes_covariance_cross_term(self):
+        method = load_method('hw3/hw3/nodes/ekf_slam_node.py', 'EkfSlamNode',
+                             '_landmark_sigma', {'math': math, 'np': np})
+        covariance = np.array([[0.000625, 0.0005], [0.0005, 0.000625]])
+        node = Record(ekf=Record(get_landmark_pose=lambda tag: Record(covariance=covariance)))
+        self.assertGreater(method(node, 7), 0.03)
+        self.assertAlmostEqual(method(node, 7), math.sqrt(0.001125))
+
+    def test_feedback_confidence_is_captured_before_any_frame_update(self):
+        """A frame cannot make its own initially uncertain landmarks qualify for navigation.
+
+        Args:
+            None.
+
+        Returns:
+            None. Verifies covariance snapshots precede every update in the frame.
+        """
+        method = load_method('hw3/hw3/nodes/ekf_slam_node.py', 'EkfSlamNode',
+                             '_update_observed_landmarks')
+        sigmas = {0: 0.1, 7: 0.2}
+        def update(tag, x, y):
+            sigmas.update({0: 0.01, 7: 0.01})
+            return True
+        node = Record(ekf=Record(tag_id_to_idx={0: 0, 7: 1}, update_landmark=update),
+                      _landmark_sigma=lambda tag: sigmas[tag],
+                      extrinsics=Record(landmark_in_base_2d=lambda transform: (1, 0, 0)))
+        accepted = method(node, [{'id': 0, 't_cam_tag': None}, {'id': 7, 't_cam_tag': None}])
+        self.assertEqual(accepted, [0, 7])
+        self.assertEqual(node.frame_landmark_sigmas, {0: 0.1, 7: 0.2})
+
     def test_feedback_publisher_converts_optical_geometry_to_base(self):
         """Exercise the real ROS adapter with calibrated camera extrinsics.
 
@@ -757,17 +842,21 @@ class TestVisionGeometry(unittest.TestCase):
         from hw3.coordinates import CameraExtrinsics
         published = []
         method = load_method('hw3/hw3/nodes/ekf_slam_node.py', 'EkfSlamNode',
-                             '_publish_vision_feedback', {'json': json, 'String': Record,
+                             '_publish_vision_feedback', {'json': json, 'String': Record, 'math': math,
                              'forward_wall_clearance': forward_wall_clearance, 'tag_normal_yaw': tag_normal_yaw})
         transform = np.eye(4)
         transform[2, 3] = 0.4
-        node = Record(extrinsics=CameraExtrinsics(), vision_pub=Record(publish=published.append))
+        node = Record(extrinsics=CameraExtrinsics(), vision_pub=Record(publish=published.append),
+                      frame_landmark_sigmas={3: 0.02},
+                      ekf=Record(get_robot_pose=lambda: Record(theta=0.4, covariance=np.eye(3) * 0.0004)))
         method(node, 12.5, [{'id': 3, 't_cam_tag': transform}], [3])
         payload = json.loads(published[0].data)
         self.assertEqual(payload['tags'], [[3, 0.4, 0.0]])
         self.assertEqual(payload['stamp_s'], 12.5)
         self.assertAlmostEqual(payload['forward_clearance_m'], 0.4)
         self.assertEqual(payload['tag_yaws'], [[3, 0.0]])
+        self.assertEqual(payload['landmark_sigmas'], [[3, 0.02]])
+        self.assertEqual(payload['ekf_heading'], [0.4, 0.02])
 
     def test_tf_lookup_never_substitutes_latest_for_missing_image_transform(self):
         """Missing exact-time transforms must not become fresh visual measurements.
