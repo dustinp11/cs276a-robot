@@ -5,6 +5,7 @@ from enum import Enum
 import math
 
 from .coordinates import wrap_angle
+from .late_navigation import LateNavigation
 from .turn_calibration import ForwardCalibration
 from .vision_navigation import NavigationPolicy, VisualFeedback, relative_tag_turn
 
@@ -22,6 +23,12 @@ class NavigationState(Enum):
     CORRECTING = 'CORRECTING'
     STOPPED = 'STOPPED'
     COMPLETED = 'COMPLETED'
+    RELOCALIZING_TURN = 'RELOCALIZING_TURN'
+    RELOCALIZING_PAUSE = 'RELOCALIZING_PAUSE'
+    REORIENTING = 'REORIENTING'
+    REORIENT_PAUSE = 'REORIENT_PAUSE'
+    RETURN_DRIVING = 'RETURN_DRIVING'
+    RETURN_PAUSE = 'RETURN_PAUSE'
 
 
 @dataclass(frozen=True)
@@ -147,8 +154,10 @@ class SquareNavigator:
         self.phase_started = None
         self.navigation_yaw, self.heading_time = 0.0, -math.inf
         self.navigation_x = self.navigation_y = 0.0
+        self.course_heading = None
         self._reset_midpoint()
         self.vision = VisualFeedback(self.policy)
+        self.late = LateNavigation(self, NavigationState)
 
     def start(self):
         """Start only an idle mission; a stopped run requires reset/relaunch."""
@@ -201,14 +210,15 @@ class SquareNavigator:
         return c * dx + s * dy, -s * dx + c * dy, wrap_angle(theta_slam - self.theta0_slam)
 
     def update_vision(self, stamp, tags, known_ids, clearance, tag_yaws=None,
-                      landmark_sigmas=None, ekf_heading=None):
+                      landmark_sigmas=None, ekf_heading=None, mapped_landmarks=None):
         """Pass timestamped base-frame observations to the independent vision tracker."""
         self.vision.update(stamp, tags, known_ids, clearance,
-                           self._best_pose(), self._ekf_progress(), tag_yaws, landmark_sigmas, ekf_heading)
+                           self._best_pose(), self._ekf_progress(), tag_yaws, landmark_sigmas, ekf_heading, mapped_landmarks)
 
     def _heading(self):
         """Return the absolute SLAM heading anchored to the initial robot direction."""
-        return self.theta0_slam + self.side_index * self.corner_angle_rad
+        return (self.theta0_slam + self.side_index * self.corner_angle_rad
+                if self.course_heading is None else self.course_heading)
 
     def _heading_error(self):
         """Return wrapped error to the fixed side heading, never to a moving waypoint."""
@@ -259,6 +269,7 @@ class SquareNavigator:
         elif self.state == NavigationState.CORRECTING:
             self.correction_used += abs(self.last_command[1]) * dt
             self.correction_signed += self.last_command[1] * dt
+        self.late.account_motion(*self.last_command, dt)
         self.last_tick = now
 
     def _output(self, message, linear=0.0, angular=0.0):
@@ -268,8 +279,15 @@ class SquareNavigator:
         error = self._heading_error()
         self.last_command = linear, angular
         return NavigationOutput(linear, angular, self.state, message, self.current_wp_idx,
-                                *target, *pose, max(0.0, self.square_size_m - self.progress),
+                                *target, *pose, self._remaining_distance(),
                                 error, *self.latest_uncertainty)
+
+    def _remaining_distance(self):
+        """Report start/vertex distance during late navigation, otherwise the side remainder."""
+        if self.late.active or (self.state == NavigationState.COMPLETED
+                                and self.policy.late_scan_start_corner <= self.side_count):
+            return math.dist((self.navigation_x, self.navigation_y), self.target)
+        return max(0.0, self.square_size_m - self.progress)
 
     def step(self, current_time_s):
         """Advance one phase, using model prediction whenever observations are unavailable.
@@ -286,6 +304,8 @@ class SquareNavigator:
             return self._output(self.stop_reason)
         if self.phase_started is None:
             self.phase_started = now
+        if self.late.active:
+            return self.late.step(now)
         handlers = {NavigationState.WAITING_FOR_POSE: self._wait_for_start,
                     NavigationState.DRIVING: self._drive,
                     NavigationState.MIDPOINT_PAUSE: self._midpoint_pause,
@@ -305,16 +325,34 @@ class SquareNavigator:
         self._begin_leg(now)
         return self._drive(now)
 
-    def _begin_leg(self, now):
-        """Anchor this side at the current pose without changing its absolute heading."""
+    def _begin_leg(self, now, heading=None, target=None):
+        """Start a nominal side, optionally aimed toward a fixed late-mission vertex.
+
+        Args:
+            now: Current ROS time in seconds.
+            heading: Optional fixed SLAM heading in radians for the upcoming leg.
+            target: Optional fixed SLAM (x_m, y_m) vertex for telemetry.
+
+        Returns:
+            None. Starts ordinary calibrated forward travel and its existing midpoint pause.
+        """
+        self.course_heading = heading
         self.leg_origin = self._best_pose()[:2]
         c, s = math.cos(self._heading()), math.sin(self._heading())
-        self.target = (self.leg_origin[0] + c * self.square_size_m,
-                       self.leg_origin[1] + s * self.square_size_m)
+        self.target = target if target is not None else (
+            self.leg_origin[0] + c * self.square_size_m, self.leg_origin[1] + s * self.square_size_m)
         self.progress = self.drive_used = 0.0
         self._reset_midpoint()
         self.vision.begin_leg(self._heading())
         self._transition(NavigationState.DRIVING, now)
+
+    def _planned_vertex(self, completed_sides):
+        """Return an ideal polygon vertex in the fixed SLAM start frame, in meters."""
+        if completed_sides == self.side_count:
+            return self.x0_slam, self.y0_slam
+        angles = [self.theta0_slam + index * self.corner_angle_rad for index in range(completed_sides)]
+        return (self.x0_slam + self.square_size_m * sum(math.cos(v) for v in angles),
+                self.y0_slam + self.square_size_m * sum(math.sin(v) for v in angles))
 
     def _reset_midpoint(self):
         """Clear the one-time midpoint correction without changing side heading."""
@@ -404,6 +442,7 @@ class SquareNavigator:
         Returns:
             None. Captures optional stopped tag normals and resets correction budgets.
         """
+        self.course_heading = None
         self.corner_start_heading = self.navigation_yaw
         self.corner_reference = self.vision.stable_tag_yaws(now, self.phase_started)
         nominal = self.turn_calibration.ccw_radps * self.policy.corner_turn_duration_s
@@ -414,7 +453,10 @@ class SquareNavigator:
         self.corner_source = 'calibrated turn prediction'
         self.corner_residual = None
         self.side_index += 1
-        self._transition(NavigationState.TURNING, now)
+        if self.side_index >= self.policy.late_scan_start_corner:
+            self.late.start(now, self.side_index)
+        else:
+            self._transition(NavigationState.TURNING, now)
 
     def _turn_corner(self, now):
         """Turn to the current stage budget, then stop for a bounded camera interval."""

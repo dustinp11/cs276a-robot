@@ -127,6 +127,12 @@
       corner_ekf_weight: 0.5           # half the error, only with confident post-stop mapped tags
       corner_landmark_sigma_m: 0.06     # maximum pre-update robot-relative major-axis sigma (m)
       corner_heading_sigma_rad: 0.17453292519943295  # maximum image-associated yaw sigma (10 deg)
+      late_scan_start_corner: 99        # octagon launch enables corners 6, 7, and 8
+      late_scan_step_rad: 0.5235987755982988  # 30-degree scan steps, each followed by a pause
+      late_scan_max_angle_rad: 6.283185307179586  # at most one search revolution per corner
+      return_segment_m: 0.25            # last-leg distance checkpoint interval
+      return_tolerance_m: 0.10          # estimated distance to recorded start
+      return_max_distance_m: 3.0        # finite best-effort return budget; log failure to reach start
       drive_budget_factor: 1.25
       midpoint_max_correction_m: 0.10   # maximum +/- distance adjustment at midpoint
       midpoint_pause_s: 3.0             # camera-processing pause halfway through each side

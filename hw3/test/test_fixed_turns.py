@@ -985,6 +985,7 @@ class TestVisionGeometry(unittest.TestCase):
         transform[2, 3] = 0.4
         node = Record(extrinsics=CameraExtrinsics(), vision_pub=Record(publish=published.append),
                       frame_landmark_sigmas={3: 0.02},
+                      _mapped_landmark_catalog=lambda: [[3, 2.0, 1.0, 0.05]],
                       ekf=Record(get_robot_pose=lambda: Record(theta=0.4, covariance=np.eye(3) * 0.0004)))
         method(node, 12.5, [{'id': 3, 't_cam_tag': transform}], [3])
         payload = json.loads(published[0].data)

@@ -18,28 +18,57 @@ source /opt/ros/jazzy/setup.bash
 ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
 ```
 
-Eight repetitions: drive 75 cm → stop → turn left about 30° → pause →
-finish the remaining turn toward 45° → pause → optional bounded corrections.
-The final turn restores the nominal starting orientation. The measured left
-pivot uses `[-0.35, +0.35]` with a nominal total of 0.5 seconds (pi/2 rad/s),
-split at `navigation.corner_stage_angle_rad` (30 degrees for this profile).
-The intermediate pause lasts 3 seconds. Stable relative vision may adjust the
-remaining angle; an adjustment of at least 5 degrees consumes one correction
-attempt and part of the same 15-degree total correction budget. Without feedback,
-the remaining timed rotation completes the nominal 45-degree corner. The profile is
-in `launch/hw3_navigation.launch.py`; the octagon launch reuses that stack.
-EKF turn corrections require confident post-stop mapped-tag observations (see
-the covariance gate below). Same-tag relative corrections remain optional
-and target 45°. Each tag reference requires three distinct stopped images
-with at most 3 degrees of face-normal yaw spread. The newest image must be
-fresh. When a shared tag anchors the intermediate rotation, newly visible tags
-can carry that reference through the remaining turn; without a shared anchor,
-a new tag is never treated as evidence of a completed angle. Missing tags never block progress. Straight travel retains
-the midpoint pause at 37.5 cm and the bounded EKF distance adjustment; therefore
-75 cm is the nominal commanded side, not a guaranteed physical distance.
-All pauses remain 3 seconds. Straight inputs remain `[+0.185, +0.15]` at the
-nominal 0.203 m/s. Existing CSV files and start/stop services are reused.
-The original `hw3_navigation.launch.py` defaults to the six-foot square.
+Legs 1–7 retain nominal 75 cm forward travel. Corners 1–5 use the existing
+30-degree first stage → 3-second pause → finish toward 45 degrees → pause →
+optional corrections. The measured left pivot uses `[-0.35, +0.35]`, with a
+nominal rate of pi/2 rad/s. The profile lives in `launch/hw3_navigation.launch.py`.
+
+At corners **6, 7, and 8**, first try to relocalize:
+
+1. Choose the mapped tag with the smallest global positional covariance and
+   predict its bearing from the current estimated pose. IDs are not hard-coded.
+   Global covariance ranks search targets only; it does not certify a new pose.
+2. Rotate left toward that bearing in at most 30-degree steps, pausing 3 seconds
+   after each. Stop early on fresh confident localization; otherwise continue
+   searching up to one nominal revolution and then use calibrated prediction.
+3. Reacquisition requires three consistent post-stop tag-normal observations,
+   accepted known-tag updates, robot-relative landmark sigma at most 6 cm,
+   image-associated heading sigma at most 10 degrees, and a fresh sufficiently
+   confident position. No observation is required to continue the mission.
+4. Choose the outgoing heading after localization, then perform a calibrated
+   shortest-direction pivot (CW is available when needed). Pause again and allow
+   at most three additional corrections, weighted by `corner_ekf_weight` and
+   sharing the existing 15-degree total correction budget. Search and planned
+   reorientation are intentional maneuvers, separate from this correction budget.
+
+After corner 6, aim leg 7 toward the seventh ideal polygon vertex anchored at the
+recorded start. After corner 7, **replace the fixed eighth 75 cm leg with a return
+to the recorded starting position**. Travel in segments of at most 25 cm with
+3-second acquisition pauses; update bearing and remaining distance at each stop.
+Missing observations use command-integrated pose prediction rather than waiting.
+Stop the return within an estimated 10 cm tolerance or after a finite 3 m return
+travel budget, logging arrival as unverified if the budget is exhausted. This is
+a motion budget, not an autonomous wall-distance stop.
+
+Corner 8 performs the final relocalization attempt and restores the initial
+heading. If its updated pose reveals a remaining position error and return
+budget remains, resume the segmented return. Do not count a ninth polygon
+corner or repeatedly restart the full scan. Arrival remains an EKF/model
+estimate, not a guarantee of physical closure.
+
+The recorded start `(x0_slam, y0_slam)` is latched when the mission begins; it
+is not a surveyed location and is not reset to a later pose. Planned vertices
+are generated from that start, initial direction, side count, and side length.
+No surveyed wall or tag coordinates are used for navigation.
+
+Straight inputs remain `[+0.185, +0.15]` at the nominal 0.203 m/s. Ordinary legs
+retain the midpoint pause and bounded EKF distance adjustment. CSV landmark and
+trajectory formats are unchanged. Navigation logs additionally record the search
+tag, scan angle, alignment correction count/budget, return travel, estimated
+start distance, and fixed start coordinates. Existing start/stop services and
+launch commands are unchanged. The square profile does not enable late scans or
+return-to-start behavior (`late_scan_start_corner: 99`); the octagon overrides it
+to corner 6.
 
 # HW3: Visual Odometry, EKF-SLAM, and Testing Infrastructure
 

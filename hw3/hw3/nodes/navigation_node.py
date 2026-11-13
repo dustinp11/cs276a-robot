@@ -223,6 +223,10 @@ class SquareNavigationNode(Node):
                     'forward_clearance_m', 'corner_nominal_rad', 'corner_correction_rad', 'corner_feedback_source', 'corner_residual_rad', 'navigation_heading_rad',
                     'midpoint_progress_m', 'midpoint_remaining_m', 'midpoint_source',
                     'midpoint_applied_correction_m',
+                    'late_scan_tag_id', 'late_scan_angle_rad',
+                    'late_alignment_corrections', 'late_alignment_correction_rad',
+                    'return_travel_m', 'estimated_start_distance_m',
+                    'start_x_slam_m', 'start_y_slam_m',
                 ])
             self.csv_initialized = True
         except Exception as e:
@@ -284,12 +288,17 @@ class SquareNavigationNode(Node):
             known_ids = [int(tag) for tag in data['known_ids']]
             tag_yaws = [[int(tag), float(yaw)] for tag, yaw in data.get('tag_yaws', [])]
             landmark_sigmas = [[int(tag), float(sigma)] for tag, sigma in data.get('landmark_sigmas', [])]
+            catalog = data.get('mapped_landmarks')
+            catalog = [[int(tag), float(x), float(y), float(sigma)] for tag, x, y, sigma in catalog] if catalog is not None else None
+            if catalog is not None and any(tag < 0 or sigma < 0 for tag, _, _, sigma in catalog):
+                return
             ekf_heading = data.get('ekf_heading')
             ekf_heading = [float(v) for v in ekf_heading] if ekf_heading is not None else None
             if ekf_heading is not None and len(ekf_heading) != 2:
                 return
             clearance = data['forward_clearance_m']
             values = [stamp] + [float(v) for tag in tags + tag_yaws + landmark_sigmas for v in tag] + (ekf_heading or [])
+            values += [float(value) for row in (catalog or []) for value in row]
             if clearance is not None:
                 values.append(float(clearance))
             if not all(math.isfinite(v) for v in values):
@@ -297,7 +306,7 @@ class SquareNavigationNode(Node):
             if any(tag < 0 for tag in known_ids) or any(tag[0] < 0 for tag in tags):
                 return
             self.navigator.update_vision(stamp, tags, known_ids, clearance, tag_yaws,
-                                         landmark_sigmas, ekf_heading)
+                                         landmark_sigmas, ekf_heading, catalog)
         except (ValueError, TypeError, KeyError, OverflowError):
             self.get_logger().warn('Ignoring malformed vision feedback')
 
@@ -443,6 +452,14 @@ class SquareNavigationNode(Node):
                         self.navigator.midpoint_remaining_m,
                         self.navigator.midpoint_source,
                         self.navigator.progress_correction_m,
+                        self.navigator.late.scan_target,
+                        self.navigator.late.scan_used,
+                        self.navigator.late.extra_count,
+                        self.navigator.late.extra_used,
+                        self.navigator.late.return_travel_m,
+                        self.navigator.late._home_distance(),
+                        self.navigator.x0_slam,
+                        self.navigator.y0_slam,
                     ])
             except OSError as error:
                 self.get_logger().warn(f'Navigation CSV write failed: {error}', throttle_duration_sec=5.0)

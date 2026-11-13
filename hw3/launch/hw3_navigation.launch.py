@@ -94,6 +94,7 @@ def _control_nodes(context):
                                'turn_calibration.ccw_radps': 1.5707963267948966})
         navigation_overrides = {'navigation.side_count': 8,
                                 'navigation.side_length_m': 0.75,
+                                'navigation.late_scan_start_corner': 6,
                                 'navigation.corner_turn_duration_s': 0.5,
                                 'navigation.corner_stage_angle_rad': 0.5235987755982988,
                                 'navigation.corner_ekf_weight': 0.5}
