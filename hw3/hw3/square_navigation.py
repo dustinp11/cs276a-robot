@@ -72,8 +72,8 @@ class SquareNavigator:
     def __init__(
         self,
         square_size_ft: float = 7.0,
-        max_linear_v_mps: float = 0.20,
-        min_linear_v_mps: float = 0.05,
+        max_linear_v_mps: float = 0.30,
+        min_linear_v_mps: float = 0.10,
         angular_velocity_ccw_radps: float = 1.2566,  # Calibrated: 360 deg in 5.0s (motor [-0.35, 0.35])
         angular_velocity_cw_radps: float = 1.3090,   # Calibrated: 360 deg in 4.8s (motor [0.35, -0.35])
         max_angular_omega_radps: float = 1.31,

@@ -26,8 +26,8 @@ class SquareNavigationNode(Node):
 
         # Declare parameters
         self.declare_parameter('square_size_ft', 7.0)
-        self.declare_parameter('max_linear_velocity', 0.20)
-        self.declare_parameter('min_linear_velocity', 0.05)
+        self.declare_parameter('max_linear_velocity', 0.30)
+        self.declare_parameter('min_linear_velocity', 0.10)
         self.declare_parameter('angular_velocity_ccw', 1.2566)
         self.declare_parameter('angular_velocity_cw', 1.3090)
         self.declare_parameter('max_angular_velocity', 1.31)
@@ -42,7 +42,7 @@ class SquareNavigationNode(Node):
         self.declare_parameter('pose_timeout_s', 0.60)
         self.declare_parameter('max_position_uncertainty_m', 0.40)
         self.declare_parameter('max_heading_uncertainty_rad', 0.40)
-        self.declare_parameter('control_frequency_hz', 10.0)
+        self.declare_parameter('control_frequency_hz', 15.0)
         self.declare_parameter('auto_start', False)
         self.declare_parameter('output_dir', 'hw3_results')
         self.declare_parameter('log_csv', True)
