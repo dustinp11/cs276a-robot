@@ -21,14 +21,16 @@ turn_calibration:
   cw_radps: 1.5707963267948966   # approximately 90 degrees CW in 1 second
 ```
 
-Forward calibration uses **left +0.18, right +0.15**, measured at **2.03 m in
-10 seconds = 0.203 m/s**. Both motors hold these fixed values during forward
-travel; the old speed-dependent mapping and end-of-leg taper have been removed.
+Forward travel uses **left +0.185, right +0.15** to compensate for left drift.
+The speed prediction provisionally retains the baseline **2.03 m in 10 seconds
+= 0.203 m/s**, measured with the previous `[0.18, 0.15]` pair. Remeasure distance
+over time at the new trim before treating that speed as calibrated. Both motors
+hold their fixed values during forward travel; the old speed-dependent mapping and end-of-leg taper have been removed.
 The mapper publishes the same measured speed on `/cmd_vel_applied` for the EKF.
 
 ```yaml
 forward_calibration:
-  left_input: 0.18
+  left_input: 0.185
   right_input: 0.15
   speed_mps: 0.203
 ```

@@ -85,9 +85,9 @@
       default_output_dir: "hw3_results"
       auto_export_csv: true
 
-    # measured straight travel: 2.03 meters in 10 seconds at these fixed inputs
+    # baseline speed measured at [0.18, 0.15]; left trim raised to 0.185 pending remeasurement
     forward_calibration:
-      left_input: 0.18
+      left_input: 0.185
       right_input: 0.15
       speed_mps: 0.203
 

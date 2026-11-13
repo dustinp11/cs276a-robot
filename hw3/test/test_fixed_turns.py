@@ -808,7 +808,7 @@ class TestFixedMapper(unittest.TestCase):
         mapper = VelocityMapper(TurnCalibration(-0.3, 0.3, 0.3, -0.3, 0.6, 0.5))
         for requested in (0.01, 0.12, 0.203, 10):
             command = mapper.map_command(requested, 0.7)
-            self.assertEqual((command.left, command.right), (0.18, 0.15))
+            self.assertEqual((command.left, command.right), (0.185, 0.15))
             self.assertEqual(command.angular_radps, 0)
             self.assertEqual(command.linear_mps, 0.203)
 
@@ -861,7 +861,7 @@ class TestFixedMapper(unittest.TestCase):
         request = twist()
         request.linear.x = 0.05
         method(node, request)
-        self.assertEqual(motors[0].data, [0.18, 0.15])
+        self.assertEqual(motors[0].data, [0.185, 0.15])
         self.assertEqual(applied[0].linear.x, 0.203)
 
     def test_forward_calibration_is_shared_and_validated(self):

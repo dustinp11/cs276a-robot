@@ -64,9 +64,9 @@ def read_turn_calibration(node):
 
 @dataclass(frozen=True)
 class ForwardCalibration:
-    """Measured straight motor pair and corresponding forward speed in meters/second."""
+    """Straight motor trim and nominal forward speed in meters/second."""
 
-    left_input: float = 0.18
+    left_input: float = 0.185
     right_input: float = 0.15
     speed_mps: float = 0.203
 
