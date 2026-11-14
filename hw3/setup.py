@@ -27,11 +27,6 @@ setup(
     maintainer_email='ubuntu@todo.todo',
     description='HW3 Visual Odometry, EKF-SLAM, and Testing Infrastructure',
     license='Apache-2.0',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
     entry_points={
         'console_scripts': [
             'visual_odometry_node = hw3.nodes.visual_odometry_node:main',
