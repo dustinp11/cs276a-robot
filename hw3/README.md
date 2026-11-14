@@ -18,58 +18,32 @@ source /opt/ros/jazzy/setup.bash
 ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
 ```
 
-Legs 1–7 retain nominal 75 cm forward travel. Corners 1–5 use the existing
+All **eight legs** use nominal 75 cm forward travel. All **eight corners** use
 30-degree first stage → 3-second pause → finish toward 45 degrees → pause →
-optional corrections. The measured left pivot uses `[-0.35, +0.35]`, with a
-nominal rate of pi/2 rad/s. The profile lives in `launch/hw3_navigation.launch.py`.
+optional bounded corrections. The last two legs follow the same sequence as the
+first six. Center-looking maneuvers, position-based late-waypoint reorientation,
+and return-to-origin motion are disabled (`late_scan_start_corner: 99`), including
+an explicit override in the octagon launch. No special maneuver begins at corner 6.
 
-At corners **6, 7, and 8**, first try one short inward look:
+The measured left pivot uses `[-0.35, +0.35]`, with a nominal rate of pi/2 rad/s.
+Small corrections can turn either direction: CW uses `[+0.37, -0.37]`. Midpoint
+pauses recheck remaining distance and heading, with another pause after each
+optional pivot. Preserve the 5-degree minimum, three-attempt limit, 15-degree
+nominal angular budget, and bounded distance adjustments. Missing observations
+never block completion. Straight inputs remain `[+0.185, +0.15]` at nominal
+0.203 m/s. No surveyed coordinates are used for navigation.
 
-1. Compute the estimated center of the planned octagon from its initial local
-   frame and vertices. No surveyed coordinates or known tag IDs are used.
-2. Pivot toward that center using the shortest signed direction, capped at
-   `navigation.late_scan_max_angle_rad` (90 degrees). There is only one look
-   per late corner: no stepped sweep, no repeated search, and no 360-degree turn.
-3. Pause 3 seconds and accept useful localization if available. Reacquisition
-   requires three consistent post-stop tag-normal observations, accepted
-   known-tag updates, robot-relative landmark sigma at most 6 cm,
-   image-associated heading sigma at most 10 degrees, and a fresh sufficiently
-   confident position. Missing observations never extend this pause.
-4. Turn directly to the outgoing heading after the look; this also brings the
-   robot back toward its travel direction without first undoing the look in full.
-   CW is available when needed. Pause again and allow at most three additional
-   corrections, weighted by `corner_ekf_weight` and sharing the existing 15-degree
-   total correction budget. The planned look and reorientation are separate from
-   this small-correction budget. Without observations, use calibrated prediction.
+The profile lives in `launch/hw3_navigation.launch.py`. The experimental late
+navigation helper remains available but is not entered by either default profile.
+Existing CSV formats, start/stop services, and build/launch commands are retained.
+The full octagon approximately returns to the start by geometry; it no longer
+actively drives toward an estimated start position.
 
-After corner 6, aim leg 7 toward the seventh ideal polygon vertex anchored at the
-recorded start. After corner 7, **replace the fixed eighth 75 cm leg with a return
-to the recorded starting position**. Travel in segments of at most 25 cm with
-3-second acquisition pauses; update bearing and remaining distance at each stop.
-Missing observations use command-integrated pose prediction rather than waiting.
-Stop the return within an estimated 10 cm tolerance or after a finite 3 m return
-travel budget, logging arrival as unverified if the budget is exhausted. This is
-a motion budget, not an autonomous wall-distance stop.
-
-Corner 8 performs the final relocalization attempt and restores the initial
-heading. If its updated pose reveals a remaining position error and return
-budget remains, resume the segmented return. Do not count a ninth polygon
-corner or repeat the inward look. Arrival remains an EKF/model
-estimate, not a guarantee of physical closure.
-
-The recorded start `(x0_slam, y0_slam)` is latched when the mission begins; it
-is not a surveyed location and is not reset to a later pose. Planned vertices
-are generated from that start, initial direction, side count, and side length.
-No surveyed wall or tag coordinates are used for navigation.
-
-Straight inputs remain `[+0.185, +0.15]` at the nominal 0.203 m/s. Ordinary legs
-retain the midpoint pause with bounded distance and optional heading corrections. CSV landmark and
-trajectory formats are unchanged. Navigation logs additionally record the signed inward-look angle, accumulated
-look rotation, alignment correction count/budget, return travel, estimated
-start distance, and fixed start coordinates. Existing start/stop services and
-launch commands are unchanged. The square profile does not enable late scans or
-return-to-start behavior (`late_scan_start_corner: 99`); the octagon overrides it
-to corner 6.
+If pose coordinates or heading alternate between incompatible estimates, check
+`ros2 topic info /ekf_slam/pose --verbose` before tuning motion. Multiple SLAM
+publishers can interleave unrelated map frames even when they use the same frame
+name. Stop older launch sessions before running the current stack; confidence
+thresholds and extra corrections cannot reconcile conflicting pose publishers.
 
 # HW3: Visual Odometry, EKF-SLAM, and Testing Infrastructure
 

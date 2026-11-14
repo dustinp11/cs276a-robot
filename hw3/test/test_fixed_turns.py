@@ -167,6 +167,8 @@ class TestFixedTurns(unittest.TestCase):
         previous, corners, legs, stage_pauses = None, 0, set(), 0
         for tick in range(4000):
             cmd = nav.step(tick * 0.05)
+            self.assertNotIn(cmd.state, (NavigationState.RELOCALIZING_TURN,
+                                        NavigationState.REORIENTING, NavigationState.RETURN_DRIVING))
             if cmd.state == NavigationState.DRIVING:
                 legs.add(nav.side_index)
             if cmd.state == NavigationState.TURNING and nav.side_index > corners:
