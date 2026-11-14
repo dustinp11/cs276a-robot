@@ -7,7 +7,7 @@ import math
 from .coordinates import wrap_angle
 from .late_navigation import LateNavigation
 from .turn_calibration import ForwardCalibration
-from .vision_navigation import NavigationPolicy, VisualFeedback, relative_tag_turn
+from .vision_navigation import NavigationPolicy, VisualFeedback, relative_tag_turn, startup_view_match
 
 
 class NavigationState(Enum):
@@ -17,6 +17,7 @@ class NavigationState(Enum):
     STARTUP_SCAN_TURN = 'STARTUP_SCAN_TURN'
     STARTUP_SCAN_PAUSE = 'STARTUP_SCAN_PAUSE'
     STARTUP_SCAN_CORRECTING = 'STARTUP_SCAN_CORRECTING'
+    STARTUP_VIEW_SEARCH = 'STARTUP_VIEW_SEARCH'
     DRIVING = 'DRIVING'
     MIDPOINT_PAUSE = 'MIDPOINT_PAUSE'
     MIDPOINT_CORRECTING = 'MIDPOINT_CORRECTING'
@@ -165,9 +166,20 @@ class SquareNavigator:
         self._reset_startup_scan()
 
     def _reset_startup_scan(self):
-        """Clear startup scan progress without moving the recorded start frame."""
+        """Clear startup scan progress without moving the recorded start frame.
+
+        Args:
+            None.
+
+        Returns:
+            None. Clears initial view snapshots, search budgets, and correction counters.
+        """
         self.startup_scan_used = self.startup_scan_goal = 0.0
         self.startup_reference = {}
+        self.startup_view_reference, self.startup_view_current, self.startup_view_ids = {}, {}, []
+        self.startup_view_matched = False
+        self.startup_search_used = self.startup_search_signed = self.startup_search_goal = 0.0
+        self.startup_search_omega = 0.0
         self.startup_correction_count = 0
         self.startup_correction_used = self.startup_correction_signed = 0.0
         self.startup_correction_goal = self.startup_correction_omega = 0.0
@@ -280,6 +292,9 @@ class SquareNavigator:
         self.drive_used += abs(self.last_command[0]) * dt
         if self.state == NavigationState.STARTUP_SCAN_TURN:
             self.startup_scan_used += abs(self.last_command[1]) * dt
+        elif self.state == NavigationState.STARTUP_VIEW_SEARCH:
+            self.startup_search_used += abs(self.last_command[1]) * dt
+            self.startup_search_signed += self.last_command[1] * dt
         elif self.state == NavigationState.STARTUP_SCAN_CORRECTING:
             self.startup_correction_used += abs(self.last_command[1]) * dt
             self.startup_correction_signed += self.last_command[1] * dt
@@ -332,6 +347,7 @@ class SquareNavigator:
                     NavigationState.STARTUP_SCAN_TURN: self._startup_scan_turn,
                     NavigationState.STARTUP_SCAN_PAUSE: self._startup_scan_pause,
                     NavigationState.STARTUP_SCAN_CORRECTING: self._startup_scan_correct,
+                    NavigationState.STARTUP_VIEW_SEARCH: self._startup_view_search,
                     NavigationState.DRIVING: self._drive,
                     NavigationState.MIDPOINT_PAUSE: self._midpoint_pause,
                     NavigationState.MIDPOINT_CORRECTING: self._midpoint_correct,
@@ -370,6 +386,51 @@ class SquareNavigator:
             return self._output('Startup scan step finished; stopped for camera')
         return self._output('Startup scan: calibrated left rotation', angular=self.turn_calibration.rate(1))
 
+    def _startup_view_match(self, now):
+        """Compare the current stopped view with the initial relative tag positions."""
+        self.startup_view_current = self.vision.stable_tag_positions(now, self.phase_started)
+        return startup_view_match(self.startup_view_reference, self.startup_view_current, self.policy)
+
+    def _select_startup_view_search(self, now):
+        """Seek the original view after four turns without trusting a global SLAM heading.
+
+        Args:
+            now: Current ROS time after a stationary acquisition interval, in seconds.
+
+        Returns:
+            True when a bounded reacquisition pivot is selected; False otherwise.
+            Missing original tags initially require no search. Once visible, the
+            signed bearing error permits either direction for coarse alignment.
+        """
+        budget = self.policy.startup_view_search_max_rad - self.startup_search_used
+        if not self.startup_view_reference or budget < self.policy.corner_min_correction_rad:
+            return False
+        current = self.vision.stable_tag_positions(now, self.phase_started)
+        match = self._startup_view_match(now)
+        if match is None:
+            if self.startup_view_reference.keys() & current.keys():
+                return False
+            error = self.policy.startup_view_search_step_rad
+        else:
+            error, _, complete = match
+            fine_budget = min(self.policy.corner_correction_limit_rad - self.startup_correction_used,
+                              max(0, self.policy.corner_max_corrections - self.startup_correction_count) * self.turn_pulse_rad)
+            if complete or abs(error) <= max(0.0, fine_budget) + self.policy.startup_view_bearing_tolerance_rad:
+                return False
+        angle = min(abs(error), self.policy.startup_view_search_step_rad, budget)
+        self.startup_search_goal = self.startup_search_used + angle
+        self.startup_search_omega = self.turn_calibration.rate(error)
+        self._transition(NavigationState.STARTUP_VIEW_SEARCH, now)
+        return True
+
+    def _startup_view_search(self, now):
+        """Turn one small reacquisition step, then stop to compare original tag bearings."""
+        if (self.startup_search_used + 1e-9 >= self.startup_search_goal
+                or now - self.phase_started >= self.policy.corner_timeout_s):
+            self._transition(NavigationState.STARTUP_SCAN_PAUSE, now)
+            return self._output('Initial-view search step finished; stopped for camera')
+        return self._output('Seeking original startup tag view', angular=self.startup_search_omega)
+
     def _startup_heading_error(self, now):
         """Check closure against the initial direction without redefining the start frame.
 
@@ -380,19 +441,27 @@ class SquareNavigator:
             Signed correction in radians, or None without useful visual feedback.
             Same-tag orientation takes priority over a confidence-gated EKF heading.
         """
+        self.startup_view_matched, self.startup_view_ids = False, []
+        match = self._startup_view_match(now)
+        if match is not None:
+            error, self.startup_view_ids, self.startup_view_matched = match
+            self.navigation_yaw, self.heading_time = wrap_angle(self.theta0_slam - error), now
+            state = 'matched' if self.startup_view_matched else 'partially reacquired'
+            self.startup_source = f'Original startup view {state}; tags {self.startup_view_ids}'
+            return 0.0 if self.startup_view_matched else error
         yaws = self.vision.stable_tag_yaws(now, self.phase_started)
         measured = relative_tag_turn(self.startup_reference, yaws,
-                                     self.startup_scan_used + self.startup_correction_signed)
+                                     self.startup_scan_used + self.startup_search_signed + self.startup_correction_signed)
         if measured is not None:
             self.navigation_yaw = wrap_angle(self.theta0_slam + measured)
-            self.heading_time, self.startup_source = now, 'Stable initial-tag scan closure'
+            self.heading_time, self.startup_source = now, 'Initial-tag orientation closure; original view not verified'
             return wrap_angle(-measured)
         yaw = self.vision.confident_ekf_yaw(now, self.phase_started)
         if yaw is not None and self.vision.known_ids.intersection(yaws) and self.policy.corner_ekf_weight > 0:
             self.navigation_yaw, self.heading_time = yaw, now
-            self.startup_source = 'Confident EKF startup-heading closure'
+            self.startup_source = 'Confident EKF startup-heading closure; original view not verified'
             return self.policy.corner_ekf_weight * wrap_angle(self.theta0_slam - yaw)
-        self.startup_source = 'Calibrated scan closure; no usable visual heading correction'
+        self.startup_source = 'Calibrated scan closure; original view not verified'
         return None
 
     def _select_startup_correction(self, error, now):
@@ -429,10 +498,14 @@ class SquareNavigator:
             return self._output('Startup scan pause; allowing camera and EKF updates')
         if self.startup_scan_used == 0:
             self.startup_reference = self.vision.stable_tag_yaws(now, self.phase_started)
+            self.startup_view_reference = self.vision.stable_tag_positions(now, self.phase_started)
+            self.startup_source = f'Initial view captured: tags {sorted(self.startup_view_reference)}'
         if self.startup_scan_used + 1e-9 < 2 * math.pi:
             self.startup_scan_goal = min(2 * math.pi, self.startup_scan_used + self.policy.startup_scan_step_rad)
             self._transition(NavigationState.STARTUP_SCAN_TURN, now)
             return self._output('Startup scan: next stopped-to-stopped rotation step ready')
+        if self._select_startup_view_search(now):
+            return self._output('Startup scan: bounded search for original tag IDs and bearings')
         self.startup_heading_residual = self._startup_heading_error(now)
         if self._select_startup_correction(self.startup_heading_residual, now):
             return self._output('Startup scan heading correction selected; ' + self.startup_source)

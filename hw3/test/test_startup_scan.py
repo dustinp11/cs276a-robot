@@ -5,7 +5,7 @@ import unittest
 
 from hw3.square_navigation import NavigationState, SquareNavigator
 from hw3.turn_calibration import TurnCalibration
-from hw3.vision_navigation import NavigationPolicy, VisualFeedback
+from hw3.vision_navigation import NavigationPolicy, VisualFeedback, startup_view_match
 
 
 class TestStartupScan(unittest.TestCase):
@@ -23,7 +23,9 @@ class TestStartupScan(unittest.TestCase):
     def observe(self, nav, stamps, tag_yaw):
         """Feed distinct stationary observations without requiring a globally mapped tag."""
         for stamp in stamps:
-            nav.update_vision(stamp, [[7, 2, 0]], [], None, [[7, tag_yaw]])
+            bearing = tag_yaw - 0.4
+            nav.update_vision(stamp, [[7, 2 * math.cos(bearing), 2 * math.sin(bearing)]], [], None,
+                              [[7, tag_yaw]])
 
     def test_full_scan_precedes_forward_motion_without_tags(self):
         """Scan exactly one nominal circle in four stopped-to-stopped steps.
@@ -117,6 +119,131 @@ class TestStartupScan(unittest.TestCase):
         self.assertEqual(nav.state, NavigationState.DRIVING)
         self.assertEqual(nav.startup_correction_count, 0)
 
+    def test_lost_initial_tags_trigger_bounded_search_then_continue(self):
+        """Missing original tags can extend startup, but cannot cause endless rotation.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks original-view search budget, stopped acquisitions, and fallback.
+        """
+        nav = self.navigator()
+        nav.step(0)
+        self.observe(nav, (1, 2, 2.8), 0.4)
+        nav.step(3)
+        nav.startup_scan_used = 2 * math.pi
+        nav.last_command = (0, 0)
+        nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
+        saw_search = False
+        for tick in range(1000):
+            cmd = nav.step(10 + tick * 0.05)
+            saw_search |= cmd.state == NavigationState.STARTUP_VIEW_SEARCH
+            if cmd.state == NavigationState.DRIVING:
+                break
+            self.assertEqual(cmd.linear_v_mps, 0)
+        self.assertTrue(saw_search)
+        self.assertEqual(nav.state, NavigationState.DRIVING)
+        self.assertLessEqual(nav.startup_search_used, math.pi / 2 + math.pi / 40 + 1e-6)
+        self.assertFalse(nav.startup_view_matched)
+        self.assertIn('not verified', nav.startup_source)
+
+    def test_visible_initial_view_can_request_coarse_alignment_in_either_direction(self):
+        """Reacquired original tags can steer startup alignment without EKF map confidence.
+
+        Args:
+            None.
+
+        Returns:
+            None. Tests large visual bearing errors select small signed search pivots.
+        """
+        for degrees in (-40, 40):
+            nav = self.navigator()
+            nav.step(0)
+            nav.startup_view_reference = {7: (2, 0)}
+            nav.startup_scan_used = 2 * math.pi
+            nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
+            self.observe(nav, (11, 12, 12.8), 0.4 + math.radians(degrees))
+            nav.step(13)
+            self.assertEqual(nav.state, NavigationState.STARTUP_VIEW_SEARCH)
+            self.assertAlmostEqual(nav.startup_search_goal, math.radians(15))
+            cmd = nav.step(13.05)
+            self.assertGreater(cmd.angular_omega_radps * degrees, 0)
+            self.assertEqual(nav.startup_correction_count, 0)
+
+    def test_original_view_alignment_finishes_without_relying_on_tag_face_normals(self):
+        """Bearing/range agreement can verify closure even when face-normal output is absent.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks original-ID matching, positional tolerance, and verified status.
+        """
+        nav = self.navigator()
+        nav.step(0)
+        nav.startup_view_reference = {7: (2, 0)}
+        nav.startup_scan_used = 2 * math.pi
+        nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
+        for stamp in (11, 12, 12.8):
+            nav.update_vision(stamp, [[7, 2 * math.cos(0.03), 2 * math.sin(0.03)]], [], None)
+        nav.step(13)
+        self.assertEqual(nav.state, NavigationState.DRIVING)
+        self.assertTrue(nav.startup_view_matched)
+        self.assertEqual(nav.startup_view_ids, [7])
+        self.assertEqual(nav.startup_correction_count, 0)
+
+    def test_translation_mismatch_is_not_reported_as_original_view_match(self):
+        """Changed tag range cannot certify that the original view has been restored.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks an unverified result without issuing extra translation commands.
+        """
+        nav = self.navigator()
+        nav.step(0)
+        nav.startup_view_reference = {7: (2, 0)}
+        nav.startup_scan_used = 2 * math.pi
+        nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
+        for stamp in (11, 12, 12.8):
+            nav.update_vision(stamp, [[7, 3, 0]], [], None)
+        cmd = nav.step(13)
+        self.assertEqual(cmd.state, NavigationState.DRIVING)
+        self.assertFalse(nav.startup_view_matched)
+        self.assertEqual(nav.startup_search_used, 0)
+
+    def test_initial_view_match_checks_ids_ranges_and_cross_tag_consistency(self):
+        """A full match requires the actual original tags at consistent original bearings.
+
+        Args:
+            None.
+
+        Returns:
+            None. Distinguishes complete, partial, inconsistent, and unrelated views.
+        """
+        policy = NavigationPolicy()
+        reference = {7: (2, 0), 9: (3, 0)}
+        aligned = {7: (2, 0), 9: (3, 0)}
+        self.assertEqual(startup_view_match(reference, aligned, policy), (0, [7, 9], True))
+        self.assertEqual(startup_view_match(reference, {7: (2, 0)}, policy), (0, [7], False))
+        self.assertIsNone(startup_view_match(reference, {42: (2, 0)}, policy))
+        self.assertIsNone(startup_view_match(reference, {7: (3, 0)}, policy))
+        inconsistent = {7: (2 * math.cos(0.2), 2 * math.sin(0.2)),
+                        9: (3 * math.cos(-0.2), 3 * math.sin(-0.2))}
+        self.assertIsNone(startup_view_match(reference, inconsistent, policy))
+
+    def test_stopped_position_snapshot_requires_distinct_consistent_frames(self):
+        feedback = VisualFeedback(NavigationPolicy())
+        for stamp in (1.1, 1.1, 1.5):
+            feedback.update(stamp, [[7, 2, 0]], [], None, (0, 0, 0), 0)
+        self.assertEqual(feedback.stable_tag_positions(1.6, 1), {})
+        feedback.update(1.8, [[7, 2, 0]], [], None, (0, 0, 0), 0)
+        self.assertEqual(feedback.stable_tag_positions(2, 1), {7: (2, 0)})
+        feedback.update(2.1, [[7, 3, 0]], [], None, (0, 0, 0), 0)
+        self.assertEqual(feedback.stable_tag_positions(2.2, 1), {})
+
     def test_manual_stop_during_startup_turn(self):
         nav = self.navigator()
         nav.step(0)
@@ -125,6 +252,17 @@ class TestStartupScan(unittest.TestCase):
         nav.stop()
         cmd = nav.step(3.1)
         self.assertEqual(cmd.state, NavigationState.STOPPED)
+        self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
+
+    def test_manual_stop_interrupts_initial_view_search(self):
+        nav = self.navigator()
+        nav.step(0)
+        nav.startup_view_reference = {7: (2, 0)}
+        nav.startup_scan_used = 2 * math.pi
+        nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
+        self.assertEqual(nav.step(13).state, NavigationState.STARTUP_VIEW_SEARCH)
+        nav.stop()
+        cmd = nav.step(13.1)
         self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
 
     def test_fifteen_degree_heading_uncertainty_gate(self):
@@ -137,7 +275,8 @@ class TestStartupScan(unittest.TestCase):
 
     def test_startup_scan_settings_are_validated(self):
         for values in ({'startup_scan_enabled': 1}, {'startup_scan_step_rad': math.pi},
-                       {'startup_scan_pause_s': -1}):
+                       {'startup_scan_pause_s': -1}, {'startup_view_search_max_rad': math.pi},
+                       {'startup_view_search_step_rad': math.pi}, {'startup_view_range_tolerance_m': 0}):
             with self.assertRaises(ValueError):
                 NavigationPolicy(**values)
 

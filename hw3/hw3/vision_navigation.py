@@ -17,6 +17,10 @@ class NavigationPolicy:
     startup_scan_enabled: bool = False
     startup_scan_step_rad: float = math.pi / 2
     startup_scan_pause_s: float = 3.0
+    startup_view_search_step_rad: float = math.pi / 12
+    startup_view_search_max_rad: float = math.pi / 2
+    startup_view_bearing_tolerance_rad: float = math.pi / 36
+    startup_view_range_tolerance_m: float = 0.15
     vision_timeout_s: float = 1.0
     corner_timeout_s: float = 18.0
     corner_turn_duration_s: float = 0.95
@@ -52,6 +56,8 @@ class NavigationPolicy:
             raise ValueError('Navigation vision limits must be finite and positive.')
         if not isinstance(self.startup_scan_enabled, bool) or self.startup_scan_step_rad > math.pi / 2:
             raise ValueError('Startup scan enable must be boolean and each step at most 90 degrees.')
+        if not self.startup_view_search_step_rad <= self.startup_view_search_max_rad <= math.pi / 2:
+            raise ValueError('Initial-view search must use bounded steps within at most 90 degrees.')
         if not math.isfinite(self.corner_ekf_weight) or not 0 <= self.corner_ekf_weight <= 1:
             raise ValueError('Corner EKF weight must be finite and between zero and one.')
         if int(self.late_scan_start_corner) != self.late_scan_start_corner:
@@ -93,6 +99,7 @@ class VisualFeedback:
         self.heading = None
         self.tag_yaws, self.yaw_stamp = {}, -math.inf
         self.yaw_history = deque(maxlen=128)
+        self.position_history = deque(maxlen=128)
         self.known_ids, self.landmark_sigmas, self.ekf_heading = set(), {}, None
         self.ekf_rejection_reason = 'no image-associated heading'
 
@@ -129,6 +136,7 @@ class VisualFeedback:
         self.ekf_heading = ekf_heading
         self.tag_yaws = dict(tag_yaws or [])
         self.yaw_history.append((stamp, self.tag_yaws))
+        self.position_history.append((stamp, {tag: (x, y) for tag, x, y in tags}))
         self.yaw_stamp = stamp if self.tag_yaws else -math.inf
         if tags:
             self.clearance, self.clearance_stamp = clearance, stamp
@@ -136,6 +144,49 @@ class VisualFeedback:
             self.valid_stamp = stamp
         if self.heading is not None:
             self._update_progress(tags, known_ids, pose[2], predicted_progress)
+
+    def stable_tag_positions(self, now, stopped_at):
+        """Collect stopped relative tag positions for matching the initial camera view.
+
+        Args:
+            now: Current ROS time in seconds.
+            stopped_at: Beginning of this stopped acquisition interval, in seconds.
+
+        Returns:
+            Tag-ID-indexed (forward_m, left_m) median positions in the robot frame.
+            Requires distinct consistent frames and a fresh final observation per tag.
+        """
+        samples = {}
+        for stamp, positions in self.position_history:
+            if stopped_at <= stamp <= now:
+                for tag, point in positions.items():
+                    samples.setdefault(tag, []).append((stamp, point))
+        result = {}
+        for tag, observations in samples.items():
+            if now - observations[-1][0] <= self.policy.vision_timeout_s:
+                point = self._stable_position([p for _, p in observations])
+                if point is not None:
+                    result[tag] = point
+        return result
+
+    def _stable_position(self, samples):
+        """Reduce consistent stopped tag samples to one robust robot-relative position.
+
+        Args:
+            samples: Sequence of tag (forward_m, left_m) observations.
+
+        Returns:
+            Median relative position in meters, or None for insufficient or inconsistent data.
+        """
+        if len(samples) < self.policy.corner_min_observations:
+            return None
+        samples = samples[-self.policy.corner_min_observations:]
+        ranges = [math.hypot(x, y) for x, y in samples]
+        bearing = self._stable_yaw([math.atan2(y, x) for x, y in samples])
+        if min(ranges) < 1e-6 or max(ranges) - min(ranges) > self.policy.startup_view_range_tolerance_m or bearing is None:
+            return None
+        distance = median(ranges)
+        return distance * math.cos(bearing), distance * math.sin(bearing)
 
     def stable_tag_yaws(self, now, stopped_at):
         """Collect consistent face-normal observations captured during this stop.
@@ -291,3 +342,32 @@ def relative_tag_turn(reference, current, expected_turn):
     if any(abs(wrap_angle(v - measured)) > math.pi / 12 for v in changes):
         return None
     return measured
+
+
+def startup_view_match(reference, current, policy):
+    """Compare original tag IDs, bearings, and ranges after an in-place startup scan.
+
+    Args:
+        reference: Initial tag-ID-indexed robot-relative (forward_m, left_m) positions.
+        current: Stable current positions in the same robot coordinate convention.
+        policy: Bearing, range, and cross-tag consistency thresholds.
+
+    Returns:
+        (signed_yaw_error_rad, matched_ids, complete_match), or None without a
+        consistent shared tag. Positive error requests a left correction. A complete
+        match requires every original tag within bearing/range tolerance. Range
+        checks reject likely translation; this comparison never requests translation.
+    """
+    errors = {tag: wrap_angle(math.atan2(current[tag][1], current[tag][0])
+                             - math.atan2(reference[tag][1], reference[tag][0]))
+              for tag in reference.keys() & current.keys()
+              if abs(math.hypot(*current[tag]) - math.hypot(*reference[tag])) <= policy.startup_view_range_tolerance_m}
+    if not errors:
+        return None
+    anchor = next(iter(errors.values()))
+    error = wrap_angle(median([anchor + wrap_angle(v - anchor) for v in errors.values()]))
+    if any(abs(wrap_angle(v - error)) > policy.corner_yaw_spread_rad for v in errors.values()):
+        return None
+    complete = (reference.keys() <= errors.keys()
+                and all(abs(v) <= policy.startup_view_bearing_tolerance_rad for v in errors.values()))
+    return error, sorted(errors), complete

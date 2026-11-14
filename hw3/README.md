@@ -24,18 +24,37 @@ step → 3-second pause, repeated four times until the commanded angle totals 36
 Each 90-degree step uses about 1 second of commanded rotation at the nominal
 pi/2 rad/s rate; physical accuracy still depends on the measured calibration.
 Use the existing `[-0.35, +0.35]` pivot calibration. Callbacks and SLAM stay active
-throughout; no tag is required to complete any step. A final stopped comparison
-with the original tag orientation, or a confident EKF heading, may select bounded
-left/right closure corrections before forward motion. Missing feedback continues
-from calibrated prediction. The original start position and heading are latched
-before scanning and are never silently replaced by the post-scan pose.
+throughout; no tag is required to complete any step. After the fourth turn, compare the initial and current stable tag **IDs,
+robot-relative bearings, and ranges**. The initial snapshot and every final
+comparison require three distinct stopped observations. A restored view requires
+all original tags within 5 degrees of their original bearings and 15 cm of their
+original ranges. This targets roughly the same camera view without a surveyed
+map or trusted global EKF heading; it remains an in-place orientation alignment.
+
+If the original tags are missing, continue looking left in stopped 15-degree
+steps, up to a 90-degree total extra search budget. If original tags reappear
+with a large bearing residual, use its sign to search left or right toward their
+original positions. Pause 3 seconds after every step. Once the residual is small
+enough, use the existing five-degree closure pulses, at most three attempts and
+15 nominal degrees total. Range disagreement or inconsistent shared-tag bearing
+changes cannot certify a full view match. A partial view is recorded as partial,
+not as a match for every original tag.
+
+When the initial view was never captured, or matching fails within these budgets,
+continue the mission with an explicitly unverified startup result. Face-normal
+or confidence-gated EKF heading feedback remains a fallback. Never redefine the
+recorded start to make closure appear correct. Missing tags never create an
+unbounded wait or search. The initial scan can help build the map, but does not
+guarantee that all landmarks will be visible or accurately located.
 
 `startup_scan_enabled`, `startup_scan_step_rad`, and `startup_scan_pause_s`
-configure this behavior. It is enabled by the octagon launch and disabled in the
-base square profile. Startup progress and corrections are recorded in navigation
-CSV columns prefixed with `startup_`. Initial mapping can benefit from the extra
-observations; the scan does not certify physical closure or guarantee every tag
-will be visible.
+configure the four-step scan. `startup_view_search_step_rad`,
+`startup_view_search_max_rad`, `startup_view_bearing_tolerance_rad`, and
+`startup_view_range_tolerance_m` configure original-view reacquisition. The
+startup scan is enabled by the octagon launch and disabled in the square profile.
+Navigation CSV columns prefixed with `startup_` record scan/search rotation,
+corrections, matched IDs, verified/partial status, and initial/current stable tag
+positions `[forward_m, left_m]` for diagnosing failed matches.
 
 All **eight legs** use nominal 75 cm forward travel. All **eight corners** use
 30-degree first stage → 3-second pause → finish toward 45 degrees → pause →
