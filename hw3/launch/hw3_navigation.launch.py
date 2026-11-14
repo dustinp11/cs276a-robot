@@ -94,7 +94,8 @@ def _control_nodes(context):
                                'turn_calibration.ccw_radps': 1.5707963267948966})
         navigation_overrides = {'navigation.side_count': 8,
                                 'navigation.manual_motion_enabled': True,
-                                'navigation.manual_forward_pause_s': 0.5,
+                                'navigation.manual_forward_pause_s': 1.0,
+                                'navigation.manual_midpoint_pause_s': 1.0,
                                 'navigation.startup_scan_enabled': False,
                                 'navigation.turn_pulse_rad': 0.08726646259971647,
                                 'navigation.side_length_m': 0.75,

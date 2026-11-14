@@ -20,18 +20,22 @@ ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
 
 The octagon now runs a simple timed sequence:
 
-**45-degree left turn → 75 cm forward → pause 0.5 seconds → repeat eight times.**
+**45-degree left turn → 37.5 cm forward → pause 1 second → 37.5 cm forward → pause 1 second → repeat eight times.**
 
 - Left turn: inputs `[-0.35, +0.35]` for `corner_turn_duration_s` (0.5 seconds).
 - Forward: inputs `[+0.185, +0.15]` at nominal 0.203 m/s. A 0.75 m side uses
   about 3.695 seconds, rounded to the controller's 20 Hz command intervals.
-- Pause: `manual_forward_pause_s` (0.5 seconds), only after each full forward leg.
+- Midpoint pause: `manual_midpoint_pause_s` (1 second), after the first 37.5 cm.
+- Pre-turn pause: `manual_forward_pause_s` (1 second), after each full 75 cm side.
+- Paused time is excluded from commanded travel distance. Total motor-on travel
+  remains about 3.7 seconds per side, split into two approximately 1.85-second halves.
 - There is no deliberate pause between turning and forward motion. After the
-  eighth forward leg and its pause, stop without another turn.
+  eighth forward leg and its one-second pause, stop without another turn.
 
 The octagon launch enables `manual_motion_enabled`, disables startup scanning,
 and disables late look-around/homing behavior. The simple mode also bypasses
-all staged turns, midpoint pauses, and EKF/vision motion corrections. These
+all staged turns and EKF/vision motion corrections. Its midpoint pause is a
+simple fixed wait, without distance or heading adjustments. These
 features cannot change the timed motor commands even if a stale parameter file
 happens to enable them. SLAM, the camera, AprilTag detection, and CSV recording
 continue for evaluation. `/start_navigation` and `/stop_navigation` are unchanged.

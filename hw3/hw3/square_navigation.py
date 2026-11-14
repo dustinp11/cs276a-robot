@@ -385,10 +385,11 @@ class SquareNavigator:
         return self._drive(now)
 
     def _manual_step(self, now):
-        """Run only timed turn, uninterrupted forward travel, and the post-forward pause."""
+        """Run timed turns and forward halves separated by fixed manual pauses."""
         handlers = {NavigationState.WAITING_FOR_POSE: self._wait_for_start,
                     NavigationState.TURNING: self._manual_turn,
                     NavigationState.DRIVING: self._manual_drive,
+                    NavigationState.MIDPOINT_PAUSE: self._manual_midpoint_pause,
                     NavigationState.STOPPING: self._manual_pause}
         return handlers[self.state](now)
 
@@ -409,17 +410,42 @@ class SquareNavigator:
         return self._output('Manual left turn', angular=self.turn_calibration.rate(1))
 
     def _manual_drive(self, now):
-        """Travel one nominal side at fixed inputs without midpoint or vision adjustments."""
+        """Count commanded travel only while moving; stop at the half- and full-side marks."""
         self.progress = self.drive_used
-        duration = self.square_size_m / self.forward.speed_mps
-        if now - self.phase_started + 1e-9 >= duration:
-            self.side_index += 1
-            self._transition(NavigationState.STOPPING, now)
-            return self._output('Manual forward segment finished; 0.5-second pause')
+        distance = self.square_size_m if self.midpoint_done else self.square_size_m / 2
+        if self.drive_used + 1e-9 >= distance:
+            return self._manual_checkpoint(now)
         return self._output('Manual forward segment', linear=self.forward.speed_mps)
 
+    def _manual_checkpoint(self, now):
+        """Stop at the midpoint or count a completed side before the next turn."""
+        if not self.midpoint_done:
+            self._transition(NavigationState.MIDPOINT_PAUSE, now)
+            return self._output('Manual midpoint pause')
+        self.side_index += 1
+        self._transition(NavigationState.STOPPING, now)
+        return self._output('Manual side finished; pause before next turn')
+
+    def _manual_midpoint_pause(self, now):
+        """Wait one fixed interval without using vision to alter distance or heading.
+
+        Args:
+            now: Current ROS time in seconds.
+
+        Returns:
+            Stopped output during the pause, then the next forward command. Paused
+            time never contributes to the nominal travel distance.
+        """
+        if now - self.phase_started + 1e-9 < self.policy.manual_midpoint_pause_s:
+            return self._output('Manual midpoint pause')
+        self.midpoint_done = True
+        self.midpoint_progress_m, self.midpoint_remaining_m = self.drive_used, self.square_size_m - self.drive_used
+        self.midpoint_source = 'Manual command prediction; no feedback adjustments'
+        self._transition(NavigationState.DRIVING, now)
+        return self._manual_drive(now)
+
     def _manual_pause(self, now):
-        """Pause only after forward travel, then turn again or finish after the last side."""
+        """Pause after the full side, immediately before the next turn, or final completion."""
         if now - self.phase_started + 1e-9 < self.policy.manual_forward_pause_s:
             return self._output('Manual post-forward pause')
         if self.side_index >= self.side_count:

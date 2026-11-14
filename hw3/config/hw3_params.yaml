@@ -104,7 +104,8 @@
     # Closed-Loop Square Navigation settings
     navigation:
       manual_motion_enabled: false    # octagon launch enables timed motion without feedback corrections
-      manual_forward_pause_s: 0.5      # only intentional pause in manual mode
+      manual_forward_pause_s: 1.0      # pause after a full side, immediately before the next turn
+      manual_midpoint_pause_s: 1.0     # pause halfway through each manual forward side
       startup_scan_enabled: false     # disabled by the manual octagon profile
       startup_scan_step_rad: 1.5707963267948966  # four nominal 90-degree left steps
       startup_scan_step_duration_s: 1.6  # motor-on seconds per startup 90-degree target only
