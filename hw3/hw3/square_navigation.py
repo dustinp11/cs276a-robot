@@ -14,6 +14,9 @@ class NavigationState(Enum):
     """Motion phases and terminal outcomes recorded in navigation_log.csv."""
     IDLE = 'IDLE'
     WAITING_FOR_POSE = 'WAITING_FOR_POSE'
+    STARTUP_SCAN_TURN = 'STARTUP_SCAN_TURN'
+    STARTUP_SCAN_PAUSE = 'STARTUP_SCAN_PAUSE'
+    STARTUP_SCAN_CORRECTING = 'STARTUP_SCAN_CORRECTING'
     DRIVING = 'DRIVING'
     MIDPOINT_PAUSE = 'MIDPOINT_PAUSE'
     MIDPOINT_CORRECTING = 'MIDPOINT_CORRECTING'
@@ -159,6 +162,16 @@ class SquareNavigator:
         self._reset_midpoint()
         self.vision = VisualFeedback(self.policy)
         self.late = LateNavigation(self, NavigationState)
+        self._reset_startup_scan()
+
+    def _reset_startup_scan(self):
+        """Clear startup scan progress without moving the recorded start frame."""
+        self.startup_scan_used = self.startup_scan_goal = 0.0
+        self.startup_reference = {}
+        self.startup_correction_count = 0
+        self.startup_correction_used = self.startup_correction_signed = 0.0
+        self.startup_correction_goal = self.startup_correction_omega = 0.0
+        self.startup_source, self.startup_heading_residual = 'not started', None
 
     def start(self):
         """Start only an idle mission; a stopped run requires reset/relaunch."""
@@ -265,7 +278,12 @@ class SquareNavigator:
         self.navigation_y += self.last_command[0] * heading_dt * math.sin(self.navigation_yaw)
         self.navigation_yaw = wrap_angle(self.navigation_yaw + self.last_command[1] * heading_dt)
         self.drive_used += abs(self.last_command[0]) * dt
-        if self.state == NavigationState.TURNING:
+        if self.state == NavigationState.STARTUP_SCAN_TURN:
+            self.startup_scan_used += abs(self.last_command[1]) * dt
+        elif self.state == NavigationState.STARTUP_SCAN_CORRECTING:
+            self.startup_correction_used += abs(self.last_command[1]) * dt
+            self.startup_correction_signed += self.last_command[1] * dt
+        elif self.state == NavigationState.TURNING:
             self.corner_used += abs(self.last_command[1]) * dt
         elif self.state == NavigationState.MIDPOINT_CORRECTING:
             self.midpoint_correction_used += abs(self.last_command[1]) * dt
@@ -311,6 +329,9 @@ class SquareNavigator:
         if self.late.active:
             return self.late.step(now)
         handlers = {NavigationState.WAITING_FOR_POSE: self._wait_for_start,
+                    NavigationState.STARTUP_SCAN_TURN: self._startup_scan_turn,
+                    NavigationState.STARTUP_SCAN_PAUSE: self._startup_scan_pause,
+                    NavigationState.STARTUP_SCAN_CORRECTING: self._startup_scan_correct,
                     NavigationState.DRIVING: self._drive,
                     NavigationState.MIDPOINT_PAUSE: self._midpoint_pause,
                     NavigationState.MIDPOINT_CORRECTING: self._midpoint_correct,
@@ -322,13 +343,109 @@ class SquareNavigator:
         return handlers[self.state](now)
 
     def _wait_for_start(self, now):
-        """Start in a local coordinate gauge without waiting for sensors or localization."""
+        """Latch the local start frame, then optionally scan before the first forward leg.
+
+        Args:
+            now: Current ROS time in seconds.
+
+        Returns:
+            Stopped scan output when enabled, otherwise the initial drive command.
+            Neither branch waits for an EKF message or requires a visible tag.
+        """
         if not self.origin_latched:
             self.x0_slam, self.y0_slam, self.theta0_slam = self._best_pose()
             self.navigation_yaw, self.heading_time = self.theta0_slam, now
             self.origin_latched = True
+        if self.policy.startup_scan_enabled:
+            self._transition(NavigationState.STARTUP_SCAN_PAUSE, now)
+            return self._output('Startup scan: initial stopped acquisition before one full revolution')
         self._begin_leg(now)
         return self._drive(now)
+
+    def _startup_scan_turn(self, now):
+        """Rotate one calibrated scan step, then stop for stationary camera observations."""
+        if (self.startup_scan_used + 1e-9 >= self.startup_scan_goal
+                or now - self.phase_started >= self.policy.corner_timeout_s):
+            self._transition(NavigationState.STARTUP_SCAN_PAUSE, now)
+            return self._output('Startup scan step finished; stopped for camera')
+        return self._output('Startup scan: calibrated left rotation', angular=self.turn_calibration.rate(1))
+
+    def _startup_heading_error(self, now):
+        """Check closure against the initial direction without redefining the start frame.
+
+        Args:
+            now: Current ROS time after the final stopped scan acquisition, in seconds.
+
+        Returns:
+            Signed correction in radians, or None without useful visual feedback.
+            Same-tag orientation takes priority over a confidence-gated EKF heading.
+        """
+        yaws = self.vision.stable_tag_yaws(now, self.phase_started)
+        measured = relative_tag_turn(self.startup_reference, yaws,
+                                     self.startup_scan_used + self.startup_correction_signed)
+        if measured is not None:
+            self.navigation_yaw = wrap_angle(self.theta0_slam + measured)
+            self.heading_time, self.startup_source = now, 'Stable initial-tag scan closure'
+            return wrap_angle(-measured)
+        yaw = self.vision.confident_ekf_yaw(now, self.phase_started)
+        if yaw is not None and self.vision.known_ids.intersection(yaws) and self.policy.corner_ekf_weight > 0:
+            self.navigation_yaw, self.heading_time = yaw, now
+            self.startup_source = 'Confident EKF startup-heading closure'
+            return self.policy.corner_ekf_weight * wrap_angle(self.theta0_slam - yaw)
+        self.startup_source = 'Calibrated scan closure; no usable visual heading correction'
+        return None
+
+    def _select_startup_correction(self, error, now):
+        """Select a bounded signed closure pulse after the full scan.
+
+        Args:
+            error: Signed observed heading correction in radians, or None.
+            now: Current ROS time in seconds.
+
+        Returns:
+            True when a pulse is selected; False when the first forward leg should start.
+        """
+        budget = max(0.0, self.policy.corner_correction_limit_rad - self.startup_correction_used)
+        angle = min(abs(error), self.turn_pulse_rad, budget) if error is not None else 0.0
+        if angle + 1e-9 < self.policy.corner_min_correction_rad or self.startup_correction_count >= self.policy.corner_max_corrections:
+            return False
+        self.startup_correction_goal = self.startup_correction_used + angle
+        self.startup_correction_omega = self.turn_calibration.rate(error)
+        self.startup_correction_count += 1
+        self._transition(NavigationState.STARTUP_SCAN_CORRECTING, now)
+        return True
+
+    def _startup_scan_pause(self, now):
+        """Acquire observations between scan steps, then proceed without requiring tags.
+
+        Args:
+            now: Current ROS time in seconds.
+
+        Returns:
+            Stopped NavigationOutput selecting another scan step, a bounded closure
+            correction, or the first forward leg after one complete nominal revolution.
+        """
+        if now - self.phase_started < self.policy.startup_scan_pause_s:
+            return self._output('Startup scan pause; allowing camera and EKF updates')
+        if self.startup_scan_used == 0:
+            self.startup_reference = self.vision.stable_tag_yaws(now, self.phase_started)
+        if self.startup_scan_used + 1e-9 < 2 * math.pi:
+            self.startup_scan_goal = min(2 * math.pi, self.startup_scan_used + self.policy.startup_scan_step_rad)
+            self._transition(NavigationState.STARTUP_SCAN_TURN, now)
+            return self._output('Startup scan: next stopped-to-stopped rotation step ready')
+        self.startup_heading_residual = self._startup_heading_error(now)
+        if self._select_startup_correction(self.startup_heading_residual, now):
+            return self._output('Startup scan heading correction selected; ' + self.startup_source)
+        self._begin_leg(now)
+        return self._output('Startup scan complete; first forward leg ready; ' + self.startup_source)
+
+    def _startup_scan_correct(self, now):
+        """Apply a closure pivot, then acquire another stopped observation before proceeding."""
+        if (self.startup_correction_used + 1e-9 >= self.startup_correction_goal
+                or now - self.phase_started >= self.policy.corner_timeout_s):
+            self._transition(NavigationState.STARTUP_SCAN_PAUSE, now)
+            return self._output('Startup closure pulse finished; stopped to recheck heading')
+        return self._output('Startup scan closure correction', angular=self.startup_correction_omega)
 
     def _begin_leg(self, now, heading=None, target=None):
         """Start a nominal side, optionally aimed toward a fixed late-mission vertex.

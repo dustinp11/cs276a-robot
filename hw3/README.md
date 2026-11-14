@@ -18,6 +18,23 @@ source /opt/ros/jazzy/setup.bash
 ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
 ```
 
+Before the first forward leg, the octagon profile now performs one staged
+startup revolution: initial 3-second acquisition pause → nominal 45-degree left
+step → 3-second pause, repeated until the commanded angle totals 360 degrees.
+Use the existing `[-0.35, +0.35]` pivot calibration. Callbacks and SLAM stay active
+throughout; no tag is required to complete any step. A final stopped comparison
+with the original tag orientation, or a confident EKF heading, may select bounded
+left/right closure corrections before forward motion. Missing feedback continues
+from calibrated prediction. The original start position and heading are latched
+before scanning and are never silently replaced by the post-scan pose.
+
+`startup_scan_enabled`, `startup_scan_step_rad`, and `startup_scan_pause_s`
+configure this behavior. It is enabled by the octagon launch and disabled in the
+base square profile. Startup progress and corrections are recorded in navigation
+CSV columns prefixed with `startup_`. Initial mapping can benefit from the extra
+observations; the scan does not certify physical closure or guarantee every tag
+will be visible.
+
 All **eight legs** use nominal 75 cm forward travel. All **eight corners** use
 30-degree first stage → 3-second pause → finish toward 45 degrees → pause →
 optional bounded corrections. The last two legs follow the same sequence as the
@@ -28,8 +45,9 @@ an explicit override in the octagon launch. No special maneuver begins at corner
 The measured left pivot uses `[-0.35, +0.35]`, with a nominal rate of pi/2 rad/s.
 Small corrections can turn either direction: CW uses `[+0.37, -0.37]`. Midpoint
 pauses recheck remaining distance and heading, with another pause after each
-optional pivot. Preserve the 5-degree minimum, three-attempt limit, 15-degree
-nominal angular budget, and bounded distance adjustments. Missing observations
+optional pivot. The octagon launch sets `turn_pulse_rad` to 5 degrees, keeping
+each requested correction small. Preserve the 5-degree minimum, three-attempt
+limit, 15-degree nominal angular budget, and bounded distance adjustments. Missing observations
 never block completion. Straight inputs remain `[+0.185, +0.15]` at nominal
 0.203 m/s. No surveyed coordinates are used for navigation.
 
@@ -189,7 +207,8 @@ The square now uses the following phases on each of four sides:
   `navigation.corner_turn_duration_s` (default 0.95 seconds) using the measured
   fixed CCW inputs. This shorter pulse aims to reduce physical overshoot. The
   stored rate still predicts 85.5° for 0.95 seconds; the EKF and logs do not pretend
-  it measured 90°. There is no 360° scan. Duration has control-tick quantization.
+  it measured 90°. There is no 360° scan at a corner; the octagon startup scan happens only once.
+  Duration has control-tick quantization.
 - Stop for another `navigation.turn_settle_s` (default 3 seconds), allowing delayed
   camera observations to arrive. A missing observation never extends this pause.
 - Prefer the same tag's face-normal orientation before and after turning to
@@ -213,7 +232,7 @@ The square now uses the following phases on each of four sides:
   there are no hard-coded tag IDs. Missing covariance or mixed-confidence updates
   cause the EKF fallback to be skipped.
 - The image-associated EKF yaw must also have standard deviation at most
-  `navigation.corner_heading_sigma_rad` (default 10 degrees). Apply half the
+  `navigation.corner_heading_sigma_rad` (default 15 degrees). Apply half the
   resulting absolute heading error (`navigation.corner_ekf_weight: 0.5`), then
   enforce the pulse and total-angle limits. Set weight to zero to disable this
   fallback. A new post-stop image is required after each pulse; timer-published

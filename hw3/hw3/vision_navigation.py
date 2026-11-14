@@ -14,6 +14,9 @@ from .coordinates import wrap_angle
 class NavigationPolicy:
     """Limits in meters, radians, and seconds; clearances are from robot center."""
 
+    startup_scan_enabled: bool = False
+    startup_scan_step_rad: float = math.pi / 4
+    startup_scan_pause_s: float = 3.0
     vision_timeout_s: float = 1.0
     corner_timeout_s: float = 18.0
     corner_turn_duration_s: float = 0.95
@@ -25,7 +28,7 @@ class NavigationPolicy:
     corner_max_corrections: int = 3
     corner_ekf_weight: float = 0.5
     corner_landmark_sigma_m: float = 0.06
-    corner_heading_sigma_rad: float = math.pi / 18
+    corner_heading_sigma_rad: float = math.pi / 12
     late_scan_start_corner: int = 99
     late_scan_max_angle_rad: float = math.pi / 2
     return_segment_m: float = 0.25
@@ -45,8 +48,10 @@ class NavigationPolicy:
             None. Raises ValueError for invalid phase timing, angles, or counts.
         """
         if not all(math.isfinite(getattr(self, f.name)) and getattr(self, f.name) > 0
-                   for f in fields(self) if f.name != 'corner_ekf_weight'):
+                   for f in fields(self) if f.name not in ('corner_ekf_weight', 'startup_scan_enabled')):
             raise ValueError('Navigation vision limits must be finite and positive.')
+        if not isinstance(self.startup_scan_enabled, bool) or self.startup_scan_step_rad > math.pi / 2:
+            raise ValueError('Startup scan enable must be boolean and each step at most 90 degrees.')
         if not math.isfinite(self.corner_ekf_weight) or not 0 <= self.corner_ekf_weight <= 1:
             raise ValueError('Corner EKF weight must be finite and between zero and one.')
         if int(self.late_scan_start_corner) != self.late_scan_start_corner:
