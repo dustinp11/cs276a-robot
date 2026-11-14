@@ -2,6 +2,7 @@
 
 import math
 import unittest
+from dataclasses import replace
 
 from hw3.square_navigation import NavigationState, SquareNavigator
 from hw3.turn_calibration import TurnCalibration
@@ -10,10 +11,19 @@ from hw3.waypoint_navigation import polygon_vertices
 
 
 class TestWaypointNavigation(unittest.TestCase):
-    def navigator(self, laps=1):
-        """Return a started eight-side mission with fixed-rate motor calibration."""
+    def navigator(self, laps=1, side_count=8, side_length_m=0.75):
+        """Return a started polygon mission with fixed-rate motor calibration.
+
+        Args:
+            laps: Number of consecutive laps without resetting SLAM.
+            side_count: Number of polygon sides.
+            side_length_m: Nominal side length in meters.
+
+        Returns:
+            Started pure controller with shortened acquisition pauses for simulations.
+        """
         calibration = TurnCalibration(-0.35, 0.35, 0.37, -0.37, math.pi / 2, math.pi / 2)
-        nav = SquareNavigator(side_count=8, side_length_m=0.75,
+        nav = SquareNavigator(side_count=side_count, side_length_m=side_length_m,
                               turn_calibration=calibration,
                               policy=NavigationPolicy(waypoint_motion_enabled=True,
                                                       waypoint_laps=laps,
@@ -211,6 +221,63 @@ class TestWaypointNavigation(unittest.TestCase):
         for laps in (0, -1, 1.5, True):
             with self.assertRaises(ValueError):
                 NavigationPolicy(waypoint_laps=laps)
+
+    def test_aggressive_square_corrections_reach_budget_then_resume(self):
+        """Allow larger square pivots without unbounded spinning on repeated feedback.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks 15-degree pulse duration, 45-degree budget and eventual travel.
+        """
+        nav = self.navigator(side_count=4, side_length_m=1.8288)
+        nav.policy = replace(nav.policy, corner_max_corrections=4,
+                             waypoint_correction_budget_rad=math.pi / 4)
+        nav.turn_pulse_rad = math.pi / 12
+        correcting_ticks = 0
+        for tick in range(500):
+            now = tick * 0.05
+            if nav.waypoint.phase == 'after_turn':
+                self.feedback(nav, (0, 0, math.pi / 2 + 0.55), now)
+            output = nav.step(now)
+            correcting_ticks += output.state == NavigationState.CORRECTING
+            if nav.waypoint.phase == 'first_half':
+                break
+        self.assertEqual(output.state, NavigationState.DRIVING)
+        self.assertEqual(nav.waypoint.attempts, 3)
+        self.assertAlmostEqual(nav.waypoint.correction_used, math.pi / 4)
+        self.assertEqual(correcting_ticks, 12)
+
+    def test_two_six_foot_square_laps_use_four_fixed_vertices(self):
+        """Repeat the same six-foot square with nominal 90-degree left turns and no tags.
+
+        Args:
+            None.
+
+        Returns:
+            None. Verifies eight attempted legs, six-foot edges, and repeated lap targets.
+        """
+        length = 6 * 0.3048
+        nav = self.navigator(laps=2, side_count=4, side_length_m=length)
+        targets, main_turns = {}, 0
+        previous_state = None
+        for tick in range(4000):
+            output = nav.step(tick * 0.05)
+            targets[output.waypoint_index] = nav.target
+            if output.state == NavigationState.TURNING and previous_state != output.state:
+                main_turns += 1
+                self.assertGreater(output.angular_omega_radps, 0)
+            previous_state = output.state
+            if not nav.is_active:
+                break
+        self.assertEqual(nav.state, NavigationState.COMPLETED)
+        self.assertEqual((nav.side_index, main_turns, nav.waypoint.lap_index), (8, 8, 2))
+        for index in range(1, 5):
+            self.assertEqual(targets[index], targets[index + 4])
+        for a, b in zip(((0, 0),) + nav.waypoint.vertices[:-1], nav.waypoint.vertices):
+            self.assertAlmostEqual(math.dist(a, b), length)
+        self.assertEqual(nav.target, (nav.x0_slam, nav.y0_slam))
 
     def simulated_underturn(self, observations):
         """Run a planar plant whose pivots achieve only 85 percent of the nominal angle.

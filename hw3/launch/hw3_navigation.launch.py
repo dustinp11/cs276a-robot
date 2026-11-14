@@ -32,7 +32,7 @@ def _launch_arguments():
         DeclareLaunchArgument('auto_start', default_value='false',
                               description='Start motion automatically instead of waiting for the service'),
         DeclareLaunchArgument('mission', default_value='square',
-                              description='square, octagon, or slam_octagon motion profile'),
+                              description='square, octagon, slam_octagon, or slam_square motion profile'),
         DeclareLaunchArgument('square_size_ft', default_value='6.0',
                               description='Square side length in feet'),
     ]
@@ -84,28 +84,36 @@ def _control_nodes(context):
         Five ROS nodes; navigation remains idle unless explicitly started.
     """
     mission = LaunchConfiguration('mission').perform(context)
-    if mission not in ('square', 'octagon', 'slam_octagon'):
-        raise ValueError('Mission must be square, octagon, or slam_octagon.')
+    if mission not in ('square', 'octagon', 'slam_octagon', 'slam_square'):
+        raise ValueError('Mission must be square, octagon, slam_octagon, or slam_square.')
     turn_overrides = {'turn_calibration.enabled': True}
     navigation_overrides = {}
-    if mission in ('octagon', 'slam_octagon'):
+    if mission in ('octagon', 'slam_octagon', 'slam_square'):
+        waypoint_mode = mission in ('slam_octagon', 'slam_square')
         turn_overrides.update({'turn_calibration.ccw_left_input': -0.35,
                                'turn_calibration.ccw_right_input': 0.35,
                                'turn_calibration.ccw_radps': 1.5707963267948966})
-        navigation_overrides = {'navigation.side_count': 8,
+        navigation_overrides = {'navigation.side_count': 4 if mission == 'slam_square' else 8,
                                 'navigation.manual_motion_enabled': mission == 'octagon',
-                                'navigation.waypoint_motion_enabled': mission == 'slam_octagon',
-                                'navigation.waypoint_laps': 2 if mission == 'slam_octagon' else 1,
+                                'navigation.waypoint_motion_enabled': waypoint_mode,
+                                'navigation.waypoint_laps': 2 if waypoint_mode else 1,
                                 'navigation.manual_forward_pause_s': 1.0,
                                 'navigation.manual_midpoint_pause_s': 1.0,
                                 'navigation.startup_scan_enabled': False,
-                                'navigation.turn_pulse_rad': (0.17453292519943295 if mission == 'slam_octagon'
+                                'navigation.turn_pulse_rad': (0.17453292519943295 if waypoint_mode
                                                               else 0.08726646259971647),
-                                'navigation.side_length_m': 0.80 if mission == 'slam_octagon' else 0.75,
+                                'navigation.side_length_m': (0.0 if mission == 'slam_square'
+                                                             else 0.80 if waypoint_mode else 0.75),
                                 'navigation.late_scan_start_corner': 99,  # regular corners; no look-around or homing
                                 'navigation.corner_turn_duration_s': 0.5,
                                 'navigation.corner_stage_angle_rad': 0.7853981633974483,
                                 'navigation.corner_ekf_weight': 0.0}
+        if mission == 'slam_square':
+            navigation_overrides.update({
+                'navigation.turn_pulse_rad': 0.2617993877991494,
+                'navigation.corner_max_corrections': 4,
+                'navigation.waypoint_correction_budget_rad': 0.7853981633974483,
+            })
     return [
         _hw3_node('visual_odometry_node'),
         _hw3_node('ekf_slam_node', overrides={
