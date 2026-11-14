@@ -1,6 +1,6 @@
 ## SLAM waypoint octagon (`slam_octogan` branch)
 
-This optional mode generates eight fixed 85 cm-side octagon endpoints in the
+This optional mode generates eight fixed 80 cm-side octagon endpoints in the
 starting robot frame, transforms them once into the SLAM frame, and ends with
 the starting point as its final target. It does not load surveyed tag positions.
 The original timed octagon remains available using `hw3_octagon.launch.py`.
@@ -31,7 +31,7 @@ terminal 1. Existing camera, detector, motors, estimator and CSV recording are
 reused. Launching from this directory writes CSVs into `~/robot_testing/hw3_results`.
 
 Flow: **initial 3 s acquisition → pivot toward fixed target → pause 3 s → optional
-heading corrections → drive approximately 42.5 cm → pause 3 s → optional
+heading corrections → drive approximately 40 cm → pause 3 s → optional
 heading/distance adjustment → drive remainder → pause 3 s → next target**.
 Each corrective pivot also gets a three-second stopped acquisition interval.
 The initial acquisition is bounded and never requires visible tags. Main pivots
@@ -54,7 +54,7 @@ up to the configured `turn_pulse_rad` (10 degrees in this profile), within a
 The 20 Hz timer quantizes physical pulse duration, so a nominal 5-degree pulse
 can last two ticks and command approximately 9 degrees; test short pulses on the
 actual surface. Distance adjustments are bounded by 15 cm, with a total
-commanded travel cap of 100 cm per side. Near a waypoint (8 cm), confident feedback
+commanded travel cap of 95 cm per side. Near a waypoint (8 cm), confident feedback
 can end that leg early; a confident midpoint estimate beyond its endpoint plane
 also ends the leg rather than chasing backward. There is no unbounded final homing loop: completion means
 all targets were attempted within their budgets, not proven physical closure.
