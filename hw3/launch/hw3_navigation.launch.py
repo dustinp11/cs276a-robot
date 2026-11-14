@@ -32,7 +32,7 @@ def _launch_arguments():
         DeclareLaunchArgument('auto_start', default_value='false',
                               description='Start motion automatically instead of waiting for the service'),
         DeclareLaunchArgument('mission', default_value='square',
-                              description='square or octagon calibrated motion profile'),
+                              description='square, octagon, or slam_octagon motion profile'),
         DeclareLaunchArgument('square_size_ft', default_value='6.0',
                               description='Square side length in feet'),
     ]
@@ -84,16 +84,17 @@ def _control_nodes(context):
         Five ROS nodes; navigation remains idle unless explicitly started.
     """
     mission = LaunchConfiguration('mission').perform(context)
-    if mission not in ('square', 'octagon'):
-        raise ValueError('Mission must be square or octagon.')
+    if mission not in ('square', 'octagon', 'slam_octagon'):
+        raise ValueError('Mission must be square, octagon, or slam_octagon.')
     turn_overrides = {'turn_calibration.enabled': True}
     navigation_overrides = {}
-    if mission == 'octagon':
+    if mission in ('octagon', 'slam_octagon'):
         turn_overrides.update({'turn_calibration.ccw_left_input': -0.35,
                                'turn_calibration.ccw_right_input': 0.35,
                                'turn_calibration.ccw_radps': 1.5707963267948966})
         navigation_overrides = {'navigation.side_count': 8,
-                                'navigation.manual_motion_enabled': True,
+                                'navigation.manual_motion_enabled': mission == 'octagon',
+                                'navigation.waypoint_motion_enabled': mission == 'slam_octagon',
                                 'navigation.manual_forward_pause_s': 1.0,
                                 'navigation.manual_midpoint_pause_s': 1.0,
                                 'navigation.startup_scan_enabled': False,

@@ -7,6 +7,7 @@ import math
 from .coordinates import wrap_angle
 from .late_navigation import LateNavigation
 from .turn_calibration import ForwardCalibration
+from .waypoint_navigation import WaypointNavigation
 from .vision_navigation import NavigationPolicy, VisualFeedback, relative_tag_turn, startup_view_match
 
 
@@ -163,6 +164,7 @@ class SquareNavigator:
         self._reset_midpoint()
         self.vision = VisualFeedback(self.policy)
         self.late = LateNavigation(self, NavigationState)
+        self.waypoint = WaypointNavigation(self, NavigationState)
         self._reset_startup_scan()
 
     def _reset_startup_scan(self):
@@ -264,6 +266,8 @@ class SquareNavigator:
 
     def _best_pose(self):
         """Use a fresh EKF pose if available, otherwise use calibrated command prediction."""
+        if self.policy.waypoint_motion_enabled and self.waypoint.pose is not None:
+            return self.waypoint.pose
         now = self.last_tick
         if self.latest_slam_pose is not None and now is not None:
             if -0.05 <= now - self.latest_pose_stamp_s <= self.pose_timeout_s:
@@ -323,6 +327,8 @@ class SquareNavigator:
 
     def _remaining_distance(self):
         """Report start/vertex distance during late navigation, otherwise the side remainder."""
+        if self.policy.waypoint_motion_enabled and self.waypoint.pose is not None:
+            return math.dist(self.waypoint.pose[:2], self.target)
         if self.late.active or (self.state == NavigationState.COMPLETED
                                 and self.policy.late_scan_start_corner <= self.side_count):
             return math.dist((self.navigation_x, self.navigation_y), self.target)
@@ -343,6 +349,8 @@ class SquareNavigator:
             return self._output(self.stop_reason)
         if self.phase_started is None:
             self.phase_started = now
+        if self.policy.waypoint_motion_enabled:
+            return self.waypoint.step(now)
         if self.policy.manual_motion_enabled:
             return self._manual_step(now)
         if self.late.active:

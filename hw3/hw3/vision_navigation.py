@@ -15,6 +15,13 @@ class NavigationPolicy:
     """Limits in meters, radians, and seconds; clearances are from robot center."""
 
     manual_motion_enabled: bool = False
+    waypoint_motion_enabled: bool = False
+    waypoint_pause_s: float = 1.0
+    waypoint_position_tolerance_m: float = 0.08
+    waypoint_max_position_jump_m: float = 0.35
+    waypoint_max_heading_jump_rad: float = math.pi / 5
+    waypoint_max_distance_adjustment_m: float = 0.15
+    waypoint_correction_budget_rad: float = math.pi / 6
     manual_forward_pause_s: float = 1.0
     manual_midpoint_pause_s: float = 1.0
     startup_scan_enabled: bool = False
@@ -56,10 +63,16 @@ class NavigationPolicy:
             None. Raises ValueError for invalid phase timing, angles, or counts.
         """
         if not all(math.isfinite(getattr(self, f.name)) and getattr(self, f.name) > 0
-                   for f in fields(self) if f.name not in ('corner_ekf_weight', 'startup_scan_enabled', 'manual_motion_enabled')):
+                   for f in fields(self) if f.name not in ('corner_ekf_weight', 'startup_scan_enabled', 'manual_motion_enabled', 'waypoint_motion_enabled')):
             raise ValueError('Navigation vision limits must be finite and positive.')
         if not isinstance(self.manual_motion_enabled, bool):
             raise ValueError('Manual motion enable must be boolean.')
+        if not isinstance(self.waypoint_motion_enabled, bool):
+            raise ValueError('Waypoint motion enable must be boolean.')
+        if self.manual_motion_enabled and self.waypoint_motion_enabled:
+            raise ValueError('Select manual motion or waypoint motion, not both.')
+        if self.waypoint_correction_budget_rad > math.pi / 4:
+            raise ValueError('Waypoint corrections must total at most 45 degrees per checkpoint.')
         if not isinstance(self.startup_scan_enabled, bool) or self.startup_scan_step_rad > math.pi / 2:
             raise ValueError('Startup scan enable must be boolean and each step at most 90 degrees.')
         if not self.startup_view_search_step_rad <= self.startup_view_search_max_rad <= math.pi / 2:

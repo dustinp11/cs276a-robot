@@ -103,6 +103,13 @@
 
     # Closed-Loop Square Navigation settings
     navigation:
+      waypoint_motion_enabled: false  # mission:=slam_octagon selects fixed-waypoint feedback
+      waypoint_pause_s: 1.0
+      waypoint_position_tolerance_m: 0.08
+      waypoint_max_position_jump_m: 0.35
+      waypoint_max_heading_jump_rad: 0.6283185307179586
+      waypoint_max_distance_adjustment_m: 0.15
+      waypoint_correction_budget_rad: 0.5235987755982988
       manual_motion_enabled: false    # octagon launch enables timed motion without feedback corrections
       manual_forward_pause_s: 1.0      # pause after a full side, immediately before the next turn
       manual_midpoint_pause_s: 1.0     # pause halfway through each manual forward side

@@ -1,3 +1,75 @@
+## SLAM waypoint octagon (`slam_octogan` branch)
+
+This optional mode generates eight fixed 75 cm-side octagon endpoints in the
+starting robot frame, transforms them once into the SLAM frame, and ends with
+the starting point as its final target. It does not load surveyed tag positions.
+The original timed octagon remains available using `hw3_octagon.launch.py`.
+
+On the robot, after the branch has been committed, pushed, and pulled, terminal 1:
+
+```bash
+cd ~/robot_testing
+source /opt/ros/jazzy/setup.bash
+source rubikpi_ros2/install/setup.bash
+colcon build --base-paths hw3 --packages-select hw3 &&
+source install/setup.bash &&
+ros2 launch hw3 hw3_navigation.launch.py mission:=slam_octagon
+```
+
+Terminal 2:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/robot_testing/install/setup.bash
+ros2 topic info /ekf_slam/pose --verbose
+ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
+```
+
+Use exactly one pose publisher and one navigation stack. Stop with
+`ros2 service call /stop_navigation std_srvs/srv/Trigger '{}'` or Ctrl+C in
+terminal 1. Existing camera, detector, motors, estimator and CSV recording are
+reused. Launching from this directory writes CSVs into `~/robot_testing/hw3_results`.
+
+Flow: **initial 1 s acquisition → pivot toward fixed target → pause 1 s → optional
+heading corrections → drive approximately half a side → pause 1 s → optional
+heading/distance adjustment → drive remainder → pause 1 s → next target**.
+The initial acquisition is bounded and never requires visible tags. Main pivots
+use the calibrated rate for the target bearing, capped at 90 degrees per corner.
+The motor pairs match the timed octagon; CW is allowed for correction. There are
+no startup scans, center-facing detours, or indefinite tag waits.
+
+SLAM feedback only changes commands at stopped checkpoints. Acceptance requires
+three distinct post-stop known-tag image samples with positions within 5 cm and
+headings within 5 degrees. One known tag is enough. Pose and image must be fresh,
+and pose covariance must satisfy the existing position/heading limits (defaults
+0.40 m and 0.40 rad). The candidate must differ from calibrated prediction by at
+most 0.35 m and 36 degrees; rejected/unavailable feedback uses prediction. Delayed
+images captured before the stop are excluded. These limits are configurable,
+not evidence that SLAM is physically accurate.
+
+Heading updates use at most three pulses per checkpoint, at least 5 degrees,
+up to the configured `turn_pulse_rad` (5 degrees in this profile), within a
+30-degree nominal checkpoint budget. Each pulse gets another acquisition pause.
+The 20 Hz timer quantizes physical pulse duration, so a nominal 5-degree pulse
+can last two ticks and command approximately 9 degrees; test short pulses on the
+actual surface. Distance adjustments are bounded by 15 cm, with a total
+commanded travel cap of 90 cm per side. Near a waypoint (8 cm), confident feedback
+can end that leg early; a confident midpoint estimate beyond its endpoint plane
+also ends the leg rather than chasing backward. There is no unbounded final homing loop: completion means
+all targets were attempted within their budgets, not proven physical closure.
+
+Settings are `navigation.waypoint_*` in `config/hw3_params.yaml`. Timing values
+must be decimals (`1.0`, `2.0`), not integers (`1`, `2`), because ROS declares them
+as doubles. The main launch overrides select the mode and octagon calibration.
+The existing navigation CSV reports the fixed target, accepted/predicted control
+pose, remaining target distance, commands, and acceptance/rejection reason in
+`corner_feedback_source`. EKF CSVs continue recording raw estimator output.
+
+Local validation: `../.venv/bin/python hw3/run_tests.py` from the repository root.
+Tests cover no-tag completion, fixed targets, jump/stale/unstable rejection,
+both correction directions, bounded attempts/distance, manual stop, and a
+synthetic underturn case. ROS/hardware validation is still required.
+
 ## Octagon trial
 
 Build the same HW3 package and launch the octagon profile:
