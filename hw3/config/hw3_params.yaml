@@ -1,0 +1,160 @@
+/**:
+  ros__parameters:
+    # Frame identifiers
+    robot_frame: "base_link"
+    camera_frame: "camera_frame"
+    map_frame: "map"
+
+    # Camera extrinsics on robot base (matching HW2 robot configuration)
+    # Optical frame: X right, Y down, Z forward
+    # Body frame: X forward, Y left, Z up
+    camera_mount:
+      x_m: 0.0
+      y_m: 0.0
+      z_m: 0.2
+      roll_deg: 0.0
+      pitch_deg: 0.0
+      yaw_deg: 0.0
+
+    # AprilTag detection quality thresholds
+    quality:
+      min_decision_margin: 20.0
+      max_hamming: 1
+      max_tag_distance_m: 5.0
+      min_tag_distance_m: 0.1
+      max_height_error_m: 0.25
+      max_tilt_deg: 35.0
+
+    # Visual Odometry settings
+    visual_odometry:
+      min_common_tags: 1             # At least 1 common tag required for relative motion
+      max_dt_s: 1.5                  # Maximum allowable time between consecutive frames for VO
+      max_trans_disagreement_m: 0.35 # Outlier rejection threshold for inter-tag agreement
+      max_rot_disagreement_deg: 25.0 # Outlier rejection threshold for inter-tag agreement
+      base_trans_noise_m: 0.02       # Base translation uncertainty per observation (1-sigma)
+      base_rot_noise_rad: 0.03       # Base rotation uncertainty per observation (1-sigma)
+
+    # EKF-SLAM settings
+    ekf_slam:
+      # Motion prediction source: 'visual_odometry' (preferred) or 'cmd_vel' (fallback)
+      motion_prediction_source: "visual_odometry"
+      use_cmd_vel_fallback: true
+      cmd_vel_timeout_s: 0.5
+
+      # Initial robot pose covariance (x, y, theta)
+      initial_covariance:
+        sigma_x_m: 0.001
+        sigma_y_m: 0.001
+        sigma_theta_rad: 0.001
+
+      # Motion model process noise
+      process_noise:
+        # For visual odometry input
+        vo_sigma_x_m: 0.03
+        vo_sigma_y_m: 0.03
+        vo_sigma_theta_rad: 0.04
+        # one-second command noise std; variance grows linearly with elapsed time
+        cmd_sigma_v_mps: 0.15
+        cmd_sigma_lat_mps: 0.05
+        cmd_sigma_omega_radps: 0.20
+
+      # Measurement noise (range and bearing)
+      measurement_noise:
+        sigma_range_m: 0.05
+        sigma_bearing_rad: 0.05
+        # Noise distance scaling factor (uncertainty scales as 1 + (dist/dist_ref)^2)
+        range_scale_dist_m: 2.0
+
+      # Outlier rejection (Chi-squared 2-DOF gate)
+      mahalanobis_gate: 9.21
+
+      # Measurement update mode:
+      # 'all': update all visible mapped tags
+      # 'independent_only': update only tags not solely used for inter-frame VO prediction
+      update_mode: "all"
+
+    # Visualization and Logging
+    visualization:
+      publish_tf: true
+      trajectory_history_len: 2000
+      marker_scale_m: 0.15
+      ellipse_sigma_scale: 2.0  # 2-sigma (95%) confidence ellipse
+
+    # Recording settings
+    recording:
+      default_output_dir: "hw3_results"
+      auto_export_csv: true
+
+    # baseline speed measured at [0.18, 0.15]; left trim raised to 0.185 pending remeasurement
+    forward_calibration:
+      left_input: 0.185
+      right_input: 0.15
+      speed_mps: 0.203
+
+    # both directions: approximately 90 degrees in 1 second at their measured pairs
+    turn_calibration:
+      enabled: false  # navigation launch enables this for mapper and controller
+      ccw_left_input: -0.40
+      ccw_right_input: 0.37
+      cw_left_input: 0.37
+      cw_right_input: -0.37
+      ccw_radps: 1.5707963267948966  # nominal pi/2 radians in 1 second
+      cw_radps: 1.5707963267948966   # positive magnitude: pi/2 radians in 1 second
+
+    # Closed-Loop Square Navigation settings
+    navigation:
+      waypoint_motion_enabled: false  # mission:=slam_octagon selects fixed-waypoint feedback
+      waypoint_laps: 1  # SLAM octagon launch selects two consecutive laps
+      waypoint_pause_s: 3.0
+      waypoint_position_tolerance_m: 0.08
+      waypoint_max_position_jump_m: 0.35
+      waypoint_max_heading_jump_rad: 0.6283185307179586
+      waypoint_max_distance_adjustment_m: 0.15
+      waypoint_correction_budget_rad: 0.5235987755982988
+      manual_motion_enabled: false    # octagon launch enables timed motion without feedback corrections
+      manual_forward_pause_s: 1.0      # pause after a full side, immediately before the next turn
+      manual_midpoint_pause_s: 1.0     # pause halfway through each manual forward side
+      startup_scan_enabled: false     # disabled by the manual octagon profile
+      startup_scan_step_rad: 1.5707963267948966  # four nominal 90-degree left steps
+      startup_scan_step_duration_s: 1.6  # motor-on seconds per startup 90-degree target only
+      startup_scan_pause_s: 3.0        # stopped acquisition before/between/after scan steps
+      startup_view_search_step_rad: 0.5235987755982988  # startup realignment steps of up to 30 degrees
+      startup_view_search_max_rad: 1.5707963267948966  # 90-degree shared startup search/realignment budget
+      startup_view_bearing_tolerance_rad: 0.08726646259971647  # original tag bearing within 5 degrees
+      startup_view_range_tolerance_m: 0.15  # reject likely translation when matching original view
+      side_count: 4                  # octagon launch overrides this to eight
+      side_length_m: 0.0             # zero uses square_size_ft; octagon uses 0.75 m
+      square_size_ft: 6.0             # Side length of the square in feet (6 ft = 1.8288 m)
+      # pivots use turn_calibration rates; straight segments have angular velocity zero
+      waypoint_tolerance_m: 0.01      # nominal distance tolerance (m); speed stays fixed
+      heading_tolerance_rad: 0.12     # Heading tolerance for turn-in-place (~7 deg)
+      pose_timeout_s: 0.60            # Maximum age for using optional EKF corrections (s)
+      max_position_uncertainty_m: 0.40  # confidence threshold for optional EKF corrections (m)
+      max_heading_uncertainty_rad: 0.40 # confidence threshold for optional EKF corrections (rad)
+      turn_pulse_rad: 0.2617993878  # maximum 15-degree alignment pulse before stopping
+      turn_settle_s: 3.0           # stopped time for vision after each pulse
+      # no surveyed wall coordinates are used; distances are from robot center
+      vision_timeout_s: 1.0
+      corner_timeout_s: 18.0
+      corner_turn_duration_s: 0.95      # initial left pulse before pausing for optional correction
+      corner_stage_angle_rad: 3.141592653589793  # octagon profile uses a 30-degree first stage
+      corner_min_observations: 3       # distinct stopped camera frames per tag
+      corner_yaw_spread_rad: 0.05235987755982989  # maximum 3-degree normal-yaw spread
+      corner_min_correction_rad: 0.08726646259971647  # minimum five-degree correction pulse at corners and midpoints
+      corner_correction_limit_rad: 0.2617993877991494  # 15 degrees total optional correction
+      corner_max_corrections: 3
+      corner_ekf_weight: 0.5           # half the error, only with confident post-stop mapped tags
+      corner_landmark_sigma_m: 0.06     # maximum pre-update robot-relative major-axis sigma (m)
+      corner_heading_sigma_rad: 0.2617993877991494  # maximum image-associated yaw sigma (15 deg)
+      late_scan_start_corner: 99        # disabled: keep regular legs/corners through the end
+      late_scan_max_angle_rad: 1.5707963267948966  # one inward look of at most 90 degrees
+      return_segment_m: 0.25            # last-leg distance checkpoint interval
+      return_tolerance_m: 0.10          # estimated distance to recorded start
+      return_max_distance_m: 3.0        # finite best-effort return budget; log failure to reach start
+      drive_budget_factor: 1.25
+      midpoint_max_correction_m: 0.10   # maximum +/- distance adjustment at midpoint
+      midpoint_pause_s: 3.0             # check distance + heading here and after each midpoint pivot
+      control_frequency_hz: 20.0      # Closed-loop control loop frequency (Hz)
+      auto_start: false               # Require explicit start command
+      output_dir: "hw3_results"       # Telemetry output directory
+      log_csv: true                   # Enable navigation_log.csv
