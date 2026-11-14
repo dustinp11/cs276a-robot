@@ -18,83 +18,28 @@ source /opt/ros/jazzy/setup.bash
 ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
 ```
 
-Before the first forward leg, the octagon profile now performs one staged
-startup revolution: initial 3-second acquisition pause → nominal 90-degree left
-step → 3-second pause, repeated four times until the commanded angle totals 360 degrees.
-Each startup step now commands **1.6 seconds** of motor-on time (previously
-1.3 seconds), controlled by `startup_scan_step_duration_s`. Four steps use
-6.4 seconds total motor-on time, excluding acquisition pauses and extra alignment.
-This is an empirical startup timing adjustment; the octagon's 0.5-second corner
-command and shared nominal angular-velocity calibration remain unchanged.
-The controller counts four intended steps separately from integrated commanded
-rotation, so the longer duration does not accidentally skip or shorten step four.
-CSV `startup_scan_angle_rad` remains the original calibrated command integral;
-`startup_scan_nominal_progress_rad` records the intended scan progress separately.
-Neither quantity claims that the physical robot actually completed 360 degrees.
-Use the existing `[-0.35, +0.35]` pivot calibration. Callbacks and SLAM stay active
-throughout; no tag is required to complete any step. After the fourth turn, compare the initial and current stable tag **IDs,
-robot-relative bearings, and ranges**. The initial snapshot and every final
-comparison require three distinct stopped observations. A restored view requires
-all original tags within 5 degrees of their original bearings and 15 cm of their
-original ranges. This targets roughly the same camera view without a surveyed
-map or trusted global EKF heading; it remains an in-place orientation alignment.
+The octagon now runs a simple timed sequence:
 
-If the original tags are missing, continue looking left in stopped 30-degree
-steps, within the shared startup alignment budget. If original tags reappear
-with a large bearing residual, use its sign to search left or right toward their
-original positions. Pause 3 seconds after every step. Once the residual is small
-enough, align toward its original bearing using steps of up to 30 degrees,
-with a smaller final step when the residual is below 30 degrees. Searching and
-visible-tag realignment share at most three startup attempts and a 90-degree
-nominal angular budget. These startup-specific limits leave ordinary corner and
-midpoint corrections at five-degree pulses and their existing 15-degree budget. Range disagreement or inconsistent shared-tag bearing
-changes cannot certify a full view match. A partial view is recorded as partial,
-not as a match for every original tag.
+**45-degree left turn → 75 cm forward → pause 0.5 seconds → repeat eight times.**
 
-When the initial view was never captured, or matching fails within these budgets,
-continue the mission with an explicitly unverified startup result. Face-normal
-or confidence-gated EKF heading feedback remains a fallback. Never redefine the
-recorded start to make closure appear correct. Missing tags never create an
-unbounded wait or search. The initial scan can help build the map, but does not
-guarantee that all landmarks will be visible or accurately located.
+- Left turn: inputs `[-0.35, +0.35]` for `corner_turn_duration_s` (0.5 seconds).
+- Forward: inputs `[+0.185, +0.15]` at nominal 0.203 m/s. A 0.75 m side uses
+  about 3.695 seconds, rounded to the controller's 20 Hz command intervals.
+- Pause: `manual_forward_pause_s` (0.5 seconds), only after each full forward leg.
+- There is no deliberate pause between turning and forward motion. After the
+  eighth forward leg and its pause, stop without another turn.
 
-`startup_scan_enabled`, `startup_scan_step_rad`, `startup_scan_step_duration_s`,
-and `startup_scan_pause_s`
-configure the four-step scan. `startup_view_search_step_rad`,
-`startup_view_search_max_rad`, `startup_view_bearing_tolerance_rad`, and
-`startup_view_range_tolerance_m` configure original-view reacquisition. The
-startup scan is enabled by the octagon launch and disabled in the square profile.
-Navigation CSV columns prefixed with `startup_` record scan/search rotation,
-corrections, matched IDs, verified/partial status, and initial/current stable tag
-positions `[forward_m, left_m]` for diagnosing failed matches.
+The octagon launch enables `manual_motion_enabled`, disables startup scanning,
+and disables late look-around/homing behavior. The simple mode also bypasses
+all staged turns, midpoint pauses, and EKF/vision motion corrections. These
+features cannot change the timed motor commands even if a stale parameter file
+happens to enable them. SLAM, the camera, AprilTag detection, and CSV recording
+continue for evaluation. `/start_navigation` and `/stop_navigation` are unchanged.
 
-All **eight legs** use nominal 75 cm forward travel. All **eight corners** use
-30-degree first stage → 3-second pause → finish toward 45 degrees → pause →
-optional bounded corrections. The last two legs follow the same sequence as the
-first six. Center-looking maneuvers, position-based late-waypoint reorientation,
-and return-to-origin motion are disabled (`late_scan_start_corner: 99`), including
-an explicit override in the octagon launch. No special maneuver begins at corner 6.
-
-The measured left pivot uses `[-0.35, +0.35]`, with a nominal rate of pi/2 rad/s.
-Small corrections can turn either direction: CW uses `[+0.37, -0.37]`. Midpoint
-pauses recheck remaining distance and heading, with another pause after each
-optional pivot. The octagon launch sets `turn_pulse_rad` to 5 degrees, keeping
-each requested correction small. Preserve the 5-degree minimum, three-attempt
-limit, 15-degree nominal angular budget, and bounded distance adjustments. Missing observations
-never block completion. Straight inputs remain `[+0.185, +0.15]` at nominal
-0.203 m/s. No surveyed coordinates are used for navigation.
-
-The profile lives in `launch/hw3_navigation.launch.py`. The experimental late
-navigation helper remains available but is not entered by either default profile.
-Existing CSV formats, start/stop services, and build/launch commands are retained.
-The full octagon approximately returns to the start by geometry; it no longer
-actively drives toward an estimated start position.
-
-If pose coordinates or heading alternate between incompatible estimates, check
-`ros2 topic info /ekf_slam/pose --verbose` before tuning motion. Multiple SLAM
-publishers can interleave unrelated map frames even when they use the same frame
-name. Stop older launch sessions before running the current stack; confidence
-thresholds and extra corrections cannot reconcile conflicting pose publishers.
+The launch profile settings are in `launch/hw3_navigation.launch.py`. The square
+profile and the optional feedback-controller code remain available separately;
+the sections below describe that optional behavior, not the active manual octagon.
+Physical turn angle and travel distance still depend on the measured motor calibration.
 
 # HW3: Visual Odometry, EKF-SLAM, and Testing Infrastructure
 

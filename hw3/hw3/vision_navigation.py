@@ -14,6 +14,8 @@ from .coordinates import wrap_angle
 class NavigationPolicy:
     """Limits in meters, radians, and seconds; clearances are from robot center."""
 
+    manual_motion_enabled: bool = False
+    manual_forward_pause_s: float = 0.5
     startup_scan_enabled: bool = False
     startup_scan_step_rad: float = math.pi / 2
     startup_scan_step_duration_s: float = 1.6
@@ -53,8 +55,10 @@ class NavigationPolicy:
             None. Raises ValueError for invalid phase timing, angles, or counts.
         """
         if not all(math.isfinite(getattr(self, f.name)) and getattr(self, f.name) > 0
-                   for f in fields(self) if f.name not in ('corner_ekf_weight', 'startup_scan_enabled')):
+                   for f in fields(self) if f.name not in ('corner_ekf_weight', 'startup_scan_enabled', 'manual_motion_enabled')):
             raise ValueError('Navigation vision limits must be finite and positive.')
+        if not isinstance(self.manual_motion_enabled, bool):
+            raise ValueError('Manual motion enable must be boolean.')
         if not isinstance(self.startup_scan_enabled, bool) or self.startup_scan_step_rad > math.pi / 2:
             raise ValueError('Startup scan enable must be boolean and each step at most 90 degrees.')
         if not self.startup_view_search_step_rad <= self.startup_view_search_max_rad <= math.pi / 2:

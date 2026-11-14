@@ -193,7 +193,8 @@ class SquareNavigator:
         if self.state != NavigationState.IDLE:
             return False, 'Mission already started; reset/relaunch for a new run.'
         self.is_active, self.state = True, NavigationState.WAITING_FOR_POSE
-        return True, 'Starting first leg; no prior tags required.'
+        message = 'Starting timed turn-and-drive mission' if self.policy.manual_motion_enabled else 'Starting first leg; no prior tags required.'
+        return True, message
 
     def stop(self, reason='Manual stop requested'):
         """Latch a terminal stop; ordinary start requests cannot resume motion."""
@@ -342,6 +343,8 @@ class SquareNavigator:
             return self._output(self.stop_reason)
         if self.phase_started is None:
             self.phase_started = now
+        if self.policy.manual_motion_enabled:
+            return self._manual_step(now)
         if self.late.active:
             return self.late.step(now)
         handlers = {NavigationState.WAITING_FOR_POSE: self._wait_for_start,
@@ -373,11 +376,56 @@ class SquareNavigator:
             self.x0_slam, self.y0_slam, self.theta0_slam = self._best_pose()
             self.navigation_yaw, self.heading_time = self.theta0_slam, now
             self.origin_latched = True
+        if self.policy.manual_motion_enabled:
+            return self._manual_begin_turn(now)
         if self.policy.startup_scan_enabled:
             self._transition(NavigationState.STARTUP_SCAN_PAUSE, now)
             return self._output('Startup scan: initial stopped acquisition before one full revolution')
         self._begin_leg(now)
         return self._drive(now)
+
+    def _manual_step(self, now):
+        """Run only timed turn, uninterrupted forward travel, and the post-forward pause."""
+        handlers = {NavigationState.WAITING_FOR_POSE: self._wait_for_start,
+                    NavigationState.TURNING: self._manual_turn,
+                    NavigationState.DRIVING: self._manual_drive,
+                    NavigationState.STOPPING: self._manual_pause}
+        return handlers[self.state](now)
+
+    def _manual_begin_turn(self, now):
+        """Start one fixed left turn; feedback remains available for logging only."""
+        self.current_wp_idx = self.side_index + 1
+        self.course_heading = self.theta0_slam + (self.side_index + 1) * self.corner_angle_rad
+        self.corner_used = 0.0
+        self.corner_source = 'Timed manual turn; no feedback corrections'
+        self._transition(NavigationState.TURNING, now)
+        return self._output('Manual left turn', angular=self.turn_calibration.rate(1))
+
+    def _manual_turn(self, now):
+        """Finish the timed turn and immediately begin the next straight segment."""
+        if now - self.phase_started + 1e-9 >= self.policy.corner_turn_duration_s:
+            self._begin_leg(now, heading=self.course_heading)
+            return self._manual_drive(now)
+        return self._output('Manual left turn', angular=self.turn_calibration.rate(1))
+
+    def _manual_drive(self, now):
+        """Travel one nominal side at fixed inputs without midpoint or vision adjustments."""
+        self.progress = self.drive_used
+        duration = self.square_size_m / self.forward.speed_mps
+        if now - self.phase_started + 1e-9 >= duration:
+            self.side_index += 1
+            self._transition(NavigationState.STOPPING, now)
+            return self._output('Manual forward segment finished; 0.5-second pause')
+        return self._output('Manual forward segment', linear=self.forward.speed_mps)
+
+    def _manual_pause(self, now):
+        """Pause only after forward travel, then turn again or finish after the last side."""
+        if now - self.phase_started + 1e-9 < self.policy.manual_forward_pause_s:
+            return self._output('Manual post-forward pause')
+        if self.side_index >= self.side_count:
+            self.state, self.is_active = NavigationState.COMPLETED, False
+            return self._output(f'Manual mission complete: {self.side_count} timed turns and sides')
+        return self._manual_begin_turn(now)
 
     def _startup_scan_turn(self, now):
         """Rotate one calibrated scan step, then stop for stationary camera observations."""

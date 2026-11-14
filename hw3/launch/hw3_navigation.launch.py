@@ -93,13 +93,15 @@ def _control_nodes(context):
                                'turn_calibration.ccw_right_input': 0.35,
                                'turn_calibration.ccw_radps': 1.5707963267948966})
         navigation_overrides = {'navigation.side_count': 8,
-                                'navigation.startup_scan_enabled': True,
+                                'navigation.manual_motion_enabled': True,
+                                'navigation.manual_forward_pause_s': 0.5,
+                                'navigation.startup_scan_enabled': False,
                                 'navigation.turn_pulse_rad': 0.08726646259971647,
                                 'navigation.side_length_m': 0.75,
                                 'navigation.late_scan_start_corner': 99,  # regular corners; no look-around or homing
                                 'navigation.corner_turn_duration_s': 0.5,
-                                'navigation.corner_stage_angle_rad': 0.5235987755982988,
-                                'navigation.corner_ekf_weight': 0.5}
+                                'navigation.corner_stage_angle_rad': 0.7853981633974483,
+                                'navigation.corner_ekf_weight': 0.0}
     return [
         _hw3_node('visual_odometry_node'),
         _hw3_node('ekf_slam_node', overrides={
