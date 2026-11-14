@@ -95,6 +95,7 @@ def _control_nodes(context):
         navigation_overrides = {'navigation.side_count': 8,
                                 'navigation.manual_motion_enabled': mission == 'octagon',
                                 'navigation.waypoint_motion_enabled': mission == 'slam_octagon',
+                                'navigation.waypoint_laps': 2 if mission == 'slam_octagon' else 1,
                                 'navigation.manual_forward_pause_s': 1.0,
                                 'navigation.manual_midpoint_pause_s': 1.0,
                                 'navigation.startup_scan_enabled': False,

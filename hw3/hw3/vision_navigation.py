@@ -16,6 +16,7 @@ class NavigationPolicy:
 
     manual_motion_enabled: bool = False
     waypoint_motion_enabled: bool = False
+    waypoint_laps: int = 1
     waypoint_pause_s: float = 3.0
     waypoint_position_tolerance_m: float = 0.08
     waypoint_max_position_jump_m: float = 0.35
@@ -71,6 +72,8 @@ class NavigationPolicy:
             raise ValueError('Waypoint motion enable must be boolean.')
         if self.manual_motion_enabled and self.waypoint_motion_enabled:
             raise ValueError('Select manual motion or waypoint motion, not both.')
+        if isinstance(self.waypoint_laps, bool) or int(self.waypoint_laps) != self.waypoint_laps:
+            raise ValueError('Waypoint laps must be a positive integer.')
         if self.waypoint_correction_budget_rad > math.pi / 4:
             raise ValueError('Waypoint corrections must total at most 45 degrees per checkpoint.')
         if not isinstance(self.startup_scan_enabled, bool) or self.startup_scan_step_rad > math.pi / 2:

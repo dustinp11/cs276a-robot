@@ -233,6 +233,7 @@ class SquareNavigationNode(Node):
                     'late_alignment_corrections', 'late_alignment_correction_rad',
                     'return_travel_m', 'estimated_start_distance_m',
                     'start_x_slam_m', 'start_y_slam_m',
+                    'lap_index',
                 ])
             self.csv_initialized = True
         except Exception as e:
@@ -476,6 +477,7 @@ class SquareNavigationNode(Node):
                         self.navigator.late._home_distance(),
                         self.navigator.x0_slam,
                         self.navigator.y0_slam,
+                        self.navigator.waypoint.lap_index if self.navigator.policy.waypoint_motion_enabled else 1,
                     ])
             except OSError as error:
                 self.get_logger().warn(f'Navigation CSV write failed: {error}', throttle_duration_sec=5.0)

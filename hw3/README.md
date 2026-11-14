@@ -2,7 +2,9 @@
 
 This optional mode generates eight fixed 80 cm-side octagon endpoints in the
 starting robot frame, transforms them once into the SLAM frame, and ends with
-the starting point as its final target. It does not load surveyed tag positions.
+the starting point as its final target. The SLAM octagon profile runs **two
+consecutive laps** (16 sides) over those same eight endpoints, without resetting
+SLAM, the origin or the learned map between laps. It does not load surveyed tag positions.
 The original timed octagon remains available using `hw3_octagon.launch.py`.
 
 On the robot, after the branch has been committed, pushed, and pulled, terminal 1:
@@ -65,6 +67,10 @@ as doubles. The main launch overrides select the mode and octagon calibration.
 The existing navigation CSV reports the fixed target, accepted/predicted control
 pose, remaining target distance, commands, and acceptance/rejection reason in
 `corner_feedback_source`. EKF CSVs continue recording raw estimator output.
+`lap_index` in the navigation CSV distinguishes laps 1 and 2; waypoint indices
+are 1–8 on the first lap and 9–16 on the second. Both laps share the output files;
+the landmark CSV contains the latest map, not a separate snapshot per lap.
+`navigation.waypoint_laps` is overridden to `2` by the SLAM octagon launch profile.
 
 Local validation: `../.venv/bin/python hw3/run_tests.py` from the repository root.
 Tests cover no-tag completion, fixed targets, jump/stale/unstable rejection,

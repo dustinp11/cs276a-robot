@@ -46,6 +46,11 @@ class WaypointNavigation:
         """Return the shared validated navigation settings."""
         return self.nav.policy
 
+    @property
+    def lap_index(self):
+        """Return the one-based lap number, retaining the final lap after completion."""
+        return min(self.nav.side_index // self.nav.side_count + 1, self.policy.waypoint_laps)
+
     def _emit(self, message, linear=0.0, angular=0.0):
         """Publish the accepted/predicted pose and feedback reason through existing telemetry."""
         self.nav.navigation_x, self.nav.navigation_y, self.nav.navigation_yaw = self.pose
@@ -81,9 +86,10 @@ class WaypointNavigation:
 
     def _select_target(self):
         """Select a precomputed vertex, never a new point relative to the current pose."""
-        self.nav.target = self.vertices[self.nav.side_index]
+        vertex_index = self.nav.side_index % self.nav.side_count
+        self.nav.target = self.vertices[vertex_index]
         self.nav.current_wp_idx = self.nav.side_index + 1
-        self.nominal_heading = self.nav.theta0_slam + (self.nav.side_index + 1) * self.nav.corner_angle_rad
+        self.nominal_heading = self.nav.theta0_slam + (vertex_index + 1) * self.nav.corner_angle_rad
         self.nav.course_heading = self.nominal_heading
 
     def _pause(self, now, phase):
@@ -239,9 +245,9 @@ class WaypointNavigation:
         """Complete exactly the configured number of fixed targets, including return to start."""
         if self.phase == 'end':
             self.nav.side_index += 1
-        if self.nav.side_index == self.nav.side_count:
+        if self.nav.side_index == self.nav.side_count * self.policy.waypoint_laps:
             self.nav.state, self.nav.is_active = self.states.COMPLETED, False
-            return self._emit('Waypoint mission complete; final target is the starting point')
+            return self._emit(f'Waypoint mission complete: {self.policy.waypoint_laps} laps; final target is the starting point')
         self._select_target()
         return self._start_side(now)
 

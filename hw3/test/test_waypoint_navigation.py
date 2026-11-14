@@ -10,12 +10,13 @@ from hw3.waypoint_navigation import polygon_vertices
 
 
 class TestWaypointNavigation(unittest.TestCase):
-    def navigator(self):
+    def navigator(self, laps=1):
         """Return a started eight-side mission with fixed-rate motor calibration."""
         calibration = TurnCalibration(-0.35, 0.35, 0.37, -0.37, math.pi / 2, math.pi / 2)
         nav = SquareNavigator(side_count=8, side_length_m=0.75,
                               turn_calibration=calibration,
                               policy=NavigationPolicy(waypoint_motion_enabled=True,
+                                                      waypoint_laps=laps,
                                                       waypoint_pause_s=1.0),
                               turn_pulse_rad=math.radians(10))
         nav.start()
@@ -180,6 +181,36 @@ class TestWaypointNavigation(unittest.TestCase):
         self.assertEqual(policy.waypoint_pause_s, 3.0)
         self.assertEqual(policy.manual_midpoint_pause_s, 1.0)
         self.assertEqual(policy.manual_forward_pause_s, 1.0)
+
+    def test_two_laps_reuse_targets_and_estimator_feedback(self):
+        """Traverse sixteen sides without resetting the frame or feedback tracker between laps.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks repeated fixed targets, lap numbering, and final completion.
+        """
+        nav, targets = self.navigator(laps=2), {}
+        feedback_tracker = nav.vision
+        for tick in range(4000):
+            output = nav.step(tick * 0.05)
+            targets[output.waypoint_index] = nav.target
+            self.assertIs(nav.vision, feedback_tracker)
+            if not nav.is_active:
+                break
+        self.assertEqual(nav.state, NavigationState.COMPLETED)
+        self.assertEqual(nav.side_index, 16)
+        self.assertEqual(nav.waypoint.lap_index, 2)
+        for index in range(1, 9):
+            self.assertEqual(targets[index], targets[index + 8])
+        self.assertEqual(nav.target, (nav.x0_slam, nav.y0_slam))
+
+    def test_invalid_lap_counts_are_rejected(self):
+        """Reject zero, fractional and boolean lap counts before starting motion."""
+        for laps in (0, -1, 1.5, True):
+            with self.assertRaises(ValueError):
+                NavigationPolicy(waypoint_laps=laps)
 
     def simulated_underturn(self, observations):
         """Run a planar plant whose pivots achieve only 85 percent of the nominal angle.

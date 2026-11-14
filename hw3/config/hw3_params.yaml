@@ -104,6 +104,7 @@
     # Closed-Loop Square Navigation settings
     navigation:
       waypoint_motion_enabled: false  # mission:=slam_octagon selects fixed-waypoint feedback
+      waypoint_laps: 1  # SLAM octagon launch selects two consecutive laps
       waypoint_pause_s: 3.0
       waypoint_position_tolerance_m: 0.08
       waypoint_max_position_jump_m: 0.35
