@@ -16,8 +16,9 @@ class NavigationPolicy:
 
     startup_scan_enabled: bool = False
     startup_scan_step_rad: float = math.pi / 2
+    startup_scan_step_duration_s: float = 1.6
     startup_scan_pause_s: float = 3.0
-    startup_view_search_step_rad: float = math.pi / 12
+    startup_view_search_step_rad: float = math.pi / 6
     startup_view_search_max_rad: float = math.pi / 2
     startup_view_bearing_tolerance_rad: float = math.pi / 36
     startup_view_range_tolerance_m: float = 0.15

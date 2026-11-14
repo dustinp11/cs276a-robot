@@ -175,6 +175,7 @@ class SquareNavigator:
             None. Clears initial view snapshots, search budgets, and correction counters.
         """
         self.startup_scan_used = self.startup_scan_goal = 0.0
+        self.startup_scan_nominal_progress = self.startup_scan_step_goal = 0.0
         self.startup_reference = {}
         self.startup_view_reference, self.startup_view_current, self.startup_view_ids = {}, {}, []
         self.startup_view_matched = False
@@ -382,6 +383,7 @@ class SquareNavigator:
         """Rotate one calibrated scan step, then stop for stationary camera observations."""
         if (self.startup_scan_used + 1e-9 >= self.startup_scan_goal
                 or now - self.phase_started >= self.policy.corner_timeout_s):
+            self.startup_scan_nominal_progress = self.startup_scan_step_goal
             self._transition(NavigationState.STARTUP_SCAN_PAUSE, now)
             return self._output('Startup scan step finished; stopped for camera')
         return self._output('Startup scan: calibrated left rotation', angular=self.turn_calibration.rate(1))
@@ -390,6 +392,11 @@ class SquareNavigator:
         """Compare the current stopped view with the initial relative tag positions."""
         self.startup_view_current = self.vision.stable_tag_positions(now, self.phase_started)
         return startup_view_match(self.startup_view_reference, self.startup_view_current, self.policy)
+
+    def _startup_adjustment_budget(self):
+        """Share one finite angular budget across startup search and visible-tag realignment."""
+        return max(0.0, self.policy.startup_view_search_max_rad
+                   - self.startup_search_used - self.startup_correction_used)
 
     def _select_startup_view_search(self, now):
         """Seek the original view after four turns without trusting a global SLAM heading.
@@ -402,8 +409,9 @@ class SquareNavigator:
             Missing original tags initially require no search. Once visible, the
             signed bearing error permits either direction for coarse alignment.
         """
-        budget = self.policy.startup_view_search_max_rad - self.startup_search_used
-        if not self.startup_view_reference or budget < self.policy.corner_min_correction_rad:
+        budget = self._startup_adjustment_budget()
+        if (not self.startup_view_reference or budget < self.policy.corner_min_correction_rad
+                or self.startup_correction_count >= self.policy.corner_max_corrections):
             return False
         current = self.vision.stable_tag_positions(now, self.phase_started)
         match = self._startup_view_match(now)
@@ -413,13 +421,14 @@ class SquareNavigator:
             error = self.policy.startup_view_search_step_rad
         else:
             error, _, complete = match
-            fine_budget = min(self.policy.corner_correction_limit_rad - self.startup_correction_used,
-                              max(0, self.policy.corner_max_corrections - self.startup_correction_count) * self.turn_pulse_rad)
+            fine_budget = min(budget, max(0, self.policy.corner_max_corrections
+                              - self.startup_correction_count) * self.policy.startup_view_search_step_rad)
             if complete or abs(error) <= max(0.0, fine_budget) + self.policy.startup_view_bearing_tolerance_rad:
                 return False
         angle = min(abs(error), self.policy.startup_view_search_step_rad, budget)
         self.startup_search_goal = self.startup_search_used + angle
         self.startup_search_omega = self.turn_calibration.rate(error)
+        self.startup_correction_count += 1
         self._transition(NavigationState.STARTUP_VIEW_SEARCH, now)
         return True
 
@@ -451,7 +460,7 @@ class SquareNavigator:
             return 0.0 if self.startup_view_matched else error
         yaws = self.vision.stable_tag_yaws(now, self.phase_started)
         measured = relative_tag_turn(self.startup_reference, yaws,
-                                     self.startup_scan_used + self.startup_search_signed + self.startup_correction_signed)
+                                     self.startup_scan_nominal_progress + self.startup_search_signed + self.startup_correction_signed)
         if measured is not None:
             self.navigation_yaw = wrap_angle(self.theta0_slam + measured)
             self.heading_time, self.startup_source = now, 'Initial-tag orientation closure; original view not verified'
@@ -474,8 +483,8 @@ class SquareNavigator:
         Returns:
             True when a pulse is selected; False when the first forward leg should start.
         """
-        budget = max(0.0, self.policy.corner_correction_limit_rad - self.startup_correction_used)
-        angle = min(abs(error), self.turn_pulse_rad, budget) if error is not None else 0.0
+        budget = self._startup_adjustment_budget()
+        angle = min(abs(error), self.policy.startup_view_search_step_rad, budget) if error is not None else 0.0
         if angle + 1e-9 < self.policy.corner_min_correction_rad or self.startup_correction_count >= self.policy.corner_max_corrections:
             return False
         self.startup_correction_goal = self.startup_correction_used + angle
@@ -496,12 +505,15 @@ class SquareNavigator:
         """
         if now - self.phase_started < self.policy.startup_scan_pause_s:
             return self._output('Startup scan pause; allowing camera and EKF updates')
-        if self.startup_scan_used == 0:
+        if self.startup_scan_nominal_progress == 0:
             self.startup_reference = self.vision.stable_tag_yaws(now, self.phase_started)
             self.startup_view_reference = self.vision.stable_tag_positions(now, self.phase_started)
             self.startup_source = f'Initial view captured: tags {sorted(self.startup_view_reference)}'
-        if self.startup_scan_used + 1e-9 < 2 * math.pi:
-            self.startup_scan_goal = min(2 * math.pi, self.startup_scan_used + self.policy.startup_scan_step_rad)
+        if self.startup_scan_nominal_progress + 1e-9 < 2 * math.pi:
+            remaining = min(self.policy.startup_scan_step_rad, 2 * math.pi - self.startup_scan_nominal_progress)
+            duration = self.policy.startup_scan_step_duration_s * remaining / self.policy.startup_scan_step_rad
+            self.startup_scan_step_goal = self.startup_scan_nominal_progress + remaining
+            self.startup_scan_goal = self.startup_scan_used + self.turn_calibration.ccw_radps * duration
             self._transition(NavigationState.STARTUP_SCAN_TURN, now)
             return self._output('Startup scan: next stopped-to-stopped rotation step ready')
         if self._select_startup_view_search(now):

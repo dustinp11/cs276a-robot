@@ -10,7 +10,7 @@ from hw3.vision_navigation import NavigationPolicy, VisualFeedback, startup_view
 
 class TestStartupScan(unittest.TestCase):
     def navigator(self):
-        """Start the octagon profile with a scan and five-degree correction pulses."""
+        """Start the octagon profile with a scan and small ordinary mission corrections."""
         calibration = TurnCalibration(-0.35, 0.35, 0.37, -0.37, math.pi / 2, math.pi / 2)
         nav = SquareNavigator(side_count=8, side_length_m=0.75, turn_calibration=calibration,
                               turn_pulse_rad=math.pi / 36,
@@ -38,9 +38,14 @@ class TestStartupScan(unittest.TestCase):
         """
         nav = self.navigator()
         previous, turns, pauses = None, 0, 0
+        moving_ticks = []
         for tick in range(1200):
             cmd = nav.step(tick * 0.05)
             turns += int(cmd.state == NavigationState.STARTUP_SCAN_TURN and previous != cmd.state)
+            if cmd.state == NavigationState.STARTUP_SCAN_TURN and previous != cmd.state:
+                moving_ticks.append(0)
+            if cmd.state == NavigationState.STARTUP_SCAN_TURN and cmd.angular_omega_radps:
+                moving_ticks[-1] += 1
             pauses += int(cmd.state == NavigationState.STARTUP_SCAN_PAUSE and previous != cmd.state)
             if cmd.linear_v_mps:
                 break
@@ -49,8 +54,11 @@ class TestStartupScan(unittest.TestCase):
             previous = cmd.state
         self.assertGreater(cmd.linear_v_mps, 0)
         self.assertEqual((turns, pauses), (4, 5))
-        self.assertGreaterEqual(nav.startup_scan_used + 1e-9, 2 * math.pi)
-        self.assertLessEqual(nav.startup_scan_used, 2 * math.pi + math.pi / 40 + 1e-6)
+        self.assertEqual(moving_ticks, [32, 32, 32, 32])
+        expected_angle = 4 * 1.6 * nav.turn_calibration.ccw_radps
+        self.assertGreaterEqual(nav.startup_scan_used + 1e-9, expected_angle)
+        self.assertLessEqual(nav.startup_scan_used, expected_angle + 4 * math.pi / 40 + 1e-6)
+        self.assertAlmostEqual(nav.startup_scan_nominal_progress, 2 * math.pi)
         self.assertEqual(nav.side_index, 0)
         self.assertEqual((nav.x0_slam, nav.y0_slam, nav.theta0_slam), (0, 0, 0))
         self.assertEqual(nav.startup_correction_count, 0)
@@ -89,7 +97,7 @@ class TestStartupScan(unittest.TestCase):
             None.
 
         Returns:
-            None. Under/overshoot select opposite five-degree pulses without relatching origin.
+            None. Under/overshoot select opposite residual-angle pulses without relatching origin.
         """
         for residual in (-10, 10):
             nav = self.navigator()
@@ -97,11 +105,12 @@ class TestStartupScan(unittest.TestCase):
             self.observe(nav, (1, 2, 2.8), 0.4)
             nav.step(3)
             nav.startup_scan_used = 2 * math.pi
+            nav.startup_scan_nominal_progress = 2 * math.pi
             nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
             self.observe(nav, (11, 12, 12.8), 0.4 - math.radians(residual))
             cmd = nav.step(13)
             self.assertEqual(cmd.state, NavigationState.STARTUP_SCAN_CORRECTING)
-            self.assertAlmostEqual(nav.startup_correction_goal, math.radians(5))
+            self.assertAlmostEqual(nav.startup_correction_goal, math.radians(10))
             self.assertEqual(nav.startup_correction_count, 1)
             cmd = nav.step(13.05)
             self.assertLess(cmd.angular_omega_radps * residual, 0)
@@ -113,6 +122,7 @@ class TestStartupScan(unittest.TestCase):
         nav.step(0)
         nav.startup_reference = {7: 0.4}
         nav.startup_scan_used = 2 * math.pi
+        nav.startup_scan_nominal_progress = 2 * math.pi
         self.observe(nav, (1, 2, 2.8), 0.2)
         nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
         nav.step(13)
@@ -133,6 +143,7 @@ class TestStartupScan(unittest.TestCase):
         self.observe(nav, (1, 2, 2.8), 0.4)
         nav.step(3)
         nav.startup_scan_used = 2 * math.pi
+        nav.startup_scan_nominal_progress = 2 * math.pi
         nav.last_command = (0, 0)
         nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
         saw_search = False
@@ -146,6 +157,7 @@ class TestStartupScan(unittest.TestCase):
         self.assertEqual(nav.state, NavigationState.DRIVING)
         self.assertLessEqual(nav.startup_search_used, math.pi / 2 + math.pi / 40 + 1e-6)
         self.assertFalse(nav.startup_view_matched)
+        self.assertEqual(nav.startup_correction_count, 3)
         self.assertIn('not verified', nav.startup_source)
 
     def test_visible_initial_view_can_request_coarse_alignment_in_either_direction(self):
@@ -162,14 +174,51 @@ class TestStartupScan(unittest.TestCase):
             nav.step(0)
             nav.startup_view_reference = {7: (2, 0)}
             nav.startup_scan_used = 2 * math.pi
+            nav.startup_scan_nominal_progress = 2 * math.pi
             nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
             self.observe(nav, (11, 12, 12.8), 0.4 + math.radians(degrees))
             nav.step(13)
-            self.assertEqual(nav.state, NavigationState.STARTUP_VIEW_SEARCH)
-            self.assertAlmostEqual(nav.startup_search_goal, math.radians(15))
+            self.assertEqual(nav.state, NavigationState.STARTUP_SCAN_CORRECTING)
+            self.assertAlmostEqual(nav.startup_correction_goal, math.radians(30))
             cmd = nav.step(13.05)
             self.assertGreater(cmd.angular_omega_radps * degrees, 0)
-            self.assertEqual(nav.startup_correction_count, 0)
+            self.assertEqual(nav.startup_correction_count, 1)
+
+    def test_startup_search_and_alignment_share_three_attempts(self):
+        """Startup reacquisition and bearing adjustment cannot each claim three attempts.
+
+        Args:
+            None.
+
+        Returns:
+            None. Verifies the shared attempt/angle budgets and unchanged ordinary pulse size.
+        """
+        nav = self.navigator()
+        nav.step(0)
+        nav.startup_view_reference = {7: (2, 0)}
+        nav.startup_scan_used = nav.startup_scan_nominal_progress = 2 * math.pi
+        nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
+        nav.step(13)
+        self.assertEqual(nav.startup_correction_count, 1)
+        nav.startup_search_used = nav.startup_search_goal
+        nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 20)
+        self.observe(nav, (21, 22, 22.8), 0.4 + math.radians(40))
+        nav.step(23)
+        self.assertEqual(nav.state, NavigationState.STARTUP_SCAN_CORRECTING)
+        self.assertEqual(nav.startup_correction_count, 2)
+        nav.startup_correction_used = nav.startup_correction_goal
+        nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 30)
+        self.observe(nav, (31, 32, 32.8), 0.4 + math.radians(40))
+        nav.step(33)
+        self.assertEqual(nav.startup_correction_count, 3)
+        nav.startup_search_used = nav.startup_search_goal
+        nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 40)
+        self.observe(nav, (41, 42, 42.8), 0.4 + math.radians(10))
+        nav.step(43)
+        self.assertEqual(nav.state, NavigationState.DRIVING)
+        self.assertEqual(nav.startup_correction_count, 3)
+        self.assertAlmostEqual(nav.turn_pulse_rad, math.radians(5))
+        self.assertAlmostEqual(nav.policy.corner_correction_limit_rad, math.radians(15))
 
     def test_original_view_alignment_finishes_without_relying_on_tag_face_normals(self):
         """Bearing/range agreement can verify closure even when face-normal output is absent.
@@ -184,6 +233,7 @@ class TestStartupScan(unittest.TestCase):
         nav.step(0)
         nav.startup_view_reference = {7: (2, 0)}
         nav.startup_scan_used = 2 * math.pi
+        nav.startup_scan_nominal_progress = 2 * math.pi
         nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
         for stamp in (11, 12, 12.8):
             nav.update_vision(stamp, [[7, 2 * math.cos(0.03), 2 * math.sin(0.03)]], [], None)
@@ -206,6 +256,7 @@ class TestStartupScan(unittest.TestCase):
         nav.step(0)
         nav.startup_view_reference = {7: (2, 0)}
         nav.startup_scan_used = 2 * math.pi
+        nav.startup_scan_nominal_progress = 2 * math.pi
         nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
         for stamp in (11, 12, 12.8):
             nav.update_vision(stamp, [[7, 3, 0]], [], None)
@@ -259,6 +310,7 @@ class TestStartupScan(unittest.TestCase):
         nav.step(0)
         nav.startup_view_reference = {7: (2, 0)}
         nav.startup_scan_used = 2 * math.pi
+        nav.startup_scan_nominal_progress = 2 * math.pi
         nav._transition(NavigationState.STARTUP_SCAN_PAUSE, 10)
         self.assertEqual(nav.step(13).state, NavigationState.STARTUP_VIEW_SEARCH)
         nav.stop()

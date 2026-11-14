@@ -21,8 +21,16 @@ ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
 Before the first forward leg, the octagon profile now performs one staged
 startup revolution: initial 3-second acquisition pause → nominal 90-degree left
 step → 3-second pause, repeated four times until the commanded angle totals 360 degrees.
-Each 90-degree step uses about 1 second of commanded rotation at the nominal
-pi/2 rad/s rate; physical accuracy still depends on the measured calibration.
+Each startup step now commands **1.6 seconds** of motor-on time (previously
+1.3 seconds), controlled by `startup_scan_step_duration_s`. Four steps use
+6.4 seconds total motor-on time, excluding acquisition pauses and extra alignment.
+This is an empirical startup timing adjustment; the octagon's 0.5-second corner
+command and shared nominal angular-velocity calibration remain unchanged.
+The controller counts four intended steps separately from integrated commanded
+rotation, so the longer duration does not accidentally skip or shorten step four.
+CSV `startup_scan_angle_rad` remains the original calibrated command integral;
+`startup_scan_nominal_progress_rad` records the intended scan progress separately.
+Neither quantity claims that the physical robot actually completed 360 degrees.
 Use the existing `[-0.35, +0.35]` pivot calibration. Callbacks and SLAM stay active
 throughout; no tag is required to complete any step. After the fourth turn, compare the initial and current stable tag **IDs,
 robot-relative bearings, and ranges**. The initial snapshot and every final
@@ -31,12 +39,15 @@ all original tags within 5 degrees of their original bearings and 15 cm of their
 original ranges. This targets roughly the same camera view without a surveyed
 map or trusted global EKF heading; it remains an in-place orientation alignment.
 
-If the original tags are missing, continue looking left in stopped 15-degree
-steps, up to a 90-degree total extra search budget. If original tags reappear
+If the original tags are missing, continue looking left in stopped 30-degree
+steps, within the shared startup alignment budget. If original tags reappear
 with a large bearing residual, use its sign to search left or right toward their
 original positions. Pause 3 seconds after every step. Once the residual is small
-enough, use the existing five-degree closure pulses, at most three attempts and
-15 nominal degrees total. Range disagreement or inconsistent shared-tag bearing
+enough, align toward its original bearing using steps of up to 30 degrees,
+with a smaller final step when the residual is below 30 degrees. Searching and
+visible-tag realignment share at most three startup attempts and a 90-degree
+nominal angular budget. These startup-specific limits leave ordinary corner and
+midpoint corrections at five-degree pulses and their existing 15-degree budget. Range disagreement or inconsistent shared-tag bearing
 changes cannot certify a full view match. A partial view is recorded as partial,
 not as a match for every original tag.
 
@@ -47,7 +58,8 @@ recorded start to make closure appear correct. Missing tags never create an
 unbounded wait or search. The initial scan can help build the map, but does not
 guarantee that all landmarks will be visible or accurately located.
 
-`startup_scan_enabled`, `startup_scan_step_rad`, and `startup_scan_pause_s`
+`startup_scan_enabled`, `startup_scan_step_rad`, `startup_scan_step_duration_s`,
+and `startup_scan_pause_s`
 configure the four-step scan. `startup_view_search_step_rad`,
 `startup_view_search_max_rad`, `startup_view_bearing_tolerance_rad`, and
 `startup_view_range_tolerance_m` configure original-view reacquisition. The
