@@ -100,7 +100,7 @@ def _control_nodes(context):
                                 'navigation.startup_scan_enabled': False,
                                 'navigation.turn_pulse_rad': (0.17453292519943295 if mission == 'slam_octagon'
                                                               else 0.08726646259971647),
-                                'navigation.side_length_m': 0.75,
+                                'navigation.side_length_m': 0.85 if mission == 'slam_octagon' else 0.75,
                                 'navigation.late_scan_start_corner': 99,  # regular corners; no look-around or homing
                                 'navigation.corner_turn_duration_s': 0.5,
                                 'navigation.corner_stage_angle_rad': 0.7853981633974483,
