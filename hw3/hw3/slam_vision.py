@@ -118,6 +118,7 @@ class CameraExtrinsics:
         pitch_deg: float = 0.0,
         yaw_deg: float = 0.0,
     ):
+        """Initialize camera mount offset and compute optical-to-body transformations."""
         self.xyz = np.array([x_m, y_m, z_m], dtype=float)
         self.rpy_rad = np.radians([roll_deg, pitch_deg, yaw_deg])
         self.optical_to_body = np.array([
@@ -131,9 +132,11 @@ class CameraExtrinsics:
         self.t_cam_base = invert_transform(self.t_base_cam)
 
     def camera_to_base_transform(self, t_cam_landmark: np.ndarray) -> np.ndarray:
+        """Transform a landmark pose from camera optical frame to robot base frame."""
         return self.t_base_cam @ t_cam_landmark
 
     def landmark_in_base_2d(self, t_cam_landmark: np.ndarray) -> Tuple[float, float, float]:
+        """Compute 2D landmark position (x, y) and yaw in robot base frame."""
         t_base_l = self.camera_to_base_transform(t_cam_landmark)
         x_rel = float(t_base_l[0, 3])
         y_rel = float(t_base_l[1, 3])
@@ -141,6 +144,7 @@ class CameraExtrinsics:
         return x_rel, y_rel, yaw_rel
 
     def landmark_range_bearing(self, t_cam_landmark: np.ndarray) -> Tuple[float, float]:
+        """Compute Euclidean range and bearing angle to landmark in base frame."""
         x_rel, y_rel, _ = self.landmark_in_base_2d(t_cam_landmark)
         return float(math.hypot(x_rel, y_rel)), float(math.atan2(y_rel, x_rel))
 
@@ -215,6 +219,7 @@ class VisualMotionEstimator:
         base_trans_noise_m: float = 0.02,
         base_rot_noise_rad: float = 0.03,
     ):
+        """Initialize motion estimator thresholds, noise variances, and extrinsics."""
         self.extrinsics = extrinsics if extrinsics is not None else CameraExtrinsics()
         self.min_common_tags = min_common_tags
         self.max_dt_s = max_dt_s
@@ -231,6 +236,7 @@ class VisualMotionEstimator:
         stamp_ns: int = 0,
         margins: Optional[Dict[int, float]] = None,
     ) -> VisualMotionEstimate:
+        """Estimate inter-frame planar motion from observed tag displacements."""
         curr_tags = {}
         for tag_id, t_base in t_base_tags_current.items():
             dist = float(np.linalg.norm(t_base[:3, 3]))
@@ -307,6 +313,7 @@ class VisualOdometryNode(Node):
     """ROS 2 Node estimating inter-frame robot motion from AprilTag observations."""
 
     def __init__(self):
+        """Initialize visual odometry node, publishers, subscribers, and TF buffer."""
         super().__init__('visual_odometry_node')
         self._declare_parameters()
         self.estimator = VisualMotionEstimator(
@@ -335,6 +342,7 @@ class VisualOdometryNode(Node):
         self.integrated_x = self.integrated_y = self.integrated_yaw = 0.0
 
     def _declare_parameters(self):
+        """Declare ROS parameters for camera extrinsics and visual odometry tuning."""
         self.declare_parameter('camera_mount.x_m', 0.0)
         self.declare_parameter('camera_mount.y_m', 0.0)
         self.declare_parameter('camera_mount.z_m', 0.2)
@@ -349,6 +357,7 @@ class VisualOdometryNode(Node):
         self.declare_parameter('visual_odometry.base_rot_noise_rad', 0.03)
 
     def on_detections(self, msg: AprilTagDetectionArray):
+        """Process incoming tag detections, estimate delta motion, and publish odometry."""
         stamp = msg.header.stamp
         stamp_s = stamp.sec + stamp.nanosec * 1e-9
         t_base_tags = {}
@@ -397,6 +406,7 @@ class VisualOdometryNode(Node):
 
 
 def visual_odometry_main(args=None):
+    """Run VisualOdometryNode until ROS shutdown."""
     rclpy.init(args=args)
     node = VisualOdometryNode()
     try:
@@ -442,6 +452,7 @@ class EkfSlam:
         range_scale_dist_m: float = 2.0,
         mahalanobis_gate: float = 35.0,
     ):
+        """Initialize EKF-SLAM state vector, covariance matrix, and noise models."""
         self.mu = np.array(initial_robot_pose, dtype=float)
         self.P = np.diag(np.array(initial_robot_sigma, dtype=float) ** 2)
         self.landmarks: Dict[int, int] = {}
@@ -453,15 +464,18 @@ class EkfSlam:
 
     @property
     def robot_pose(self) -> RobotPoseEstimate:
+        """Return current estimated robot pose and 3x3 pose covariance."""
         return RobotPoseEstimate(float(self.mu[0]), float(self.mu[1]), float(wrap_angle(self.mu[2])), self.P[:3, :3].copy())
 
     def get_landmark_pose(self, tag_id: int) -> Optional[LandmarkEstimate]:
+        """Return estimated 2D landmark position and 2x2 covariance for tag_id."""
         if tag_id not in self.landmarks:
             return None
         idx = self.landmarks[tag_id]
         return LandmarkEstimate(tag_id=tag_id, x=float(self.mu[idx]), y=float(self.mu[idx + 1]), covariance=self.P[idx:idx + 2, idx:idx + 2].copy())
 
     def predict_visual_odometry(self, dx: float, dy: float, dtheta: float, cov_override: Optional[np.ndarray] = None):
+        """Propagate state and covariance using visual odometry relative motion."""
         c, s = math.cos(self.mu[2]), math.sin(self.mu[2])
         self.mu[0] += c * dx - s * dy
         self.mu[1] += s * dx + c * dy
@@ -478,6 +492,7 @@ class EkfSlam:
         self._ensure_covariance_symmetry()
 
     def predict_commanded_velocity(self, v_mps: float, omega_radps: float, dt_s: float):
+        """Propagate state and covariance using differential-drive command velocities."""
         if dt_s <= 0.0:
             return
         theta = self.mu[2]
@@ -509,6 +524,7 @@ class EkfSlam:
         self._ensure_covariance_symmetry()
 
     def update_landmark(self, tag_id: int, x_rel: float, y_rel: float, noise_override: Optional[np.ndarray] = None) -> bool:
+        """Update filter with tag measurement or initialize tag if previously unseen."""
         r_meas = math.hypot(x_rel, y_rel)
         beta_meas = wrap_angle(math.atan2(y_rel, x_rel))
         scale = max(1.0, r_meas / self.range_scale_dist_m)
@@ -556,6 +572,7 @@ class EkfSlam:
         return True
 
     def _initialize_landmark(self, tag_id: int, r_meas: float, beta_meas: float, R_meas: np.ndarray):
+        """Augment state vector and covariance matrix with a newly observed landmark."""
         rx, ry, rtheta = self.mu[0], self.mu[1], self.mu[2]
         angle = rtheta + beta_meas
         lx = rx + r_meas * math.cos(angle)
@@ -586,6 +603,7 @@ class EkfSlam:
         self._ensure_covariance_symmetry()
 
     def _ensure_covariance_symmetry(self):
+        """Force symmetry and positive semi-definiteness on covariance matrix P."""
         self.P = 0.5 * (self.P + self.P.T)
         diag = np.diag(self.P)
         if hasattr(diag, '__iter__') and np.any(np.asarray(diag) < 0.0):
@@ -596,6 +614,7 @@ class EkfSlamNode(Node):
     """ROS 2 Node executing 2D EKF-SLAM and publishing visualization markers."""
 
     def __init__(self):
+        """Initialize EKF-SLAM node, extrinsics, parameters, publishers, and subscribers."""
         super().__init__('ekf_slam_node')
         self._declare_parameters()
         self.extrinsics = CameraExtrinsics(
@@ -654,6 +673,7 @@ class EkfSlamNode(Node):
         self.last_cmd_time = time.monotonic()
 
     def _declare_parameters(self):
+        """Declare ROS parameters for camera extrinsics, EKF noise covariances, and logging."""
         self.declare_parameter('camera_mount.x_m', 0.0)
         self.declare_parameter('camera_mount.y_m', 0.0)
         self.declare_parameter('camera_mount.z_m', 0.2)
@@ -678,6 +698,7 @@ class EkfSlamNode(Node):
         self.declare_parameter('recording.default_output_dir', 'hw3_results')
 
     def on_cmd_vel(self, msg: Twist):
+        """Update motion prediction using applied differential-drive velocity commands."""
         now = time.monotonic()
         dt = max(0.0, min(now - self.last_cmd_time, 0.15))
         self.last_cmd_time = now
@@ -688,6 +709,7 @@ class EkfSlamNode(Node):
             self._publish_pose()
 
     def on_vo_motion(self, msg: TwistWithCovarianceStamped):
+        """Update motion prediction using visual odometry relative displacement twist."""
         if self.pred_source == 'visual_odometry':
             self.ekf.predict_visual_odometry(
                 dx=msg.twist.twist.linear.x,
@@ -697,6 +719,7 @@ class EkfSlamNode(Node):
             self._publish_pose()
 
     def on_detections(self, msg: AprilTagDetectionArray):
+        """Update landmarks and robot pose from AprilTag detections and publish feedback."""
         stamp_s = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         accepted_tags = []
         known_ids = []
@@ -745,6 +768,7 @@ class EkfSlamNode(Node):
         self.feedback_pub.publish(fb_msg)
 
     def _publish_pose(self, stamp=None):
+        """Publish current estimated pose, broadcast map-to-base TF, and record trajectory."""
         pose = self.ekf.robot_pose
         msg = PoseWithCovarianceStamped()
         msg.header.stamp = self.get_clock().now().to_msg() if stamp is None else stamp
@@ -780,6 +804,7 @@ class EkfSlamNode(Node):
         })
 
     def _publish_markers(self):
+        """Publish visualization marker array for all estimated landmark positions."""
         markers = MarkerArray()
         for tag_id, idx in self.ekf.landmarks.items():
             m = Marker()
@@ -802,6 +827,7 @@ class EkfSlamNode(Node):
         self.marker_pub.publish(markers)
 
     def export_csvs(self):
+        """Write current trajectory history and landmark estimates to CSV files."""
         try:
             export_trajectory_csv(self.trajectory_history, self.output_dir / 'ekf_slam_trajectory.csv')
             lm_dict = {}
@@ -817,11 +843,13 @@ class EkfSlamNode(Node):
             self.get_logger().warn(f'Failed to export CSVs: {e}')
 
     def destroy_node(self):
+        """Export final trajectory and landmark CSVs before destroying the node."""
         self.export_csvs()
         return super().destroy_node()
 
 
 def ekf_slam_main(args=None):
+    """Run EkfSlamNode until ROS shutdown."""
     rclpy.init(args=args)
     node = EkfSlamNode()
     try:
@@ -839,6 +867,7 @@ def ekf_slam_main(args=None):
 # =============================================================================
 
 def export_trajectory_csv(trajectory: List[dict], output_path: Union[str, Path]):
+    """Write robot trajectory points and uncertainties to a CSV file."""
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, 'w', newline='', encoding='utf-8') as f:
@@ -853,6 +882,7 @@ def export_trajectory_csv(trajectory: List[dict], output_path: Union[str, Path])
 
 
 def export_landmarks_csv(landmarks: Dict[int, dict], output_path: Union[str, Path]):
+    """Write estimated landmark positions and covariances to a CSV file."""
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, 'w', newline='', encoding='utf-8') as f:
@@ -868,6 +898,7 @@ def export_landmarks_csv(landmarks: Dict[int, dict], output_path: Union[str, Pat
 
 class DataRecorder:
     def __init__(self, output_path: Union[str, Path]):
+        """Initialize data recorder with destination output file path."""
         self.output_path = Path(output_path)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.records: List[dict] = []
@@ -875,9 +906,11 @@ class DataRecorder:
         self._last_frame_time = 0.0
 
     def record_cmd_vel(self, v: float, omega: float, stamp_s: Optional[float] = None):
+        """Record latest commanded linear and angular velocities."""
         self._last_cmd = {'v': float(v), 'omega': float(omega), 'time': time.time() if stamp_s is None else float(stamp_s)}
 
     def record_frame(self, stamp_s: float, detections: List[dict], cmd_v: Optional[float] = None, cmd_omega: Optional[float] = None):
+        """Record timestamped detections and velocity inputs for one camera frame."""
         dt = 0.0 if self._last_frame_time == 0.0 else max(0.0, stamp_s - self._last_frame_time)
         self._last_frame_time = stamp_s
         v = self._last_cmd['v'] if cmd_v is None else float(cmd_v)
@@ -888,6 +921,7 @@ class DataRecorder:
         })
 
     def save(self, path: Optional[Union[str, Path]] = None):
+        """Serialize recorded frames and commands to a JSON file."""
         target = self.output_path if path is None else Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, 'w', encoding='utf-8') as f:
@@ -898,6 +932,7 @@ class MapPublisherNode(Node):
     """Republishes saved landmarks and trajectory with latched QoS for RViz."""
 
     def __init__(self, landmarks_csv: str = 'hw3_results/ekf_slam_landmarks.csv', trajectory_csv: Optional[str] = 'hw3_results/ekf_slam_trajectory.csv', map_frame: str = 'map'):
+        """Initialize map publisher node and load landmark and trajectory CSVs."""
         super().__init__('map_publisher_node')
         self.map_frame = map_frame
         self.landmarks = self._load_landmarks(landmarks_csv)
@@ -908,6 +943,7 @@ class MapPublisherNode(Node):
         self.create_timer(1.0, self._publish_all)
 
     def _load_landmarks(self, path):
+        """Load landmark ID and coordinate tuples from a CSV file."""
         res = []
         p = Path(path)
         if p.exists():
@@ -918,6 +954,7 @@ class MapPublisherNode(Node):
         return res
 
     def _load_trajectory(self, path):
+        """Load trajectory points (x, y, theta) from a CSV file."""
         res = []
         p = Path(path)
         if p.exists():
@@ -928,6 +965,7 @@ class MapPublisherNode(Node):
         return res
 
     def _publish_all(self):
+        """Publish visual markers and path messages for loaded map elements."""
         m_arr = MarkerArray()
         for tag_id, x, y in self.landmarks:
             m = Marker()
@@ -949,6 +987,7 @@ class MapPublisherNode(Node):
 
 
 def publish_map_main(args=None):
+    """Run MapPublisherNode until ROS shutdown."""
     rclpy.init(args=args)
     node = MapPublisherNode()
     try:
@@ -962,14 +1001,17 @@ def publish_map_main(args=None):
 
 
 def record_data_main(args=None):
+    """Entry point for offline data recording."""
     print("Record data script active.")
 
 
 def replay_data_main(args=None):
+    """Entry point for offline data replay."""
     print("Replay data script active.")
 
 
 def export_map_main(args=None):
+    """Entry point for map CSV export."""
     print("Export map script active.")
 
 
@@ -1084,6 +1126,7 @@ class VisualFeedback:
     """Track accepted AprilTag feedback and relative travel anchors."""
 
     def __init__(self, policy: NavigationPolicy):
+        """Initialize vision feedback cache and yaw history deque."""
         self.policy = policy
         self.stamp = -math.inf
         self.known_ids = set()
@@ -1091,9 +1134,11 @@ class VisualFeedback:
         self.yaw_history = deque(maxlen=128)
 
     def begin_leg(self, heading: float):
+        """Reset or prepare visual feedback state at the start of a leg."""
         pass
 
     def update(self, stamp: float, tags: list, known_ids: list, clearance, pose, predicted_progress, tag_yaws=None, landmark_sigmas=None, ekf_heading=None):
+        """Update tag cache, yaw history, and clearance from latest detection frame."""
         if stamp <= self.stamp:
             return
         self.stamp = stamp
@@ -1102,9 +1147,11 @@ class VisualFeedback:
         self.yaw_history.append((stamp, self.tag_yaws))
 
     def stable_tag_yaws(self, now: float, stopped_at: float) -> dict:
+        """Return tag normal yaws snapshot observed during settle window."""
         return dict(self.tag_yaws)
 
     def fresh(self, now: float) -> bool:
+        """Return whether latest tag detections are within the vision timeout window."""
         return now - self.stamp <= self.policy.vision_timeout_s
 
 
@@ -1112,6 +1159,7 @@ class BaseNavigationNode(Node):
     """Shared base ROS 2 Node for mission control and telemetry CSV logging."""
 
     def __init__(self, node_name: str = 'navigation_node'):
+        """Initialize base navigation node, parameters, ROS interfaces, and timer."""
         super().__init__(node_name)
         self._declare_parameters()
         self.calibration = read_turn_calibration(self)
@@ -1124,6 +1172,7 @@ class BaseNavigationNode(Node):
         self._create_control_timer()
 
     def _declare_parameters(self):
+        """Declare parameters for mission policy, square sizing, and controller gains."""
         for field in fields(NavigationPolicy):
             self.declare_parameter('navigation.' + field.name, field.default)
         self.declare_parameter('navigation.square_size_ft', 6.0)
@@ -1142,20 +1191,24 @@ class BaseNavigationNode(Node):
         self.declare_parameter('navigation.turn_settle_s', 3.0)
 
     def _create_publishers(self):
+        """Create velocity command, navigation status, and target waypoint publishers."""
         self.cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.status_pub = self.create_publisher(String, '/navigation/status', 10)
         self.waypoint_pub = self.create_publisher(PointStamped, '/navigation/target_waypoint', 10)
 
     def _create_subscriptions(self):
+        """Create subscriptions for EKF pose, vision feedback, and start trigger."""
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, '/ekf_slam/pose', self.on_pose_received, 10)
         self.vision_sub = self.create_subscription(String, '/ekf_slam/vision_feedback', self.on_vision_feedback, 10)
         self.start_sub = self.create_subscription(Empty, '/start_navigation', self.on_start_topic, 10)
 
     def _create_services(self):
+        """Advertise start and stop mission trigger services."""
         self.start_srv = self.create_service(Trigger, '/start_navigation', self.on_start_service)
         self.stop_srv = self.create_service(Trigger, '/stop_navigation', self.on_stop_service)
 
     def _configure_logging(self):
+        """Initialize CSV file and write header for telemetry logging."""
         self.log_csv = self.get_parameter('navigation.log_csv').value
         self.output_dir = Path(self.get_parameter('navigation.output_dir').value)
         self.log_file_path = self.output_dir / 'navigation_log.csv'
@@ -1175,10 +1228,12 @@ class BaseNavigationNode(Node):
                 self.get_logger().warn(f'Failed to initialize navigation CSV: {e}')
 
     def _create_control_timer(self):
+        """Create periodic timer executing the mission control loop."""
         freq = max(1.0, float(self.get_parameter('navigation.control_frequency_hz').value))
         self.control_timer = self.create_timer(1.0 / freq, self.control_loop_tick)
 
     def on_pose_received(self, msg: PoseWithCovarianceStamped):
+        """Forward received EKF-SLAM pose and uncertainty to navigator."""
         stamp_s = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         x_slam = msg.pose.pose.position.x
         y_slam = msg.pose.pose.position.y
@@ -1193,6 +1248,7 @@ class BaseNavigationNode(Node):
             self.navigator.update_ekf_pose(x_slam, y_slam, theta_slam, sigma_pos, sigma_theta, stamp_s)
 
     def on_vision_feedback(self, message: String):
+        """Parse vision feedback JSON payload and forward to navigator."""
         try:
             data = json.loads(message.data)
             stamp = float(data['stamp_s'])
@@ -1207,10 +1263,12 @@ class BaseNavigationNode(Node):
             pass
 
     def on_start_topic(self, _msg: Empty):
+        """Trigger navigator start upon receiving empty message on start topic."""
         if self.navigator is not None:
             self.navigator.start()
 
     def on_start_service(self, _req, res: Trigger.Response):
+        """Handle ROS 2 start trigger service request."""
         if self.navigator is not None:
             success, message = self.navigator.start()
             res.success = success
@@ -1221,6 +1279,7 @@ class BaseNavigationNode(Node):
         return res
 
     def on_stop_service(self, _req, res: Trigger.Response):
+        """Handle ROS 2 stop trigger service request and stop the robot."""
         if self.navigator is not None:
             success, message = self.navigator.stop("User requested stop via service")
             self._publish_stop()
@@ -1232,9 +1291,11 @@ class BaseNavigationNode(Node):
         return res
 
     def _publish_stop(self):
+        """Publish zero-velocity Twist command to immediately halt the robot."""
         self.cmd_vel_pub.publish(Twist())
 
     def control_loop_tick(self):
+        """Step navigator state machine, publish cmd_vel and status, and log to CSV."""
         if self.navigator is None:
             return
         now_s = self.get_clock().now().nanoseconds * 1e-9

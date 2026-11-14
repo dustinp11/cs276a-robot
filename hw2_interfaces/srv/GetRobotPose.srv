@@ -1,6 +1,0 @@
-# Request (empty)
----
-bool success
-string message
-geometry_msgs/PoseStamped pose
-int32[] tag_ids

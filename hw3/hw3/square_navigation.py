@@ -45,6 +45,7 @@ class SquareNavigator:
         max_heading_uncertainty_rad: float = 0.40,
         **_ignored,
     ):
+        """Initialize two-lap square controller parameters, waypoints, and state."""
         self.policy = policy or NavigationPolicy(manual_motion_enabled=True, two_lap_square=True)
         self.side_count = 4
         self.square_size_m = side_length_m if side_length_m > 0 else square_size_ft * 0.3048
@@ -91,6 +92,7 @@ class SquareNavigator:
         self.vision = VisualFeedback(self.policy)
 
     def _build_waypoints(self) -> list[Waypoint]:
+        """Construct local square corner waypoints in meters from side length."""
         s = self.square_size_m
         return [
             Waypoint(0, 0.0, 0.0, "WP0: Origin"),
@@ -101,15 +103,18 @@ class SquareNavigator:
         ]
 
     def _nav_to_slam_point(self, x_nav: float, y_nav: float) -> tuple[float, float]:
+        """Transform navigation frame (x, y) point into SLAM coordinate frame."""
         c, s = math.cos(self.theta0_slam), math.sin(self.theta0_slam)
         return (self.x0_slam + c * x_nav - s * y_nav, self.y0_slam + s * x_nav + c * y_nav)
 
     def slam_to_nav_frame(self, x_slam: float, y_slam: float, theta_slam: float) -> tuple[float, float, float]:
+        """Transform SLAM pose into navigation frame relative to latched origin."""
         dx, dy = x_slam - self.x0_slam, y_slam - self.y0_slam
         c, s = math.cos(-self.theta0_slam), math.sin(-self.theta0_slam)
         return (c * dx - s * dy, s * dx + c * dy, wrap_angle(theta_slam - self.theta0_slam))
 
     def start(self) -> tuple[bool, str]:
+        """Activate square navigation mission and transition to initial wait state."""
         if self.turn_calibration is None:
             return False, 'Turn calibration is required.'
         if self.state != NavigationState.IDLE:
@@ -119,12 +124,14 @@ class SquareNavigator:
         return True, 'Starting two-lap square mission'
 
     def stop(self, reason: str = 'Manual stop requested') -> tuple[bool, str]:
+        """Halt navigation mission with a given reason."""
         self.stop_reason = reason
         self.is_active = False
         self.state = NavigationState.STOPPED
         return True, reason
 
     def update_ekf_pose(self, x_slam: float, y_slam: float, theta_slam: float, sigma_pos_m: float, sigma_theta_rad: float, stamp_s: float):
+        """Update controller with latest EKF-SLAM pose and covariance estimates."""
         self.latest_slam_pose = (x_slam, y_slam, wrap_angle(theta_slam))
         self.latest_uncertainty = (sigma_pos_m, sigma_theta_rad)
         self.latest_pose_stamp_s = stamp_s
@@ -136,9 +143,11 @@ class SquareNavigator:
             self.navigation_x, self.navigation_y = x_slam, y_slam
 
     def update_vision(self, stamp: float, tags: list, known_ids: list, clearance, tag_yaws, sigmas, ekf_heading):
+        """Update visual feedback state with latest AprilTag detection results."""
         self.vision.update(stamp, tags, known_ids, clearance, self.latest_slam_pose, self.drive_used, tag_yaws, sigmas, ekf_heading)
 
     def _best_pose(self) -> tuple[float, float, float]:
+        """Return latest valid SLAM pose or dead-reckoned odometry if timed out."""
         now = self.last_tick
         if self.latest_slam_pose is not None and now is not None:
             if -0.05 <= now - self.latest_pose_stamp_s <= self.pose_timeout_s:
@@ -146,10 +155,12 @@ class SquareNavigator:
         return self.navigation_x, self.navigation_y, self.navigation_yaw
 
     def _transition(self, state: NavigationState, now: float):
+        """Switch navigation state and record the phase transition timestamp."""
         self.state = state
         self.phase_started = now
 
     def _heading_error(self) -> float:
+        """Compute wrapped heading error toward current target or course heading."""
         if self.state in (NavigationState.RELOCALIZING_TURN, NavigationState.RETURN_DRIVING):
             rx, ry, rtheta = self.slam_to_nav_frame(*self._best_pose())
             target_heading = math.atan2(0.0 - ry, 0.0 - rx)
@@ -166,6 +177,7 @@ class SquareNavigator:
         return wrap_angle(self.course_heading - self.navigation_yaw)
 
     def _remaining_distance(self) -> float:
+        """Compute remaining Euclidean distance to target waypoint or leg end."""
         if self.state in (NavigationState.RELOCALIZING_TURN, NavigationState.RETURN_DRIVING, NavigationState.RETURN_PAUSE):
             rx, ry, _ = self.slam_to_nav_frame(*self._best_pose())
             return math.hypot(rx, ry)
@@ -177,6 +189,7 @@ class SquareNavigator:
         return max(0.0, self.square_size_m - self.drive_used)
 
     def _output(self, message: str, linear: float = 0.0, angular: float = 0.0) -> NavigationOutput:
+        """Construct a navigation telemetry output container for the current tick."""
         self.last_command = (linear, angular)
         rx, ry, rtheta = self.slam_to_nav_frame(*self._best_pose())
         return NavigationOutput(
@@ -196,6 +209,7 @@ class SquareNavigator:
         )
 
     def step(self, current_time_s: float) -> NavigationOutput:
+        """Advance navigation state machine by one discrete time step."""
         now = float(current_time_s)
         dt = 0.0 if self.last_tick is None else max(0.0, min(now - self.last_tick, 0.15))
         self.navigation_x += self.last_command[0] * dt * math.cos(self.navigation_yaw)
@@ -227,6 +241,7 @@ class SquareNavigator:
     # -------------------------------------------------------------------------
 
     def _manual_step(self, now: float) -> NavigationOutput:
+        """Dispatch step handler for open-loop dead-reckoning state in Lap 1."""
         handlers = {
             NavigationState.WAITING_FOR_POSE: self._wait_for_start,
             NavigationState.TURNING: self._manual_turn,
@@ -237,6 +252,7 @@ class SquareNavigator:
         return handlers.get(self.state, lambda t: self._output(f'Unhandled: {self.state}'))(now)
 
     def _wait_for_start(self, now: float) -> NavigationOutput:
+        """Latch origin pose and initiate first forward driving leg."""
         if not self.origin_latched:
             self.x0_slam, self.y0_slam, self.theta0_slam = self._best_pose()
             self.navigation_yaw = self.theta0_slam
@@ -249,11 +265,13 @@ class SquareNavigator:
         return self._manual_drive(now)
 
     def _begin_leg(self, now: float):
+        """Reset leg progress distance and enter forward driving state."""
         self.drive_used = 0.0
         self.midpoint_done = False
         self._transition(NavigationState.DRIVING, now)
 
     def _manual_drive(self, now: float) -> NavigationOutput:
+        """Execute constant forward velocity until reaching midpoint or corner."""
         half_distance = self.square_size_m / 2.0
         goal_distance = self.square_size_m if self.midpoint_done else half_distance
         if self.drive_used + 1e-9 >= goal_distance:
@@ -261,6 +279,7 @@ class SquareNavigator:
         return self._output(f'[Lap 1] Driving side {self.side_index + 1}', linear=self.forward.speed_mps)
 
     def _manual_checkpoint(self, now: float) -> NavigationOutput:
+        """Transition to midpoint pause or post-leg corner pause."""
         if not self.midpoint_done:
             self._transition(NavigationState.MIDPOINT_PAUSE, now)
             return self._output(f'[Lap 1] Side {self.side_index + 1} midpoint pause')
@@ -269,6 +288,7 @@ class SquareNavigator:
         return self._output(f'[Lap 1] Side {self.side_index} finished; pause before turn')
 
     def _manual_midpoint_pause(self, now: float) -> NavigationOutput:
+        """Pause robot at leg midpoint before resuming forward drive."""
         if now - self.phase_started + 1e-9 < self.policy.manual_midpoint_pause_s:
             return self._output(f'[Lap 1] Side {self.side_index + 1} midpoint pause')
         self.midpoint_done = True
@@ -276,6 +296,7 @@ class SquareNavigator:
         return self._manual_drive(now)
 
     def _manual_pause(self, now: float) -> NavigationOutput:
+        """Pause robot after driving a leg before initiating next corner turn."""
         if now - self.phase_started + 1e-9 < self.policy.manual_forward_pause_s:
             return self._output(f'[Lap 1] Side {self.side_index} post-forward pause')
         if self.side_index >= self.side_count:
@@ -293,6 +314,7 @@ class SquareNavigator:
         return self._manual_begin_turn(now)
 
     def _manual_begin_turn(self, now: float) -> NavigationOutput:
+        """Initialize corner turn angle and transition to turning state."""
         self.current_wp_idx = self.side_index + 1
         self.course_heading = self.theta0_slam + (self.side_index) * self.corner_angle_rad
         self.corner_used = 0.0
@@ -303,6 +325,7 @@ class SquareNavigator:
         return self._output(f'[Lap 1] Turning corner {self.side_index}', angular=self.turn_calibration.rate(1))
 
     def _manual_turn(self, now: float) -> NavigationOutput:
+        """Command open-loop calibrated corner turn until timed duration elapses."""
         duration = getattr(self.policy, 'corner_turn_duration_s', 0.65)
         if now - self.phase_started + 1e-9 >= duration:
             if self.side_index >= self.side_count:
@@ -317,6 +340,7 @@ class SquareNavigator:
     # -------------------------------------------------------------------------
 
     def _begin_return_to_origin(self, now: float) -> NavigationOutput:
+        """Initiate return-to-origin transit using AprilTag SLAM pose."""
         self.current_wp_idx = 0
         self.target = (self.x0_slam, self.y0_slam)
         rx, ry, _ = self.slam_to_nav_frame(*self._best_pose())
@@ -328,6 +352,7 @@ class SquareNavigator:
         return self._return_align(now)
 
     def _return_step(self, now: float) -> NavigationOutput:
+        """Dispatch step handler for return-to-origin relocation phases."""
         handlers = {
             NavigationState.RELOCALIZING_TURN: self._return_align,
             NavigationState.RETURN_DRIVING: self._return_drive,
@@ -338,6 +363,7 @@ class SquareNavigator:
         return handlers.get(self.state, lambda t: self._output(f'Unhandled return state: {self.state}'))(now)
 
     def _return_align(self, now: float) -> NavigationOutput:
+        """Pivot towards estimated (0, 0) origin until heading error is within tolerance."""
         rx, ry, rtheta = self.slam_to_nav_frame(*self._best_pose())
         dist = math.hypot(rx, ry)
         if dist <= self.closed_loop_tolerance_m:
@@ -351,6 +377,7 @@ class SquareNavigator:
         return self._output(f'[Return to Origin] Aligning to (0,0) (dist: {dist:.2f}m, err: {math.degrees(alpha):.1f}°)', angular=self.turn_calibration.rate(alpha))
 
     def _return_drive(self, now: float) -> NavigationOutput:
+        """Drive towards estimated (0, 0) origin, realigning heading if drifted."""
         rx, ry, rtheta = self.slam_to_nav_frame(*self._best_pose())
         dist = math.hypot(rx, ry)
         if dist <= self.closed_loop_tolerance_m:
@@ -364,12 +391,14 @@ class SquareNavigator:
         return self._output(f'[Return to Origin] Driving to origin (dist: {dist:.2f}m, err: {math.degrees(alpha):.1f}°)', linear=self.forward.speed_mps)
 
     def _return_pause(self, now: float) -> NavigationOutput:
+        """Settle at origin to allow EKF-SLAM to update landmark estimates."""
         if now - self.phase_started + 1e-9 < self.policy.manual_forward_pause_s:
             return self._output('[Return to Origin] Settling at origin to update landmark estimates')
         self._transition(NavigationState.REORIENTING, now)
         return self._return_reorient(now)
 
     def _return_reorient(self, now: float) -> NavigationOutput:
+        """Pivot at origin to reorient heading to 0 radians before Lap 2."""
         _, _, rtheta = self.slam_to_nav_frame(*self._best_pose())
         alpha = wrap_angle(0.0 - rtheta)
         if abs(alpha) <= self.heading_tolerance_rad:
@@ -378,6 +407,7 @@ class SquareNavigator:
         return self._output(f'[Return to Origin] Reorienting to heading 0.0 rad (err: {math.degrees(alpha):.1f}°)', angular=self.turn_calibration.rate(alpha))
 
     def _return_reorient_pause(self, now: float) -> NavigationOutput:
+        """Pause briefly after reorienting before launching closed-loop Lap 2."""
         if now - self.phase_started + 1e-9 < self.policy.manual_forward_pause_s:
             return self._output('[Return to Origin] Settle pause at origin before Lap 2')
         self.lap = 2
@@ -393,6 +423,7 @@ class SquareNavigator:
     # -------------------------------------------------------------------------
 
     def _closed_loop_step(self, now: float) -> NavigationOutput:
+        """Dispatch step handler for closed-loop visual odometry Lap 2."""
         handlers = {
             NavigationState.CLOSED_LOOP_TURN: self._closed_loop_turn,
             NavigationState.CLOSED_LOOP_DRIVE: self._closed_loop_drive,
@@ -403,6 +434,7 @@ class SquareNavigator:
         return handlers.get(self.state, lambda t: self._output(f'Unhandled Lap 2 state: {self.state}'))(now)
 
     def _closed_loop_turn(self, now: float) -> NavigationOutput:
+        """Turn towards current waypoint until aligned within heading tolerance."""
         wp = self.waypoints[self.current_wp_idx]
         self.target = self._nav_to_slam_point(wp.x_m, wp.y_m)
         rx, ry, rtheta = self.slam_to_nav_frame(*self._best_pose())
@@ -419,6 +451,7 @@ class SquareNavigator:
         return self._output(f'[Lap 2] Aligning to WP{self.current_wp_idx} (dist: {dist:.2f}m, err: {math.degrees(alpha):.1f}°)', angular=self.turn_calibration.rate(alpha))
 
     def _closed_loop_drive(self, now: float) -> NavigationOutput:
+        """Drive closed-loop towards current waypoint using visual odometry pose."""
         wp = self.waypoints[self.current_wp_idx]
         self.target = self._nav_to_slam_point(wp.x_m, wp.y_m)
         rx, ry, rtheta = self.slam_to_nav_frame(*self._best_pose())
@@ -435,6 +468,7 @@ class SquareNavigator:
         return self._output(f'[Lap 2] Driving to WP{self.current_wp_idx} (dist: {dist:.2f}m, err: {math.degrees(alpha):.1f}°)', linear=self.forward.speed_mps)
 
     def _closed_loop_corner_pause(self, now: float) -> NavigationOutput:
+        """Pause at corner waypoint to observe landmarks before advancing to next leg."""
         if now - self.phase_started + 1e-9 < self.policy.manual_forward_pause_s:
             return self._output(f'[Lap 2] WP{self.current_wp_idx} corner pause; updating landmarks')
         if self.current_wp_idx >= len(self.waypoints) - 1:
@@ -448,6 +482,7 @@ class SquareNavigator:
         return self._closed_loop_turn(now)
 
     def _closed_loop_final_reorient(self, now: float) -> NavigationOutput:
+        """Reorient robot to 0 radians at origin upon completing Lap 2."""
         _, _, rtheta = self.slam_to_nav_frame(*self._best_pose())
         alpha = wrap_angle(0.0 - rtheta)
         if abs(alpha) <= self.heading_tolerance_rad:
@@ -460,6 +495,7 @@ class SquareNavigationNode(BaseNavigationNode):
     """ROS 2 Node dedicated to running Square missions."""
 
     def __init__(self):
+        """Initialize ROS 2 square navigation node, parameters, and controller."""
         super().__init__('square_navigation_node')
         policy = NavigationPolicy(
             manual_motion_enabled=True,

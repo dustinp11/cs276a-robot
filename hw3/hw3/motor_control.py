@@ -137,6 +137,7 @@ class VelocityToMotorNode(Node):
     """Publish motor inputs and model velocity from the same mapping decision."""
 
     def __init__(self):
+        """Initialize velocity mapping node and ROS publishers/subscriptions."""
         super().__init__('velocity_mapping')
         calibration = read_turn_calibration(self)
         if calibration is None:
@@ -186,6 +187,7 @@ class MotorControllerNode(Node):
     """Own the serial connection in one worker to serialize motor and IMU traffic."""
 
     def __init__(self):
+        """Initialize serial motor controller node and background worker thread."""
         super().__init__('motor_control')
         self.robot = None
         self.stop_event = threading.Event()

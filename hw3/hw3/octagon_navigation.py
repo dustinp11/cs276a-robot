@@ -56,6 +56,7 @@ class OctagonNavigator:
         max_heading_uncertainty_rad: float = 0.40,
         **_ignored,
     ):
+        """Initialize octagon navigation controller parameters, timing, and state."""
         self.policy = policy or NavigationPolicy(manual_motion_enabled=True)
         self.side_count = side_count
         self.side_length_m = side_length_m if side_length_m > 0 else 0.75
@@ -95,6 +96,7 @@ class OctagonNavigator:
         self.vision = VisualFeedback(self.policy)
 
     def start(self) -> tuple[bool, str]:
+        """Activate octagon navigation mission and transition to initial wait state."""
         if self.turn_calibration is None:
             return False, 'Turn calibration is required.'
         if self.state != NavigationState.IDLE:
@@ -104,12 +106,14 @@ class OctagonNavigator:
         return True, 'Starting manual octagon navigation'
 
     def stop(self, reason: str = 'Manual stop requested') -> tuple[bool, str]:
+        """Halt navigation mission with a given reason."""
         self.stop_reason = reason
         self.is_active = False
         self.state = NavigationState.STOPPED
         return True, reason
 
     def update_ekf_pose(self, x_slam: float, y_slam: float, theta_slam: float, sigma_pos_m: float, sigma_theta_rad: float, stamp_s: float):
+        """Update controller with latest EKF-SLAM pose and covariance estimates."""
         self.latest_slam_pose = (x_slam, y_slam, wrap_angle(theta_slam))
         self.latest_uncertainty = (sigma_pos_m, sigma_theta_rad)
         self.latest_pose_stamp_s = stamp_s
@@ -121,9 +125,11 @@ class OctagonNavigator:
             self.navigation_x, self.navigation_y = x_slam, y_slam
 
     def update_vision(self, stamp: float, tags: list, known_ids: list, clearance, tag_yaws, sigmas, ekf_heading):
+        """Update visual feedback state with latest AprilTag detection results."""
         self.vision.update(stamp, tags, known_ids, clearance, self.latest_slam_pose, self.drive_used, tag_yaws, sigmas, ekf_heading)
 
     def _best_pose(self) -> tuple[float, float, float]:
+        """Return latest valid SLAM pose or dead-reckoned odometry if timed out."""
         now = self.last_tick
         if self.latest_slam_pose is not None and now is not None:
             if -0.05 <= now - self.latest_pose_stamp_s <= self.pose_timeout_s:
@@ -131,10 +137,12 @@ class OctagonNavigator:
         return self.navigation_x, self.navigation_y, self.navigation_yaw
 
     def _transition(self, state: NavigationState, now: float):
+        """Switch navigation state and record the phase transition timestamp."""
         self.state = state
         self.phase_started = now
 
     def _output(self, message: str, linear: float = 0.0, angular: float = 0.0) -> NavigationOutput:
+        """Construct a navigation telemetry output container for the current tick."""
         self.last_command = (linear, angular)
         rx, ry, rtheta = self._best_pose()
         error = wrap_angle(self.course_heading - rtheta)
@@ -156,6 +164,7 @@ class OctagonNavigator:
         )
 
     def step(self, current_time_s: float) -> NavigationOutput:
+        """Advance navigation state machine by one discrete time step."""
         now = float(current_time_s)
         dt = 0.0 if self.last_tick is None else max(0.0, min(now - self.last_tick, 0.15))
         self.navigation_x += self.last_command[0] * dt * math.cos(self.navigation_yaw)
@@ -182,6 +191,7 @@ class OctagonNavigator:
         return handler(now)
 
     def _wait_for_start(self, now: float) -> NavigationOutput:
+        """Latch origin pose and initiate first 45-degree corner turn."""
         if not self.origin_latched:
             self.x0_slam, self.y0_slam, self.theta0_slam = self._best_pose()
             self.navigation_yaw = self.theta0_slam
@@ -190,6 +200,7 @@ class OctagonNavigator:
         return self._manual_begin_turn(now)
 
     def _manual_begin_turn(self, now: float) -> NavigationOutput:
+        """Initialize corner turn angle and transition to turning state."""
         self.current_wp_idx = self.side_index + 1
         self.course_heading = self.theta0_slam + (self.side_index + 1) * self.corner_angle_rad
         self.corner_used = 0.0
@@ -197,6 +208,7 @@ class OctagonNavigator:
         return self._output(f'[Octagon] Leg {self.side_index + 1} Turn 45° CCW', angular=self.turn_calibration.rate(1))
 
     def _manual_turn(self, now: float) -> NavigationOutput:
+        """Command open-loop calibrated corner turn until timed duration elapses."""
         turn_duration = getattr(self.policy, 'corner_turn_duration_s', 0.5)
         if now - self.phase_started + 1e-9 >= turn_duration:
             self._begin_leg(now)
@@ -204,6 +216,7 @@ class OctagonNavigator:
         return self._output(f'[Octagon] Leg {self.side_index + 1} Turning 45° CCW', angular=self.turn_calibration.rate(1))
 
     def _begin_leg(self, now: float):
+        """Compute leg target point and transition to forward driving state."""
         self.drive_used = 0.0
         self.midpoint_done = False
         rx, ry, _ = self._best_pose()
@@ -214,6 +227,7 @@ class OctagonNavigator:
         self._transition(NavigationState.DRIVING, now)
 
     def _manual_drive(self, now: float) -> NavigationOutput:
+        """Execute constant forward velocity until reaching midpoint or corner."""
         half_distance = self.side_length_m / 2.0
         goal_distance = self.side_length_m if self.midpoint_done else half_distance
         if self.drive_used + 1e-9 >= goal_distance:
@@ -221,6 +235,7 @@ class OctagonNavigator:
         return self._output(f'[Octagon] Driving Leg {self.side_index + 1}', linear=self.forward.speed_mps)
 
     def _manual_checkpoint(self, now: float) -> NavigationOutput:
+        """Transition to midpoint pause or post-leg corner pause."""
         if not self.midpoint_done:
             self._transition(NavigationState.MIDPOINT_PAUSE, now)
             return self._output(f'[Octagon] Leg {self.side_index + 1} Midpoint Pause')
@@ -229,6 +244,7 @@ class OctagonNavigator:
         return self._output(f'[Octagon] Leg {self.side_index} Complete; Pause before turn')
 
     def _manual_midpoint_pause(self, now: float) -> NavigationOutput:
+        """Pause robot at leg midpoint before resuming forward drive."""
         if now - self.phase_started + 1e-9 < self.policy.manual_midpoint_pause_s:
             return self._output(f'[Octagon] Leg {self.side_index + 1} Midpoint Pause')
         self.midpoint_done = True
@@ -236,6 +252,7 @@ class OctagonNavigator:
         return self._manual_drive(now)
 
     def _manual_pause(self, now: float) -> NavigationOutput:
+        """Pause robot after driving a leg before initiating next corner turn."""
         if now - self.phase_started + 1e-9 < self.policy.manual_forward_pause_s:
             return self._output(f'[Octagon] Leg {self.side_index} Post-Forward Pause')
         if self.side_index >= self.side_count:
@@ -249,6 +266,7 @@ class OctagonNavigationNode(BaseNavigationNode):
     """ROS 2 Node dedicated to running Octagon missions."""
 
     def __init__(self):
+        """Initialize ROS 2 octagon navigation node, parameters, and controller."""
         super().__init__('octagon_navigation_node')
         policy = NavigationPolicy(
             manual_motion_enabled=True,
@@ -273,6 +291,7 @@ class OctagonNavigationNode(BaseNavigationNode):
 
 
 def octagon_navigation_main(args=None):
+    """Run OctagonNavigationNode until ROS shutdown."""
     rclpy.init(args=args)
     node = OctagonNavigationNode()
     try:
