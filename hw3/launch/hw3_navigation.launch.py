@@ -98,7 +98,8 @@ def _control_nodes(context):
                                 'navigation.manual_forward_pause_s': 1.0,
                                 'navigation.manual_midpoint_pause_s': 1.0,
                                 'navigation.startup_scan_enabled': False,
-                                'navigation.turn_pulse_rad': 0.08726646259971647,
+                                'navigation.turn_pulse_rad': (0.17453292519943295 if mission == 'slam_octagon'
+                                                              else 0.08726646259971647),
                                 'navigation.side_length_m': 0.75,
                                 'navigation.late_scan_start_corner': 99,  # regular corners; no look-around or homing
                                 'navigation.corner_turn_duration_s': 0.5,

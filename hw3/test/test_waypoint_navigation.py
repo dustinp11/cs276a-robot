@@ -17,7 +17,7 @@ class TestWaypointNavigation(unittest.TestCase):
                               turn_calibration=calibration,
                               policy=NavigationPolicy(waypoint_motion_enabled=True,
                                                       waypoint_pause_s=1.0),
-                              turn_pulse_rad=math.radians(5))
+                              turn_pulse_rad=math.radians(10))
         nav.start()
         return nav
 

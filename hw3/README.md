@@ -49,7 +49,7 @@ images captured before the stop are excluded. These limits are configurable,
 not evidence that SLAM is physically accurate.
 
 Heading updates use at most three pulses per checkpoint, at least 5 degrees,
-up to the configured `turn_pulse_rad` (5 degrees in this profile), within a
+up to the configured `turn_pulse_rad` (10 degrees in this profile), within a
 30-degree nominal checkpoint budget. Each pulse gets another acquisition pause.
 The 20 Hz timer quantizes physical pulse duration, so a nominal 5-degree pulse
 can last two ticks and command approximately 9 degrees; test short pulses on the
