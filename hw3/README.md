@@ -30,9 +30,10 @@ Use exactly one pose publisher and one navigation stack. Stop with
 terminal 1. Existing camera, detector, motors, estimator and CSV recording are
 reused. Launching from this directory writes CSVs into `~/robot_testing/hw3_results`.
 
-Flow: **initial 1 s acquisition → pivot toward fixed target → pause 1 s → optional
-heading corrections → drive approximately half a side → pause 1 s → optional
-heading/distance adjustment → drive remainder → pause 1 s → next target**.
+Flow: **initial 3 s acquisition → pivot toward fixed target → pause 3 s → optional
+heading corrections → drive approximately half a side → pause 3 s → optional
+heading/distance adjustment → drive remainder → pause 3 s → next target**.
+Each corrective pivot also gets a three-second stopped acquisition interval.
 The initial acquisition is bounded and never requires visible tags. Main pivots
 use the calibrated rate for the target bearing, capped at 90 degrees per corner.
 The motor pairs match the timed octagon; CW is allowed for correction. There are

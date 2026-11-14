@@ -16,7 +16,7 @@ class NavigationPolicy:
 
     manual_motion_enabled: bool = False
     waypoint_motion_enabled: bool = False
-    waypoint_pause_s: float = 1.0
+    waypoint_pause_s: float = 3.0
     waypoint_position_tolerance_m: float = 0.08
     waypoint_max_position_jump_m: float = 0.35
     waypoint_max_heading_jump_rad: float = math.pi / 5

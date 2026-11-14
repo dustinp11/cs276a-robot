@@ -15,7 +15,8 @@ class TestWaypointNavigation(unittest.TestCase):
         calibration = TurnCalibration(-0.35, 0.35, 0.37, -0.37, math.pi / 2, math.pi / 2)
         nav = SquareNavigator(side_count=8, side_length_m=0.75,
                               turn_calibration=calibration,
-                              policy=NavigationPolicy(waypoint_motion_enabled=True),
+                              policy=NavigationPolicy(waypoint_motion_enabled=True,
+                                                      waypoint_pause_s=1.0),
                               turn_pulse_rad=math.radians(5))
         nav.start()
         return nav
@@ -172,6 +173,13 @@ class TestWaypointNavigation(unittest.TestCase):
         """Fail clearly if a configuration accidentally enables both controllers."""
         with self.assertRaises(ValueError):
             NavigationPolicy(manual_motion_enabled=True, waypoint_motion_enabled=True)
+
+    def test_default_waypoint_pause_is_three_seconds(self):
+        """Use three-second acquisition by default without changing timed baseline pauses."""
+        policy = NavigationPolicy(waypoint_motion_enabled=True)
+        self.assertEqual(policy.waypoint_pause_s, 3.0)
+        self.assertEqual(policy.manual_midpoint_pause_s, 1.0)
+        self.assertEqual(policy.manual_forward_pause_s, 1.0)
 
     def simulated_underturn(self, observations):
         """Run a planar plant whose pivots achieve only 85 percent of the nominal angle.
