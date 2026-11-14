@@ -35,8 +35,9 @@ The algorithm turns before the first side, as in the octagon. Nominal turns are
 `pi/2 rad/s` calibration (about one second for 90 degrees). Forward input remains
 `[+0.185, +0.15]` at nominal 0.203 m/s. It pauses after approximately 3 ft
 (0.9144 m), adjusts optionally, and finishes the side. Three-second acquisitions,
-up to three correction pulses of at most 10 degrees, and all feedback gates are
-unchanged. Distance adjustments remain bounded by 15 cm, so commanded forward
+up to four correction pulses of at most 15 degrees, and a 45-degree total
+nominal correction budget per checkpoint apply to the square profile. Feedback
+acceptance gates are unchanged. Distance adjustments remain bounded by 15 cm, so commanded forward
 travel is capped at 1.9788 m per side. Missing tags do not block the mission.
 
 The `lap_index` column labels the two laps. Waypoint indices are 1–4 and 5–8.

@@ -2,6 +2,7 @@
 
 import math
 import unittest
+from dataclasses import replace
 
 from hw3.square_navigation import NavigationState, SquareNavigator
 from hw3.turn_calibration import TurnCalibration
@@ -220,6 +221,33 @@ class TestWaypointNavigation(unittest.TestCase):
         for laps in (0, -1, 1.5, True):
             with self.assertRaises(ValueError):
                 NavigationPolicy(waypoint_laps=laps)
+
+    def test_aggressive_square_corrections_reach_budget_then_resume(self):
+        """Allow larger square pivots without unbounded spinning on repeated feedback.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks 15-degree pulse duration, 45-degree budget and eventual travel.
+        """
+        nav = self.navigator(side_count=4, side_length_m=1.8288)
+        nav.policy = replace(nav.policy, corner_max_corrections=4,
+                             waypoint_correction_budget_rad=math.pi / 4)
+        nav.turn_pulse_rad = math.pi / 12
+        correcting_ticks = 0
+        for tick in range(500):
+            now = tick * 0.05
+            if nav.waypoint.phase == 'after_turn':
+                self.feedback(nav, (0, 0, math.pi / 2 + 0.55), now)
+            output = nav.step(now)
+            correcting_ticks += output.state == NavigationState.CORRECTING
+            if nav.waypoint.phase == 'first_half':
+                break
+        self.assertEqual(output.state, NavigationState.DRIVING)
+        self.assertEqual(nav.waypoint.attempts, 3)
+        self.assertAlmostEqual(nav.waypoint.correction_used, math.pi / 4)
+        self.assertEqual(correcting_ticks, 12)
 
     def test_two_six_foot_square_laps_use_four_fixed_vertices(self):
         """Repeat the same six-foot square with nominal 90-degree left turns and no tags.

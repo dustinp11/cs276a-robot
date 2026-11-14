@@ -108,6 +108,12 @@ def _control_nodes(context):
                                 'navigation.corner_turn_duration_s': 0.5,
                                 'navigation.corner_stage_angle_rad': 0.7853981633974483,
                                 'navigation.corner_ekf_weight': 0.0}
+        if mission == 'slam_square':
+            navigation_overrides.update({
+                'navigation.turn_pulse_rad': 0.2617993877991494,
+                'navigation.corner_max_corrections': 4,
+                'navigation.waypoint_correction_budget_rad': 0.7853981633974483,
+            })
     return [
         _hw3_node('visual_odometry_node'),
         _hw3_node('ekf_slam_node', overrides={
