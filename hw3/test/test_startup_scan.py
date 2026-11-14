@@ -26,7 +26,7 @@ class TestStartupScan(unittest.TestCase):
             nav.update_vision(stamp, [[7, 2, 0]], [], None, [[7, tag_yaw]])
 
     def test_full_scan_precedes_forward_motion_without_tags(self):
-        """Scan exactly one nominal circle in eight stopped-to-stopped steps.
+        """Scan exactly one nominal circle in four stopped-to-stopped steps.
 
         Args:
             None.
@@ -46,7 +46,7 @@ class TestStartupScan(unittest.TestCase):
             self.assertEqual((nav.navigation_x, nav.navigation_y), (0, 0))
             previous = cmd.state
         self.assertGreater(cmd.linear_v_mps, 0)
-        self.assertEqual((turns, pauses), (8, 9))
+        self.assertEqual((turns, pauses), (4, 5))
         self.assertGreaterEqual(nav.startup_scan_used + 1e-9, 2 * math.pi)
         self.assertLessEqual(nav.startup_scan_used, 2 * math.pi + math.pi / 40 + 1e-6)
         self.assertEqual(nav.side_index, 0)

@@ -19,8 +19,10 @@ ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
 ```
 
 Before the first forward leg, the octagon profile now performs one staged
-startup revolution: initial 3-second acquisition pause → nominal 45-degree left
-step → 3-second pause, repeated until the commanded angle totals 360 degrees.
+startup revolution: initial 3-second acquisition pause → nominal 90-degree left
+step → 3-second pause, repeated four times until the commanded angle totals 360 degrees.
+Each 90-degree step uses about 1 second of commanded rotation at the nominal
+pi/2 rad/s rate; physical accuracy still depends on the measured calibration.
 Use the existing `[-0.35, +0.35]` pivot calibration. Callbacks and SLAM stay active
 throughout; no tag is required to complete any step. A final stopped comparison
 with the original tag orientation, or a confident EKF heading, may select bounded

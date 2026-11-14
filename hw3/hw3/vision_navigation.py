@@ -15,7 +15,7 @@ class NavigationPolicy:
     """Limits in meters, radians, and seconds; clearances are from robot center."""
 
     startup_scan_enabled: bool = False
-    startup_scan_step_rad: float = math.pi / 4
+    startup_scan_step_rad: float = math.pi / 2
     startup_scan_pause_s: float = 3.0
     vision_timeout_s: float = 1.0
     corner_timeout_s: float = 18.0
