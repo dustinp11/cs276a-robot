@@ -1,3 +1,49 @@
+## SLAM waypoint square (`slam_square` branch)
+
+This branch adds `mission:=slam_square`: **two laps of a 6 ft × 6 ft square**
+(1.8288 m per side), using the same waypoint algorithm as the SLAM octagon.
+The four fixed vertices are reused on the second lap; SLAM and its learned map
+remain running throughout. There are eight attempted forward legs in total.
+The existing octagon profiles remain selectable.
+
+Robot terminal 1, after this branch has been committed, pushed, and pulled:
+
+```bash
+cd ~/robot_testing
+source /opt/ros/jazzy/setup.bash
+source rubikpi_ros2/install/setup.bash
+colcon build --base-paths hw3 --packages-select hw3 &&
+source install/setup.bash &&
+ros2 launch hw3 hw3_navigation.launch.py mission:=slam_square square_size_ft:=6.0
+```
+
+Robot terminal 2:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/robot_testing/install/setup.bash
+ros2 topic info /ekf_slam/pose --verbose
+ros2 service call /start_navigation std_srvs/srv/Trigger '{}'
+```
+
+Run only one stack and confirm one pose publisher. Stop with the existing
+`/stop_navigation` Trigger service or Ctrl+C in terminal 1. Results remain in
+`~/robot_testing/hw3_results` when launched from the repository root.
+
+The algorithm turns before the first side, as in the octagon. Nominal turns are
+90 degrees, using the same `[-0.35, +0.35]` left-turn motor pair and nominal
+`pi/2 rad/s` calibration (about one second for 90 degrees). Forward input remains
+`[+0.185, +0.15]` at nominal 0.203 m/s. It pauses after approximately 3 ft
+(0.9144 m), adjusts optionally, and finishes the side. Three-second acquisitions,
+up to three correction pulses of at most 10 degrees, and all feedback gates are
+unchanged. Distance adjustments remain bounded by 15 cm, so commanded forward
+travel is capped at 1.9788 m per side. Missing tags do not block the mission.
+
+The `lap_index` column labels the two laps. Waypoint indices are 1–4 and 5–8.
+The landmark CSV is the latest map over both laps; no separate per-lap map
+snapshot is created. Physical square accuracy still depends on calibration and
+accepted SLAM feedback. Local simulation checks do not establish hardware accuracy.
+
 ## SLAM waypoint octagon (`slam_octogan` branch)
 
 This optional mode generates eight fixed 80 cm-side octagon endpoints in the
