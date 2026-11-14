@@ -486,12 +486,6 @@ class EkfSlamNode(Node):
                 accepted.append(det['id'])
         return accepted
 
-    def _mapped_landmark_catalog(self):
-        """Report mapped tag positions and global sigma for choosing scan bearings only."""
-        return [[int(tag), float(landmark.x), float(landmark.y),
-                 math.sqrt(max(0.0, float(np.linalg.eigvalsh(landmark.covariance).max())))]
-                for tag, landmark in self.ekf.get_all_landmarks().items()]
-
     def _publish_vision_feedback(self, stamp_s, detections, known_ids):
         """Report base-frame geometry independently of the pose publication timer.
 
@@ -516,8 +510,7 @@ class EkfSlamNode(Node):
         pose = self.ekf.get_robot_pose()
         sigmas = [[tag, self.frame_landmark_sigmas[tag]] for tag in known_ids
                   if tag in self.frame_landmark_sigmas]
-        payload = {'mapped_landmarks': self._mapped_landmark_catalog(),
-                   'landmark_sigmas': sigmas,
+        payload = {'landmark_sigmas': sigmas,
                    'ekf_heading': [pose.theta, math.sqrt(max(0.0, float(pose.covariance[2, 2])))],
                    'stamp_s': stamp_s, 'tags': tags, 'known_ids': known_ids, 'tag_yaws': tag_yaws,
                    'forward_clearance_m': min(clearances) if clearances else None}

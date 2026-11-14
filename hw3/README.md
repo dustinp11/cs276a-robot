@@ -23,23 +23,24 @@ Legs 1–7 retain nominal 75 cm forward travel. Corners 1–5 use the existing
 optional corrections. The measured left pivot uses `[-0.35, +0.35]`, with a
 nominal rate of pi/2 rad/s. The profile lives in `launch/hw3_navigation.launch.py`.
 
-At corners **6, 7, and 8**, first try to relocalize:
+At corners **6, 7, and 8**, first try one short inward look:
 
-1. Choose the mapped tag with the smallest global positional covariance and
-   predict its bearing from the current estimated pose. IDs are not hard-coded.
-   Global covariance ranks search targets only; it does not certify a new pose.
-2. Rotate left toward that bearing in at most 30-degree steps, pausing 3 seconds
-   after each. Stop early on fresh confident localization; otherwise continue
-   searching up to one nominal revolution and then use calibrated prediction.
-3. Reacquisition requires three consistent post-stop tag-normal observations,
-   accepted known-tag updates, robot-relative landmark sigma at most 6 cm,
+1. Compute the estimated center of the planned octagon from its initial local
+   frame and vertices. No surveyed coordinates or known tag IDs are used.
+2. Pivot toward that center using the shortest signed direction, capped at
+   `navigation.late_scan_max_angle_rad` (90 degrees). There is only one look
+   per late corner: no stepped sweep, no repeated search, and no 360-degree turn.
+3. Pause 3 seconds and accept useful localization if available. Reacquisition
+   requires three consistent post-stop tag-normal observations, accepted
+   known-tag updates, robot-relative landmark sigma at most 6 cm,
    image-associated heading sigma at most 10 degrees, and a fresh sufficiently
-   confident position. No observation is required to continue the mission.
-4. Choose the outgoing heading after localization, then perform a calibrated
-   shortest-direction pivot (CW is available when needed). Pause again and allow
-   at most three additional corrections, weighted by `corner_ekf_weight` and
-   sharing the existing 15-degree total correction budget. Search and planned
-   reorientation are intentional maneuvers, separate from this correction budget.
+   confident position. Missing observations never extend this pause.
+4. Turn directly to the outgoing heading after the look; this also brings the
+   robot back toward its travel direction without first undoing the look in full.
+   CW is available when needed. Pause again and allow at most three additional
+   corrections, weighted by `corner_ekf_weight` and sharing the existing 15-degree
+   total correction budget. The planned look and reorientation are separate from
+   this small-correction budget. Without observations, use calibrated prediction.
 
 After corner 6, aim leg 7 toward the seventh ideal polygon vertex anchored at the
 recorded start. After corner 7, **replace the fixed eighth 75 cm leg with a return
@@ -53,7 +54,7 @@ a motion budget, not an autonomous wall-distance stop.
 Corner 8 performs the final relocalization attempt and restores the initial
 heading. If its updated pose reveals a remaining position error and return
 budget remains, resume the segmented return. Do not count a ninth polygon
-corner or repeatedly restart the full scan. Arrival remains an EKF/model
+corner or repeat the inward look. Arrival remains an EKF/model
 estimate, not a guarantee of physical closure.
 
 The recorded start `(x0_slam, y0_slam)` is latched when the mission begins; it
@@ -62,9 +63,9 @@ are generated from that start, initial direction, side count, and side length.
 No surveyed wall or tag coordinates are used for navigation.
 
 Straight inputs remain `[+0.185, +0.15]` at the nominal 0.203 m/s. Ordinary legs
-retain the midpoint pause and bounded EKF distance adjustment. CSV landmark and
-trajectory formats are unchanged. Navigation logs additionally record the search
-tag, scan angle, alignment correction count/budget, return travel, estimated
+retain the midpoint pause with bounded distance and optional heading corrections. CSV landmark and
+trajectory formats are unchanged. Navigation logs additionally record the signed inward-look angle, accumulated
+look rotation, alignment correction count/budget, return travel, estimated
 start distance, and fixed start coordinates. Existing start/stop services and
 launch commands are unchanged. The square profile does not enable late scans or
 return-to-start behavior (`late_scan_start_corner: 99`); the octagon overrides it
@@ -171,7 +172,7 @@ encoder measurements. Manual visual-only mode retains its VO prediction source.
 
 The square now uses the following phases on each of four sides:
 
-`DRIVE first 3 ft → MIDPOINT_PAUSE → DRIVE remainder → STOPPING → TURNING 90° → CORNER_PAUSE → optional CORRECTING → next side`
+`DRIVE first 3 ft → MIDPOINT_PAUSE → optional MIDPOINT_CORRECTING → MIDPOINT_PAUSE → DRIVE remainder → STOPPING → TURNING 90° → CORNER_PAUSE → optional CORRECTING → next side`
 
 - Every leg starts and continues without requiring any visible or previously
   mapped tag. Missing/stale EKF messages use calibrated command prediction;
@@ -184,12 +185,32 @@ The square now uses the following phases on each of four sides:
   and clamp the adjustment to `navigation.midpoint_max_correction_m` (default
   +/-0.10 m, capped at one quarter of a side for smaller squares). The remainder
   stays approximately 3 feet +/-10 cm; a bad estimate cannot reduce it to 5 cm.
-- Freeze this one adjustment for the second half and integrate the measured
-  0.203 m/s command from there. Continuous tag/EKF progress cannot override that
-  distance plan. EKF and relative-tag estimates remain recorded for comparison,
-  and vision still aids corner corrections. Heading and motor pair stay unchanged.
-- Missing, stale, or uncertain EKF data use zero distance adjustment. The pause
-  always ends after its fixed duration, and no tag observation is required.
+- During the same midpoint pause, check heading before resuming forward travel.
+  Prefer fresh image-associated EKF heading with confident robot-relative tag
+  covariance and three stable stopped observations, applying the existing 50%
+  heading-error weight. Aim toward the fixed course chosen at leg start; do not
+  redirect toward a moving waypoint. If no confident EKF heading exists, compare
+  stable same-tag normals with the stopped reference captured at leg start and
+  correct yaw drift relative to that starting direction, without relying on the
+  global map. Missing either reference simply skips that feedback source.
+- Midpoint pivots use fixed calibrated motor inputs, with a 5-degree minimum,
+  at most three attempts, and a 15-degree total nominal budget per midpoint.
+  These use the existing `corner_min_correction_rad`, `corner_max_corrections`,
+  `corner_correction_limit_rad`, and `turn_pulse_rad` policy settings. Midpoint
+  counters are separate from corner counters. Never combine forward travel and
+  turning in the same command.
+- After each midpoint pivot, pause again for `midpoint_pause_s` (3 seconds), then
+  recheck both heading and remaining distance. Require a new post-stop image
+  for another pivot. Fresh position feedback can revise the bounded distance
+  adjustment; stale position feedback retains the previous bounded adjustment
+  instead of erasing it. Once corrections finish or feedback is unavailable,
+  freeze the distance plan for the second half and integrate the calibrated
+  0.203 m/s command. Continuous moving-camera/EKF updates cannot override it.
+- Missing, stale, or uncertain initial EKF data use zero distance adjustment.
+  No tag observation is required to resume forward travel. The fixed heading
+  target and straight motor pair remain unchanged; only stopped pivots correct
+  direction. Return-to-start segments already recheck both distance and bearing
+  at their acquisition pauses.
 - Stop for three seconds, then apply one initial left-turn pulse for
   `navigation.corner_turn_duration_s` (default 0.95 seconds) using the measured
   fixed CCW inputs. This shorter pulse aims to reduce physical overshoot. The
@@ -234,6 +255,9 @@ The square now uses the following phases on each of four sides:
   trial; the existing 20 Hz controller quantizes duration to about 4.5 degrees
   at the nominal 90 deg/s rate, and motor deadzones may still prevent movement. A remaining
   correction budget below that minimum is skipped rather than rounded upward.
+  Omitting a planned left-turn remainder consumes a correction decision but no
+  extra-angle budget, so a measured overshoot can still receive a clockwise
+  correction. Extending that remainder consumes the additional angle budget.
   Corrections total at most
   `navigation.corner_correction_limit_rad` (default 15 nominal degrees), in at most
   `navigation.corner_max_corrections` pulses (default 3). Pause after each pulse
@@ -598,7 +622,9 @@ ros2 service call /stop_navigation std_srvs/srv/Trigger
 Navigation CSV adds `vision_age_s`, `visual_progress_m`, `ekf_progress_m`,
 `forward_clearance_m`, `corner_nominal_rad`, `corner_correction_rad`, `corner_feedback_source`, `corner_residual_rad`, `navigation_heading_rad`,
 `midpoint_progress_m`, `midpoint_remaining_m`, `midpoint_source`, and
-`midpoint_applied_correction_m` to the existing columns. These
+`midpoint_applied_correction_m`, `midpoint_heading_source`,
+`midpoint_heading_residual_rad`, `midpoint_corrections`, and
+`midpoint_correction_rad` to the existing columns. These
 record visual freshness, competing travel estimates, wall clearance, and timed
 corner prediction, optional correction, navigation heading, and midpoint correction separately. Navigation heading can be
 model-predicted while the EKF pose remains uncertain. EKF landmark and trajectory CSV formats are unchanged.

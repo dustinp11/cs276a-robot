@@ -27,8 +27,7 @@ class NavigationPolicy:
     corner_landmark_sigma_m: float = 0.06
     corner_heading_sigma_rad: float = math.pi / 18
     late_scan_start_corner: int = 99
-    late_scan_step_rad: float = math.pi / 6
-    late_scan_max_angle_rad: float = 2 * math.pi
+    late_scan_max_angle_rad: float = math.pi / 2
     return_segment_m: float = 0.25
     return_tolerance_m: float = 0.10
     return_max_distance_m: float = 3.0
@@ -52,8 +51,8 @@ class NavigationPolicy:
             raise ValueError('Corner EKF weight must be finite and between zero and one.')
         if int(self.late_scan_start_corner) != self.late_scan_start_corner:
             raise ValueError('Late scan start corner must be an integer.')
-        if not self.late_scan_step_rad <= self.late_scan_max_angle_rad <= 2 * math.pi:
-            raise ValueError('Late scan steps must fit in a budget of at most one revolution.')
+        if self.late_scan_max_angle_rad > math.pi / 2:
+            raise ValueError('Late center look must be at most 90 degrees.')
         if self.return_segment_m > self.return_max_distance_m:
             raise ValueError('Return segment cannot exceed the total return travel budget.')
         if self.drive_budget_factor < 1:
@@ -78,7 +77,7 @@ class VisualFeedback:
             policy: NavigationPolicy with freshness and uncertainty thresholds.
 
         Returns:
-            None. Starts with no trusted observations or mapped search targets.
+            None. Starts with no trusted observations.
         """
         self.policy = policy
         self.stamp = self.valid_stamp = -math.inf
@@ -91,7 +90,6 @@ class VisualFeedback:
         self.yaw_history = deque(maxlen=128)
         self.known_ids, self.landmark_sigmas, self.ekf_heading = set(), {}, None
         self.ekf_rejection_reason = 'no image-associated heading'
-        self.mapped_landmarks = []
 
     def begin_leg(self, heading):
         """Reset relative tag travel anchors for a fixed SLAM-frame heading."""
@@ -101,7 +99,7 @@ class VisualFeedback:
         self.progress_prediction = 0.0
 
     def update(self, stamp, tags, known_ids, clearance, pose, predicted_progress, tag_yaws=None,
-               landmark_sigmas=None, ekf_heading=None, mapped_landmarks=None):
+               landmark_sigmas=None, ekf_heading=None):
         """Cache one distinct accepted frame and estimate travel from stationary tags.
 
         Args:
@@ -114,7 +112,6 @@ class VisualFeedback:
             tag_yaws: Optional [tag_id, face_normal_yaw_rad] pairs in the robot base frame.
             landmark_sigmas: Pre-update [tag_id, relative major-axis standard deviation in meters].
             ekf_heading: Post-image [SLAM yaw, yaw standard deviation], in radians.
-            mapped_landmarks: Optional [id, SLAM x_m, SLAM y_m, global major sigma_m] catalog.
 
         Returns:
             None. Updates optional geometry, orientation snapshots, freshness, and travel.
@@ -125,8 +122,6 @@ class VisualFeedback:
         self.known_ids = set(known_ids)
         self.landmark_sigmas = dict(landmark_sigmas or [])
         self.ekf_heading = ekf_heading
-        if mapped_landmarks is not None:
-            self.mapped_landmarks = mapped_landmarks
         self.tag_yaws = dict(tag_yaws or [])
         self.yaw_history.append((stamp, self.tag_yaws))
         self.yaw_stamp = stamp if self.tag_yaws else -math.inf

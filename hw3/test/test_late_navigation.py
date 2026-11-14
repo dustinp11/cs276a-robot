@@ -32,7 +32,7 @@ class TestLateNavigation(unittest.TestCase):
         """Feed consistent stamped tag frames and their matching low-uncertainty poses."""
         for stamp in stamps:
             nav.update_vision(stamp, [[42, 2, 0]], [42], None, [[42, 0.6]],
-                              [[42, 0.02]], [pose[2], 0.02], [[42, 1, 1, 0.02]])
+                              [[42, 0.02]], [pose[2], 0.02])
             nav.update_ekf_pose(*pose, 0.02, 0.02, stamp)
 
     def test_full_octagon_and_return_complete_without_tags(self):
@@ -46,10 +46,14 @@ class TestLateNavigation(unittest.TestCase):
         """
         nav = self.navigator()
         scanned, returning, previous = set(), 0, None
+        look_entries = {}
         for tick in range(1, 12000):
             cmd = nav.step(tick * 0.05)
             if cmd.state == NavigationState.RELOCALIZING_TURN:
                 scanned.add(nav.side_index)
+                if previous != cmd.state:
+                    look_entries[nav.side_index] = look_entries.get(nav.side_index, 0) + 1
+            self.assertLessEqual(nav.late.scan_used, math.pi / 2 + math.pi / 40 + 1e-6)
             returning += int(cmd.state == NavigationState.RETURN_DRIVING and previous != cmd.state)
             self.assertFalse(cmd.linear_v_mps and cmd.angular_omega_radps)
             previous = cmd.state
@@ -57,19 +61,41 @@ class TestLateNavigation(unittest.TestCase):
                 break
         self.assertEqual(nav.state, NavigationState.COMPLETED)
         self.assertEqual(scanned, {6, 7, 8})
+        self.assertEqual(look_entries, {6: 1, 7: 1, 8: 1})
         self.assertGreaterEqual(returning, 2)
         self.assertEqual(nav.side_index, 8)
         self.assertLessEqual(math.hypot(nav.navigation_x, nav.navigation_y), 0.10)
         self.assertLessEqual(nav.late.return_travel_m, nav.policy.return_max_distance_m + 0.02)
         self.assertIn('estimated start reached', cmd.status_message)
 
-    def test_scan_faces_lowest_covariance_tag_without_hard_coded_ids(self):
+    def test_center_look_uses_estimated_polygon_center_and_either_direction(self):
+        """Look toward the center with a signed angle rather than sweeping left around.
+
+        Args:
+            None.
+
+        Returns:
+            None. Checks estimated geometry and the 90-degree cap in both directions.
+        """
         nav = self.navigator()
         nav.navigation_yaw = 0
-        nav.vision.mapped_landmarks = [[0, 2, 0, 0.05], [42, 0, 2, 0.01]]
-        tag, angle = nav.late._scan_direction()
-        self.assertEqual(tag, 42)
-        self.assertAlmostEqual(angle, math.pi / 2)
+        self.assertAlmostEqual(nav.late._look_direction(), math.radians(67.5))
+        nav.navigation_yaw = math.pi
+        self.assertAlmostEqual(nav.late._look_direction(), -math.pi / 2)
+        nav.navigation_yaw = -math.pi / 2
+        self.assertAlmostEqual(nav.late._look_direction(), math.pi / 2)
+        nav.navigation_x, nav.navigation_y = nav._planned_center()
+        self.assertEqual(nav.late._look_direction(), 0)
+
+    def test_inward_look_can_use_clockwise_motor_pair(self):
+        nav = self.navigator()
+        nav.navigation_yaw = math.pi
+        nav.side_index = 6
+        nav.late.start(1, 6)
+        cmd = nav.step(1.05)
+        self.assertLess(cmd.angular_omega_radps, 0)
+        self.assertEqual(nav.turn_calibration.motors(cmd.angular_omega_radps), (0.37, -0.37))
+        self.assertAlmostEqual(nav.late.pivot_goal, math.pi / 2)
 
     def test_confident_post_stop_frames_end_scan_early(self):
         """Verify confident post stop frames end scan early.
@@ -102,14 +128,14 @@ class TestLateNavigation(unittest.TestCase):
         self.assertIn(nav.state, (NavigationState.REORIENTING, NavigationState.REORIENT_PAUSE))
         self.assertTrue(nav.is_active)
 
-    def test_pre_stop_observations_do_not_end_scan(self):
+    def test_pre_stop_observations_do_not_trigger_repeat_scan(self):
         nav = self.navigator()
         nav.side_index = 6
         nav.late.start(1, 6)
         self.observe(nav, (1.1, 1.5, 2))
         nav.late._enter('RELOCALIZING_PAUSE', 3)
         nav.step(6)
-        self.assertEqual(nav.state, NavigationState.RELOCALIZING_TURN)
+        self.assertIn(nav.state, (NavigationState.REORIENTING, NavigationState.REORIENT_PAUSE))
 
     def test_last_leg_targets_fixed_start_after_pose_updates(self):
         """Verify last leg targets fixed start after pose updates.
@@ -208,7 +234,7 @@ class TestLateNavigation(unittest.TestCase):
             self.assertEqual((cmd.linear_v_mps, cmd.angular_omega_radps), (0, 0))
 
     def test_late_navigation_limits_are_validated(self):
-        for values in ({'late_scan_start_corner': 6.5}, {'late_scan_max_angle_rad': 7},
+        for values in ({'late_scan_start_corner': 6.5}, {'late_scan_max_angle_rad': math.pi},
                        {'return_segment_m': 4}, {'return_tolerance_m': -0.1}):
             with self.assertRaises(ValueError):
                 NavigationPolicy(**values)

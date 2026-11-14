@@ -16,6 +16,7 @@ class NavigationState(Enum):
     WAITING_FOR_POSE = 'WAITING_FOR_POSE'
     DRIVING = 'DRIVING'
     MIDPOINT_PAUSE = 'MIDPOINT_PAUSE'
+    MIDPOINT_CORRECTING = 'MIDPOINT_CORRECTING'
     STOPPING = 'STOPPING'
     TURNING = 'TURNING'
     TURN_STAGE_PAUSE = 'TURN_STAGE_PAUSE'
@@ -210,10 +211,10 @@ class SquareNavigator:
         return c * dx + s * dy, -s * dx + c * dy, wrap_angle(theta_slam - self.theta0_slam)
 
     def update_vision(self, stamp, tags, known_ids, clearance, tag_yaws=None,
-                      landmark_sigmas=None, ekf_heading=None, mapped_landmarks=None):
+                      landmark_sigmas=None, ekf_heading=None):
         """Pass timestamped base-frame observations to the independent vision tracker."""
         self.vision.update(stamp, tags, known_ids, clearance,
-                           self._best_pose(), self._ekf_progress(), tag_yaws, landmark_sigmas, ekf_heading, mapped_landmarks)
+                           self._best_pose(), self._ekf_progress(), tag_yaws, landmark_sigmas, ekf_heading)
 
     def _heading(self):
         """Return the absolute SLAM heading anchored to the initial robot direction."""
@@ -266,6 +267,9 @@ class SquareNavigator:
         self.drive_used += abs(self.last_command[0]) * dt
         if self.state == NavigationState.TURNING:
             self.corner_used += abs(self.last_command[1]) * dt
+        elif self.state == NavigationState.MIDPOINT_CORRECTING:
+            self.midpoint_correction_used += abs(self.last_command[1]) * dt
+            self.midpoint_correction_signed += self.last_command[1] * dt
         elif self.state == NavigationState.CORRECTING:
             self.correction_used += abs(self.last_command[1]) * dt
             self.correction_signed += self.last_command[1] * dt
@@ -309,6 +313,7 @@ class SquareNavigator:
         handlers = {NavigationState.WAITING_FOR_POSE: self._wait_for_start,
                     NavigationState.DRIVING: self._drive,
                     NavigationState.MIDPOINT_PAUSE: self._midpoint_pause,
+                    NavigationState.MIDPOINT_CORRECTING: self._midpoint_correct,
                     NavigationState.STOPPING: self._settle,
                     NavigationState.TURNING: self._turn_corner,
                     NavigationState.TURN_STAGE_PAUSE: self._turn_stage_pause,
@@ -343,6 +348,8 @@ class SquareNavigator:
             self.leg_origin[0] + c * self.square_size_m, self.leg_origin[1] + s * self.square_size_m)
         self.progress = self.drive_used = 0.0
         self._reset_midpoint()
+        self.leg_reference = self.vision.stable_tag_yaws(now, self.phase_started)
+        self.leg_start_heading = self.navigation_yaw
         self.vision.begin_leg(self._heading())
         self._transition(NavigationState.DRIVING, now)
 
@@ -354,12 +361,29 @@ class SquareNavigator:
         return (self.x0_slam + self.square_size_m * sum(math.cos(v) for v in angles),
                 self.y0_slam + self.square_size_m * sum(math.sin(v) for v in angles))
 
+    def _planned_center(self):
+        """Return the ideal polygon center in the recorded start's SLAM frame, in meters."""
+        vertices = [self._planned_vertex(index) for index in range(self.side_count)]
+        return tuple(sum(values) / self.side_count for values in zip(*vertices))
+
     def _reset_midpoint(self):
-        """Clear the one-time midpoint correction without changing side heading."""
+        """Clear midpoint distance/heading budgets while preserving the fixed side course.
+
+        Args:
+            None.
+
+        Returns:
+            None. Resets per-leg estimates, reference normals, and correction counters.
+        """
         self.midpoint_done = False
         self.midpoint_progress_m = self.midpoint_remaining_m = None
         self.midpoint_source = 'not reached'
         self.progress_correction_m = 0.0
+        self.midpoint_correction_count = 0
+        self.midpoint_correction_used = self.midpoint_correction_signed = 0.0
+        self.midpoint_correction_goal = self.midpoint_correction_omega = 0.0
+        self.midpoint_heading_source, self.midpoint_heading_residual = 'not reached', None
+        self.leg_reference, self.leg_start_heading = {}, self.navigation_yaw
 
     def _first_half(self, now):
         """Drive half the nominal side using command prediction, then stop once."""
@@ -387,28 +411,94 @@ class SquareNavigator:
         self.progress = self.drive_used + self.progress_correction_m
         self.midpoint_remaining_m = max(0.0, self.square_size_m - self.progress)
 
+    def _update_midpoint_distance(self, now):
+        """Update the bounded distance plan, retaining prior feedback if the new pose is stale."""
+        estimate, source = self._midpoint_estimate(now)
+        if source == 'fresh EKF' or self.midpoint_progress_m is None:
+            self.midpoint_progress_m, self.midpoint_source = estimate, source
+            self._apply_midpoint_correction(estimate)
+        elif self.midpoint_source != 'command prediction fallback':
+            self.midpoint_source = 'retained prior bounded midpoint estimate'
+
+    def _midpoint_heading_error(self, now):
+        """Prefer a confident fixed-course heading, otherwise measure same-tag drift.
+
+        Args:
+            now: Current ROS time after a stopped acquisition interval, in seconds.
+
+        Returns:
+            Signed correction in radians, or None without usable post-stop feedback.
+            Relative normals maintain the leg's initial direction without a global map.
+        """
+        yaws = self.vision.stable_tag_yaws(now, self.phase_started)
+        yaw = self.vision.confident_ekf_yaw(now, self.phase_started)
+        if yaw is not None and self.vision.known_ids.intersection(yaws) and self.policy.corner_ekf_weight > 0:
+            self.navigation_yaw, self.heading_time = yaw, now
+            self.midpoint_heading_source = f'Confident EKF fixed-course heading tags {sorted(self.vision.known_ids)}'
+            return self.policy.corner_ekf_weight * wrap_angle(self._heading() - yaw)
+        measured = relative_tag_turn(self.leg_reference, yaws, self.midpoint_correction_signed)
+        if measured is not None:
+            self.navigation_yaw = wrap_angle(self.leg_start_heading + measured)
+            self.heading_time, self.midpoint_heading_source = now, 'Stable same-tag straight-heading drift'
+            return wrap_angle(-measured)
+        reason = self.vision.ekf_rejection_reason or 'insufficient stable mapped-tag observations'
+        self.midpoint_heading_source = 'No stable heading feedback; ' + reason
+        return None
+
+    def _select_midpoint_turn(self, error, now):
+        """Select a useful heading pulse within the shared angle/count policy limits.
+
+        Args:
+            error: Signed observed heading correction in radians, or None.
+            now: Current ROS time in seconds.
+
+        Returns:
+            True when a midpoint pivot is selected; False when forward travel should resume.
+        """
+        remaining = max(0.0, self.policy.corner_correction_limit_rad - self.midpoint_correction_used)
+        angle = min(abs(error), self.turn_pulse_rad, remaining) if error is not None else 0.0
+        if angle + 1e-9 < self.policy.corner_min_correction_rad or self.midpoint_correction_count >= self.policy.corner_max_corrections:
+            return False
+        self.midpoint_correction_goal = self.midpoint_correction_used + angle
+        self.midpoint_correction_omega = self.turn_calibration.rate(error)
+        self.midpoint_correction_count += 1
+        self._transition(NavigationState.MIDPOINT_CORRECTING, now)
+        return True
+
     def _midpoint_pause(self, now):
-        """Pause for camera processing, then apply one bounded forward-distance adjustment.
+        """Recheck distance and heading after a fixed stationary acquisition interval.
 
         Args:
             now: Current ROS controller time in seconds.
 
         Returns:
-            Stopped NavigationOutput. The next tick resumes the same heading.
-            Missing or uncertain EKF data never extend the fixed-duration pause.
+            Stopped NavigationOutput selecting a heading correction or forward continuation.
+            Every pulse gets another acquisition pause. Missing observations never extend
+            the fixed wait; distance adjustments remain bounded around commanded travel.
         """
         if now - self.phase_started < self.policy.midpoint_pause_s:
-            return self._output('Midpoint pause; allowing camera and EKF updates')
-        self.midpoint_progress_m, self.midpoint_source = self._midpoint_estimate(now)
-        self._apply_midpoint_correction(self.midpoint_progress_m)
+            return self._output('Midpoint pause; checking remaining distance and optional heading feedback')
+        self._update_midpoint_distance(now)
+        self.midpoint_heading_residual = self._midpoint_heading_error(now)
+        if self._select_midpoint_turn(self.midpoint_heading_residual, now):
+            return self._output('Midpoint heading correction selected; ' + self.midpoint_heading_source)
         self.midpoint_done = True
         self._transition(NavigationState.DRIVING, now)
         return self._output(f'Midpoint {self.midpoint_source}; '
                             f'applied correction {self.progress_correction_m:+.3f} m; '
-                            f'{self.midpoint_remaining_m:.3f} m remaining on same heading')
+                            f'{self.midpoint_remaining_m:.3f} m remaining; ' + self.midpoint_heading_source)
+
+    def _midpoint_correct(self, now):
+        """Apply a fixed-rate pivot, then stop to recheck both distance and heading."""
+        if (self.midpoint_correction_used + 1e-9 >= self.midpoint_correction_goal
+                or now - self.phase_started >= self.policy.corner_timeout_s):
+            self._transition(NavigationState.MIDPOINT_PAUSE, now)
+            return self._output('Midpoint pivot finished; stopped to recheck distance and heading')
+        return self._output('Midpoint heading correction from ' + self.midpoint_heading_source,
+                            angular=self.midpoint_correction_omega)
 
     def _drive(self, now):
-        """Drive the remainder from a frozen bounded midpoint correction; no live overrides.
+        """Drive the remainder after stopped distance and heading corrections; no live overrides.
 
         Args:
             now: ROS controller time in seconds.
@@ -495,7 +585,8 @@ class SquareNavigator:
 
         Returns:
             None. Updates the remaining turn budget. An actionable visual adjustment
-            consumes one of the three correction attempts and its absolute angle budget.
+            consumes one of the three attempts. Only extra left rotation consumes
+            angle budget; omitting planned rotation leaves room for a right correction.
         """
         nominal = self.turn_calibration.ccw_radps * self.policy.corner_turn_duration_s
         remaining = max(0.0, nominal - self.corner_used)
@@ -505,7 +596,7 @@ class SquareNavigator:
             delta = max(-limit, min(limit, delta))
             if abs(delta) + 1e-9 >= self.policy.corner_min_correction_rad:
                 remaining += delta
-                self.correction_used += abs(delta)
+                self.correction_used += max(0.0, delta)
                 self.correction_count += 1
         self.corner_stage_goal = self.corner_used + remaining
         self.corner_stage_done = True

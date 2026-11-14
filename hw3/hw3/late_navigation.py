@@ -1,4 +1,4 @@
-"""Bounded late-corner relocalization and segmented return to the recorded start."""
+"""Single inward looks at late corners and segmented return to the recorded start."""
 
 import math
 
@@ -26,10 +26,10 @@ class LateNavigation:
         self.pivot_rate = 0.0
         self.corner = self.extra_count = 0
         self.extra_used = 0.0
-        self.scan_target = None
+        self.scan_approach = 0.0
 
     def start(self, now, corner):
-        """Begin a bounded scan before choosing the outgoing heading.
+        """Begin one bounded inward look before choosing the outgoing heading.
 
         Args:
             now: Current ROS time in seconds.
@@ -45,24 +45,25 @@ class LateNavigation:
         self.action = 'complete' if corner == self.nav.side_count else 'drive'
         if corner == self.nav.side_count - 1:
             self.action, self.return_travel_m = 'return', 0.0
-        self.scan_target, self.scan_approach = self._scan_direction()
-        if self.scan_approach < self.nav.policy.corner_min_correction_rad:
+        self.scan_approach = self._look_direction()
+        if abs(self.scan_approach) < self.nav.policy.corner_min_correction_rad:
             self._enter('RELOCALIZING_PAUSE', now)
         else:
-            self._next_scan_step(now)
+            self._pivot(now, self.scan_approach, 'RELOCALIZING_TURN')
 
     def _enter(self, name, now):
         """Enter a shared navigation phase with a fresh deadline."""
         self.nav._transition(self.states[name], now)
 
-    def _scan_direction(self):
-        """Aim first toward the mapped tag with the lowest global positional sigma."""
-        catalog = self.nav.vision.mapped_landmarks
-        if not catalog:
-            return None, self.nav.policy.late_scan_step_rad
-        tag, x, y, _ = min(catalog, key=lambda item: (item[3], item[0]))
-        bearing = math.atan2(y - self.nav.navigation_y, x - self.nav.navigation_x)
-        return tag, (bearing - self.nav.navigation_yaw) % (2 * math.pi)
+    def _look_direction(self):
+        """Choose a signed pivot toward the estimated center, capped at 90 degrees."""
+        x, y = self.nav._planned_center()
+        dx, dy = x - self.nav.navigation_x, y - self.nav.navigation_y
+        if math.hypot(dx, dy) < 1e-6:
+            return 0.0
+        angle = wrap_angle(math.atan2(dy, dx) - self.nav.navigation_yaw)
+        limit = self.nav.policy.late_scan_max_angle_rad
+        return max(-limit, min(limit, angle))
 
     def account_motion(self, linear, angular, dt):
         """Count applied pivot and return travel once per controller interval.
@@ -106,19 +107,12 @@ class LateNavigation:
         return (self.pivot_used + 1e-9 >= self.pivot_goal
                 or now - self.nav.phase_started >= self.nav.policy.corner_timeout_s)
 
-    def _next_scan_step(self, now):
-        """Face the preferred tag in steps, then sweep the remaining bounded arc."""
-        budget = max(0.0, self.nav.policy.late_scan_max_angle_rad - self.scan_used)
-        approach = max(0.0, self.scan_approach - self.scan_used)
-        angle = min(budget, self.nav.policy.late_scan_step_rad, approach or budget)
-        self._pivot(now, angle, 'RELOCALIZING_TURN')
-
     def _scan_turn(self, now):
-        """Stop after each scan step so delayed camera observations can arrive."""
+        """Finish the single inward look, then stop for camera observations."""
         if self._pivot_finished(now):
             self._enter('RELOCALIZING_PAUSE', now)
-            return self.nav._output('Late scan step finished; stopped for camera')
-        return self.nav._output(f'Late corner {self.corner}: looking toward mapped tag {self.scan_target}',
+            return self.nav._output('Center look finished; stopped for camera')
+        return self.nav._output(f'Late corner {self.corner}: looking toward estimated center',
                                 angular=self.pivot_rate)
 
     def _refresh_pose(self, now):
@@ -146,26 +140,24 @@ class LateNavigation:
         return True
 
     def _scan_pause(self, now):
-        """Wait once per scan step; absence of tags never extends the scan budget.
+        """Pause once after looking inward, then leave regardless of tag visibility.
 
         Args:
             now: Current ROS time in seconds.
 
         Returns:
-            Stopped NavigationOutput. Continues searching or aligns for the next movement.
+            Stopped NavigationOutput selecting the outgoing heading. Never repeats the
+            look or escalates to a full revolution when feedback is missing.
         """
         if now - self.nav.phase_started < self.nav.turn_settle_s:
-            return self.nav._output('Late scan pause; gathering optional confident tag observations')
+            return self.nav._output('Center-look pause; gathering optional confident tag observations')
         found = self._refresh_pose(now)
-        if found or self.scan_used + 1e-9 >= self.nav.policy.late_scan_max_angle_rad:
-            if not found:
-                self.nav.corner_source = 'Late scan budget exhausted; calibrated pose fallback'
-            if self.action == 'complete' and self._needs_more_return():
-                self.action = 'return'
-            self._begin_alignment(now)
-        else:
-            self._next_scan_step(now)
-        return self.nav._output('Late scan acquired useful feedback' if found else 'Late scan continuing or timed fallback')
+        if not found:
+            self.nav.corner_source = 'Center look finished; calibrated pose fallback'
+        if self.action == 'complete' and self._needs_more_return():
+            self.action = 'return'
+        self._begin_alignment(now)
+        return self.nav._output('Center look acquired useful feedback' if found else 'Center look finished without useful feedback; continuing')
 
     def _begin_alignment(self, now):
         """Choose the next fixed vertex, the start position, or the final start heading.

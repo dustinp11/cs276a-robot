@@ -238,6 +238,35 @@ class TestFixedTurns(unittest.TestCase):
         self.assertAlmostEqual(nav.corner_residual, 0)
         self.assertEqual(nav.correction_count, 1)
 
+    def test_shortened_left_stage_preserves_budget_for_right_correction(self):
+        """An observed overshoot must permit a clockwise pulse after omitting the left remainder.
+
+        Args:
+            None.
+
+        Returns:
+            None. Tests stable visual overshoot through planning, final pause, and motor mapping.
+        """
+        nav = self.staged_corner()
+        yaw = 0.4 - math.radians(50)
+        for stamp in (4.5, 5, 5.5):
+            nav.update_vision(stamp, [[7, 2, 1]], [], None, [[7, yaw]])
+        nav.step(5.8)
+        self.assertAlmostEqual(nav.corner_stage_goal, nav.corner_used)
+        self.assertAlmostEqual(nav.correction_used, 0)
+        self.assertEqual(nav.correction_count, 1)
+        nav._turn_corner(6)
+        for stamp in (7, 8, 8.8):
+            nav.update_vision(stamp, [[7, 2, 1]], [], None, [[7, yaw]])
+        nav.step(9)
+        self.assertEqual(nav.state, NavigationState.CORRECTING)
+        self.assertAlmostEqual(nav.correction_goal, math.radians(5))
+        self.assertEqual(nav.correction_count, 2)
+        cmd = nav.step(9.05)
+        mapped = VelocityMapper(nav.turn_calibration).map_command(0, cmd.angular_omega_radps)
+        self.assertLess(cmd.angular_omega_radps, 0)
+        self.assertEqual((mapped.left, mapped.right), (0.37, -0.37))
+
     def test_staged_turn_without_shared_reference_uses_only_timed_remainder(self):
         nav = self.staged_corner()
         for stamp in (4.5, 5, 5.5):
@@ -985,7 +1014,6 @@ class TestVisionGeometry(unittest.TestCase):
         transform[2, 3] = 0.4
         node = Record(extrinsics=CameraExtrinsics(), vision_pub=Record(publish=published.append),
                       frame_landmark_sigmas={3: 0.02},
-                      _mapped_landmark_catalog=lambda: [[3, 2.0, 1.0, 0.05]],
                       ekf=Record(get_robot_pose=lambda: Record(theta=0.4, covariance=np.eye(3) * 0.0004)))
         method(node, 12.5, [{'id': 3, 't_cam_tag': transform}], [3])
         payload = json.loads(published[0].data)
