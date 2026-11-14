@@ -91,15 +91,15 @@
       right_input: 0.15
       speed_mps: 0.203
 
-    # both directions: approximately 90 degrees in 1 second at their measured pairs
+    # both directions: approximately 90 degrees in 0.65 seconds at their measured pairs
     turn_calibration:
       enabled: false  # navigation launch enables this for mapper and controller
       ccw_left_input: -0.40
       ccw_right_input: 0.37
       cw_left_input: 0.37
       cw_right_input: -0.37
-      ccw_radps: 1.5707963267948966  # nominal pi/2 radians in 1 second
-      cw_radps: 1.5707963267948966   # positive magnitude: pi/2 radians in 1 second
+      ccw_radps: 2.4166097  # nominal pi/2 radians in 0.65 seconds
+      cw_radps: 2.4166097   # positive magnitude: pi/2 radians in 0.65 seconds
 
     # Closed-Loop Square Navigation settings
     navigation:
@@ -131,7 +131,7 @@
       # no surveyed wall coordinates are used; distances are from robot center
       vision_timeout_s: 1.0
       corner_timeout_s: 18.0
-      corner_turn_duration_s: 0.95      # initial left pulse before pausing for optional correction
+      corner_turn_duration_s: 0.65      # corner turn duration in seconds (lowered from 1.0s to prevent overshoot)
       corner_stage_angle_rad: 3.141592653589793  # octagon profile uses a 30-degree first stage
       corner_min_observations: 3       # distinct stopped camera frames per tag
       corner_yaw_spread_rad: 0.05235987755982989  # maximum 3-degree normal-yaw spread

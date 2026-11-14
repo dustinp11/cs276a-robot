@@ -1,5 +1,6 @@
 """Launch camera, 36h11 detection, estimation, and a calibrated six-foot square."""
 
+import math
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
@@ -37,6 +38,8 @@ def _launch_arguments():
                               description='Square side length in feet'),
         DeclareLaunchArgument('motion_prediction_source', default_value='',
                               description='Optional override for ekf_slam prediction source (visual_odometry or cmd_vel)'),
+        DeclareLaunchArgument('corner_turn_duration_s', default_value='0.65',
+                              description='Corner turn duration in seconds for square mission'),
     ]
 
 
@@ -113,13 +116,21 @@ def _control_nodes(context):
         }
     else:
         # square: 4 sides, two-lap navigation (open loop lap 1, return to (0,0), closed loop lap 2)
+        turn_duration_str = LaunchConfiguration('corner_turn_duration_s').perform(context)
+        turn_duration = float(turn_duration_str) if turn_duration_str else 0.65
+        ccw_rate = (math.pi / 2.0) / turn_duration
+        cw_rate = (math.pi / 2.0) / turn_duration
+        turn_overrides.update({
+            'turn_calibration.ccw_radps': ccw_rate,
+            'turn_calibration.cw_radps': cw_rate,
+        })
         navigation_overrides = {
             'navigation.side_count': 4,
             'navigation.manual_motion_enabled': True,
             'navigation.two_lap_square': True,
             'navigation.manual_forward_pause_s': 1.0,
             'navigation.manual_midpoint_pause_s': 1.0,
-            'navigation.corner_turn_duration_s': 1.0,
+            'navigation.corner_turn_duration_s': turn_duration,
         }
         ekf_overrides = {
             'ekf_slam.motion_prediction_source': motion_src_arg or 'visual_odometry',

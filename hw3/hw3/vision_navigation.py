@@ -27,7 +27,7 @@ class NavigationPolicy:
     startup_view_range_tolerance_m: float = 0.15
     vision_timeout_s: float = 1.0
     corner_timeout_s: float = 18.0
-    corner_turn_duration_s: float = 0.95
+    corner_turn_duration_s: float = 0.65
     corner_stage_angle_rad: float = math.pi
     corner_min_observations: int = 3
     corner_yaw_spread_rad: float = math.pi / 60

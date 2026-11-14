@@ -15,8 +15,8 @@ class TestSquareTwoLaps(unittest.TestCase):
             ccw_right_input=0.37,
             cw_left_input=0.37,
             cw_right_input=-0.37,
-            ccw_radps=math.pi / 2,
-            cw_radps=math.pi / 2,
+            ccw_radps=math.pi / 2 / 0.65,
+            cw_radps=math.pi / 2 / 0.65,
         )
         self.forward = ForwardCalibration(left_input=0.185, right_input=0.15, speed_mps=0.20)
         self.policy = NavigationPolicy(
@@ -24,7 +24,7 @@ class TestSquareTwoLaps(unittest.TestCase):
             two_lap_square=True,
             manual_forward_pause_s=1.0,
             manual_midpoint_pause_s=1.0,
-            corner_turn_duration_s=1.0,
+            corner_turn_duration_s=0.65,
             closed_loop_waypoint_tolerance_m=0.10,
             heading_drive_threshold_rad=0.35,
         )
