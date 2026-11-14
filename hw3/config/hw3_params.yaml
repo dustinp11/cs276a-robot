@@ -103,7 +103,10 @@
 
     # Closed-Loop Square Navigation settings
     navigation:
-      manual_motion_enabled: false    # octagon launch enables timed motion without feedback corrections
+      manual_motion_enabled: true     # default: timed open-loop motion for lap 1
+      two_lap_square: true            # execute open-loop lap 1, return to (0,0), then closed-loop lap 2
+      closed_loop_waypoint_tolerance_m: 0.12  # tolerance for reaching waypoints in closed loop (m)
+      heading_drive_threshold_rad: 0.35      # max allowed heading drift while driving before turning in place (~20 deg)
       manual_forward_pause_s: 1.0      # pause after a full side, immediately before the next turn
       manual_midpoint_pause_s: 1.0     # pause halfway through each manual forward side
       startup_scan_enabled: false     # disabled by the manual octagon profile

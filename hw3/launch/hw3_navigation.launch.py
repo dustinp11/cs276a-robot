@@ -35,6 +35,8 @@ def _launch_arguments():
                               description='square or octagon calibrated motion profile'),
         DeclareLaunchArgument('square_size_ft', default_value='6.0',
                               description='Square side length in feet'),
+        DeclareLaunchArgument('motion_prediction_source', default_value='',
+                              description='Optional override for ekf_slam prediction source (visual_odometry or cmd_vel)'),
     ]
 
 
@@ -88,12 +90,14 @@ def _control_nodes(context):
         raise ValueError('Mission must be square or octagon.')
     turn_overrides = {'turn_calibration.enabled': True}
     navigation_overrides = {}
+    motion_src_arg = LaunchConfiguration('motion_prediction_source').perform(context)
     if mission == 'octagon':
         turn_overrides.update({'turn_calibration.ccw_left_input': -0.35,
                                'turn_calibration.ccw_right_input': 0.35,
                                'turn_calibration.ccw_radps': 1.5707963267948966})
         navigation_overrides = {'navigation.side_count': 8,
                                 'navigation.manual_motion_enabled': True,
+                                'navigation.two_lap_square': False,
                                 'navigation.manual_forward_pause_s': 1.0,
                                 'navigation.manual_midpoint_pause_s': 1.0,
                                 'navigation.startup_scan_enabled': False,
@@ -103,12 +107,28 @@ def _control_nodes(context):
                                 'navigation.corner_turn_duration_s': 0.5,
                                 'navigation.corner_stage_angle_rad': 0.7853981633974483,
                                 'navigation.corner_ekf_weight': 0.0}
+        ekf_overrides = {
+            'ekf_slam.motion_prediction_source': motion_src_arg or 'cmd_vel',
+            'ekf_slam.command_topic': '/cmd_vel_applied',
+        }
+    else:
+        # square: 4 sides, two-lap navigation (open loop lap 1, return to (0,0), closed loop lap 2)
+        navigation_overrides = {
+            'navigation.side_count': 4,
+            'navigation.manual_motion_enabled': True,
+            'navigation.two_lap_square': True,
+            'navigation.manual_forward_pause_s': 1.0,
+            'navigation.manual_midpoint_pause_s': 1.0,
+            'navigation.corner_turn_duration_s': 1.0,
+        }
+        ekf_overrides = {
+            'ekf_slam.motion_prediction_source': motion_src_arg or 'visual_odometry',
+            'ekf_slam.command_topic': '/cmd_vel_applied',
+            'ekf_slam.use_cmd_vel_fallback': True,
+        }
     return [
         _hw3_node('visual_odometry_node'),
-        _hw3_node('ekf_slam_node', overrides={
-            'ekf_slam.motion_prediction_source': 'cmd_vel',
-            'ekf_slam.command_topic': '/cmd_vel_applied',
-        }),
+        _hw3_node('ekf_slam_node', overrides=ekf_overrides),
         _hw3_node('motor_control'),
         _hw3_node('velocity_mapping', overrides=turn_overrides),
         _hw3_node('navigation_node', name='square_navigation_node', overrides={

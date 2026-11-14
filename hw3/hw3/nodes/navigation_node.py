@@ -491,7 +491,8 @@ class SquareNavigationNode(Node):
             None.
         """
         # 5. log periodically to terminal if active
-        if output.state in (NavigationState.DRIVING, NavigationState.TURNING, NavigationState.CORRECTING):
+        if output.state in (NavigationState.DRIVING, NavigationState.TURNING, NavigationState.CORRECTING,
+                            NavigationState.RELOCALIZING_TURN, NavigationState.RETURN_DRIVING, NavigationState.REORIENTING):
             self.get_logger().info(
                 f"[WP{output.waypoint_index}] dist={output.distance_error_m:.2f}m, "
                 f"head_err={math.degrees(output.heading_error_rad):.1f}°, "

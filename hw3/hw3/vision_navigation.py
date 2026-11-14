@@ -45,6 +45,9 @@ class NavigationPolicy:
     drive_budget_factor: float = 1.25
     midpoint_pause_s: float = 3.0
     midpoint_max_correction_m: float = 0.10
+    two_lap_square: bool = True
+    closed_loop_waypoint_tolerance_m: float = 0.12
+    heading_drive_threshold_rad: float = 0.35
 
     def __post_init__(self):
         """Validate nominal motion limits and bounded optional corrections.
@@ -56,10 +59,12 @@ class NavigationPolicy:
             None. Raises ValueError for invalid phase timing, angles, or counts.
         """
         if not all(math.isfinite(getattr(self, f.name)) and getattr(self, f.name) > 0
-                   for f in fields(self) if f.name not in ('corner_ekf_weight', 'startup_scan_enabled', 'manual_motion_enabled')):
+                   for f in fields(self) if f.name not in ('corner_ekf_weight', 'startup_scan_enabled', 'manual_motion_enabled', 'two_lap_square')):
             raise ValueError('Navigation vision limits must be finite and positive.')
         if not isinstance(self.manual_motion_enabled, bool):
             raise ValueError('Manual motion enable must be boolean.')
+        if not isinstance(self.two_lap_square, bool):
+            raise ValueError('Two lap square enable must be boolean.')
         if not isinstance(self.startup_scan_enabled, bool) or self.startup_scan_step_rad > math.pi / 2:
             raise ValueError('Startup scan enable must be boolean and each step at most 90 degrees.')
         if not self.startup_view_search_step_rad <= self.startup_view_search_max_rad <= math.pi / 2:
