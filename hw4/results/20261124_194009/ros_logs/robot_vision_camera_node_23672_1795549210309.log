@@ -1,0 +1,23 @@
+[INFO] [1795549210.596010628] [robot_vision_camera]: frame_rate: 10
+[INFO] [1795549210.601130628] [robot_vision_camera]: width: 1280
+[INFO] [1795549210.601216461] [robot_vision_camera]: height: 720
+[INFO] [1795549210.601240420] [robot_vision_camera]: camera_id: 0
+[INFO] [1795549210.601261618] [robot_vision_camera]: input_format: NV12
+[INFO] [1795549210.601282191] [robot_vision_camera]: output_format: BGR
+[INFO] [1795549210.601302659] [robot_vision_camera]: topic_name: camera/image_raw
+[INFO] [1795549210.601323441] [robot_vision_camera]: image_compress: true
+[INFO] [1795549210.601344274] [robot_vision_camera]: image_rectify: true
+[INFO] [1795549210.601364482] [robot_vision_camera]: jpeg_quality: 90
+[INFO] [1795549210.601385211] [robot_vision_camera]: brightness: 0.05
+[INFO] [1795549210.601505524] [robot_vision_camera]: contrast: 1.00
+[INFO] [1795549210.601544586] [robot_vision_camera]: saturation: 0.20
+[INFO] [1795549210.601570576] [robot_vision_camera]: hue: 0.10
+[INFO] [1795549210.621724326] [robot_vision_camera]: Camera info loaded successfully from: /home/ubuntu/robot_testing/install/hw3/share/hw3/config/camera_parameter.yaml
+[INFO] [1795549210.639357763] [robot_vision_camera]: Rectified CameraInfo: fx=623.825 fy=621.934 cx=668.161 cy=338.51; D=0, R=identity, P=[newK|0]
+[INFO] [1795549210.639600628] [robot_vision_camera]: Rectify ready. size=1280x720, D=1x5, K=(624.313,0,668.683 | 0,622.799,338.981 | 0,0,1)
+[INFO] [1795549210.655763701] [robot_vision_camera]: Input caps: video/x-raw,format=NV12,width=1280,height=720,framerate=10/1
+[INFO] [1795549210.655848597] [robot_vision_camera]: Output caps: video/x-raw,format=BGR
+[INFO] [1795549210.655864586] [robot_vision_camera]: Camera ID: 0
+[INFO] [1795549210.854512347] [robot_vision_camera]: GStreamer pipeline built successfully
+[INFO] [1795549210.938944586] [robot_vision_camera]: GStreamer pipeline started
+[INFO] [1795549272.356510500] [rclcpp]: signal_handler(SIGINT/SIGTERM)

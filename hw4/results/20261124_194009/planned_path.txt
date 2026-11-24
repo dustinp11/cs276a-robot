@@ -1,0 +1,9 @@
+PLANNED PATH ONLY; no measured trajectory
+Start: (234.5, 63.0) cm, heading 180.0 deg
+Headings: 0=+x/right, 90=+y/up; +turn=left, -turn=right
+Mode: fast
+Target      x_cm    y_cm   distance_cm   heading_deg   turn_deg
+W1          95.0   100.0         144.3         165.1      -14.9
+W2          85.0   120.0          22.4         116.6      -48.6
+W3          75.0   154.0          35.4         106.4      -10.2
+Final goal (65.0, 229.5) cm is saved but not executed.

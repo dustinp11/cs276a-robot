@@ -1,0 +1,201 @@
+[WARN] [1795549211.427531305] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      0
+	CameraInfo messages received: 2
+	Synchronized pairs:           0
+[WARN] [1795549212.427862815] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 8
+	Synchronized pairs:           1
+[WARN] [1795549213.428125939] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      0
+	CameraInfo messages received: 10
+	Synchronized pairs:           0
+[WARN] [1795549214.427081147] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 10
+	Synchronized pairs:           2
+[WARN] [1795549215.428270262] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 11
+	Synchronized pairs:           1
+[WARN] [1795549217.427053542] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 10
+	Synchronized pairs:           2
+[WARN] [1795549218.427121198] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 10
+	Synchronized pairs:           2
+[WARN] [1795549219.427790208] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 10
+	Synchronized pairs:           2
+[WARN] [1795549220.427082135] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      0
+	CameraInfo messages received: 10
+	Synchronized pairs:           0
+[WARN] [1795549221.446781666] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      3
+	CameraInfo messages received: 10
+	Synchronized pairs:           3
+[WARN] [1795549222.428122655] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 11
+	Synchronized pairs:           2
+[WARN] [1795549224.427082602] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 11
+	Synchronized pairs:           1
+[WARN] [1795549226.427065414] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      3
+	CameraInfo messages received: 10
+	Synchronized pairs:           3
+[WARN] [1795549227.427443017] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 10
+	Synchronized pairs:           2
+[WARN] [1795549229.426961090] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 11
+	Synchronized pairs:           2
+[WARN] [1795549231.427985620] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 10
+	Synchronized pairs:           2
+[WARN] [1795549232.493565359] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 10
+	Synchronized pairs:           1
+[WARN] [1795549233.429811973] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      0
+	CameraInfo messages received: 10
+	Synchronized pairs:           0
+[WARN] [1795549234.485200411] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 11
+	Synchronized pairs:           2
+[WARN] [1795549235.431577129] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 9
+	Synchronized pairs:           1
+[WARN] [1795549236.427456035] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 11
+	Synchronized pairs:           1
+[WARN] [1795549237.427058482] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 9
+	Synchronized pairs:           2
+[WARN] [1795549238.427505357] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      3
+	CameraInfo messages received: 10
+	Synchronized pairs:           3
+[WARN] [1795549239.427073117] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      3
+	CameraInfo messages received: 10
+	Synchronized pairs:           3
+[WARN] [1795549240.428083481] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      3
+	CameraInfo messages received: 10
+	Synchronized pairs:           3
+[WARN] [1795549242.427068168] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 9
+	Synchronized pairs:           2
+[WARN] [1795549243.427013168] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 10
+	Synchronized pairs:           1
+[WARN] [1795549244.468530667] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 10
+	Synchronized pairs:           1
+[WARN] [1795549245.427054625] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 10
+	Synchronized pairs:           1
+[WARN] [1795549246.463772021] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 11
+	Synchronized pairs:           2
+[WARN] [1795549247.429532437] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 9
+	Synchronized pairs:           2
+[WARN] [1795549248.431622332] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 11
+	Synchronized pairs:           2
+[WARN] [1795549249.427047749] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 9
+	Synchronized pairs:           1
+[WARN] [1795549250.427151290] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 10
+	Synchronized pairs:           1
+[WARN] [1795549253.471372018] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 11
+	Synchronized pairs:           1
+[WARN] [1795549255.427164309] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 10
+	Synchronized pairs:           1
+[WARN] [1795549256.427064777] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 10
+	Synchronized pairs:           2
+[WARN] [1795549257.427255610] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      0
+	CameraInfo messages received: 10
+	Synchronized pairs:           0
+[WARN] [1795549258.427246443] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 10
+	Synchronized pairs:           1
+[WARN] [1795549259.427672328] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      0
+	CameraInfo messages received: 10
+	Synchronized pairs:           0
+[WARN] [1795549260.427086807] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      3
+	CameraInfo messages received: 11
+	Synchronized pairs:           3
+[WARN] [1795549261.427094775] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 9
+	Synchronized pairs:           1
+[WARN] [1795549262.430494306] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      3
+	CameraInfo messages received: 10
+	Synchronized pairs:           2
+[WARN] [1795549263.427063889] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      0
+	CameraInfo messages received: 10
+	Synchronized pairs:           1
+[WARN] [1795549264.428320399] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      1
+	CameraInfo messages received: 10
+	Synchronized pairs:           1
+[WARN] [1795549265.428195086] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      0
+	CameraInfo messages received: 11
+	Synchronized pairs:           0
+[WARN] [1795549266.427346336] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      0
+	CameraInfo messages received: 9
+	Synchronized pairs:           0
+[WARN] [1795549267.427108315] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      3
+	CameraInfo messages received: 11
+	Synchronized pairs:           3
+[WARN] [1795549269.427508366] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 10
+	Synchronized pairs:           2
+[WARN] [1795549270.463957064] [apriltag_36h11]: [image_transport] Topics '/camera/image_raw' and '/camera/camera_info' do not appear to be synchronized. In the last 10s:
+	Image messages received:      2
+	CameraInfo messages received: 10
+	Synchronized pairs:           2
+[INFO] [1795549272.356378990] [rclcpp]: signal_handler(SIGINT/SIGTERM)

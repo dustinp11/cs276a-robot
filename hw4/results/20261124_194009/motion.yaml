@@ -1,0 +1,19 @@
+/**:
+  ros__parameters:
+    # shared by the mapper and mission
+    # forward inputs selected for current surface
+    forward_calibration:
+      left_input: 0.4
+      right_input: 0.4
+      # historical speed estimate; remeasure current surface
+      speed_mps: 0.567333
+    turn_calibration:
+      enabled: true
+      # measured full ccw rotation takes 3.55 seconds
+      ccw_left_input: -0.43
+      ccw_right_input: 0.43
+      # measured full cw rotation takes 3.59 seconds
+      cw_left_input: 0.4
+      cw_right_input: -0.4
+      ccw_radps: 1.7699113541350948
+      cw_radps: 1.7501908933647874
