@@ -1,0 +1,168 @@
+{
+  "surveyed": true,
+  "map_frame": "map",
+  "camera_frame": "camera_frame",
+  "workspace_cm": {
+    "x_min": 0.0,
+    "x_max": 300.0,
+    "y_min": 0.0,
+    "y_max": 292.5
+  },
+  "obstacle_cm": {
+    "x_min": 114.0,
+    "x_max": 176.0,
+    "y_min": 123.0,
+    "y_max": 185.0
+  },
+  "camera_mount": {
+    "x_m": 0.0,
+    "y_m": 0.0,
+    "z_m": 0.2,
+    "roll_deg": 0.0,
+    "pitch_deg": 0.0,
+    "yaw_deg": 0.0
+  },
+  "quality": {
+    "min_decision_margin": 15.0,
+    "max_hamming": 1,
+    "max_tag_distance_m": 5.0,
+    "max_height_error_m": 0.35,
+    "max_tilt_deg": 40.0,
+    "max_disagreement_m": 0.30,
+    "max_disagreement_deg": 25.0
+  },
+  "landmarks": [
+    {
+      "id": 5,
+      "family": "36h11",
+      "frame": "tag_5",
+      "x_m": 1.83,
+      "y_m": 0.0,
+      "z_m": 0.15,
+      "facing_deg": 90.0,
+      "size_m": 0.172,
+      "location": "bottom_wall"
+    },
+    {
+      "id": 9,
+      "family": "36h11",
+      "frame": "tag_9",
+      "x_m": 0.965,
+      "y_m": 0.0,
+      "z_m": 0.15,
+      "facing_deg": 90.0,
+      "size_m": 0.172,
+      "location": "bottom_wall"
+    },
+    {
+      "id": 8,
+      "family": "36h11",
+      "frame": "tag_8",
+      "x_m": 0.0,
+      "y_m": 1.00,
+      "z_m": 0.15,
+      "facing_deg": 0.0,
+      "size_m": 0.172,
+      "location": "left_wall"
+    },
+    {
+      "id": 4,
+      "family": "36h11",
+      "frame": "tag_4",
+      "x_m": 0.0,
+      "y_m": 1.98,
+      "z_m": 0.15,
+      "facing_deg": 0.0,
+      "size_m": 0.172,
+      "location": "left_wall"
+    },
+    {
+      "id": 3,
+      "family": "36h11",
+      "frame": "tag_3",
+      "x_m": 1.00,
+      "y_m": 2.925,
+      "z_m": 0.15,
+      "facing_deg": 270.0,
+      "size_m": 0.172,
+      "location": "top_wall"
+    },
+    {
+      "id": 1,
+      "family": "36h11",
+      "frame": "tag_1",
+      "x_m": 1.975,
+      "y_m": 2.925,
+      "z_m": 0.15,
+      "facing_deg": 270.0,
+      "size_m": 0.172,
+      "location": "top_wall"
+    },
+    {
+      "id": 7,
+      "family": "36h11",
+      "frame": "tag_7",
+      "x_m": 3.00,
+      "y_m": 1.97,
+      "z_m": 0.15,
+      "facing_deg": 180.0,
+      "size_m": 0.172,
+      "location": "right_wall"
+    },
+    {
+      "id": 0,
+      "family": "36h11",
+      "frame": "tag_0",
+      "x_m": 3.00,
+      "y_m": 0.95,
+      "z_m": 0.15,
+      "facing_deg": 180.0,
+      "size_m": 0.172,
+      "location": "right_wall"
+    },
+    {
+      "id": 1,
+      "family": "41h12",
+      "frame": "tag_41h12_1",
+      "x_m": 1.14,
+      "y_m": 1.54,
+      "z_m": 0.15,
+      "facing_deg": 180.0,
+      "size_m": 0.187,
+      "location": "obstacle_west"
+    },
+    {
+      "id": 2,
+      "family": "41h12",
+      "frame": "tag_41h12_2",
+      "x_m": 1.45,
+      "y_m": 1.85,
+      "z_m": 0.15,
+      "facing_deg": 90.0,
+      "size_m": 0.187,
+      "location": "obstacle_north"
+    },
+    {
+      "id": 3,
+      "family": "41h12",
+      "frame": "tag_41h12_3",
+      "x_m": 1.76,
+      "y_m": 1.54,
+      "z_m": 0.15,
+      "facing_deg": 0.0,
+      "size_m": 0.187,
+      "location": "obstacle_east"
+    },
+    {
+      "id": 4,
+      "family": "41h12",
+      "frame": "tag_41h12_4",
+      "x_m": 1.45,
+      "y_m": 1.23,
+      "z_m": 0.15,
+      "facing_deg": 270.0,
+      "size_m": 0.187,
+      "location": "obstacle_south"
+    }
+  ]
+}

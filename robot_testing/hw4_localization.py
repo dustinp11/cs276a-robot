@@ -1,0 +1,259 @@
+"""AprilTag Visual Localization for Homework 4.
+
+Uses known global coordinates of all 8 wall AprilTags (36h11) and 4 obstacle
+AprilTags (41h12) to compute the robot's global position (x, y) and heading (yaw)
+in the map coordinate frame.
+
+Reuses the proven LandmarkMap, PoseEstimator, PoseProvider, and math transforms
+from robot_testing.hw2_localization while enhancing frame resolution for multiple
+AprilTag families (36h11 and 41h12).
+"""
+
+from dataclasses import dataclass
+import json
+import math
+from pathlib import Path
+import threading
+import time
+from typing import List, Optional, Tuple
+
+import numpy as np
+
+from robot_testing.hw2_localization import (
+    Detection,
+    Landmark,
+    LandmarkMap,
+    LocalizationError,
+    Observation,
+    PoseEstimate,
+    PoseEstimator,
+    PoseProvider,
+    quaternion_transform,
+)
+
+
+class HW4PoseEstimator(PoseEstimator):
+    """Extends PoseEstimator to distinguish wall vs obstacle tags and log tag sources."""
+
+    def __init__(self, landmark_map: LandmarkMap):
+        super().__init__(landmark_map)
+        # Classify landmarks as wall vs obstacle for logging
+        self.wall_tag_ids: Set[int] = set()
+        self.obstacle_tag_ids: Set[int] = set()
+        for (family, tag_id), lm in landmark_map.landmarks.items():
+            if family == '36h11':
+                self.wall_tag_ids.add(tag_id)
+            elif family == '41h12':
+                self.obstacle_tag_ids.add(tag_id)
+
+    def classify_tag(self, family: str, tag_id: int) -> str:
+        fam = LandmarkMap.family(family)
+        if fam == '36h11':
+            return f"Wall Tag {tag_id} (36h11)"
+        if fam == '41h12':
+            return f"Obstacle Tag {tag_id} (41h12)"
+        return f"Tag {tag_id} ({family})"
+
+
+class HW4LocalizationService:
+    """ROS 2 Node service and publisher for HW4 visual localization."""
+
+    def __init__(self, node):
+        from ament_index_python.packages import get_package_share_directory
+        from apriltag_msgs.msg import AprilTagDetectionArray
+        from geometry_msgs.msg import PoseStamped
+        try:
+            from hw2_interfaces.srv import GetRobotPose
+        except ImportError:
+            GetRobotPose = None
+        from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+        from rclpy.time import Time
+        from tf2_ros import Buffer, TransformException, TransformListener
+
+        self.node = node
+        self.time_type = Time
+        self.tf_exception = TransformException
+
+        # Default configuration file: config/hw4_landmarks.json
+        possible_configs = [
+            Path(__file__).resolve().parent.parent / 'config/hw4_landmarks.json',
+            Path('config/hw4_landmarks.json'),
+        ]
+        try:
+            possible_configs.insert(
+                0,
+                Path(get_package_share_directory('robot_testing')) / 'config/hw4_landmarks.json'
+            )
+        except Exception:
+            pass
+
+        default_config = str(possible_configs[0])
+        for p in possible_configs:
+            if p.exists():
+                default_config = str(p)
+                break
+
+        node.declare_parameter('landmarks_file', default_config)
+        node.declare_parameter('max_pose_age_s', 0.60)
+        node.declare_parameter('request_timeout_s', 1.0)
+
+        landmarks_file = node.get_parameter('landmarks_file').value
+        node.get_logger().info(f'Loading HW4 landmarks from: {landmarks_file}')
+        self.landmark_map = LandmarkMap(landmarks_file)
+        self.estimator = HW4PoseEstimator(self.landmark_map)
+
+        self.tf_buffer = Buffer(node=node)
+        self.tf_listener = TransformListener(self.tf_buffer, node)
+
+        self.provider = PoseProvider(
+            self.estimator,
+            self.lookup,
+            lambda: node.get_clock().now().nanoseconds,
+            node.get_parameter('max_pose_age_s').value,
+            node.get_parameter('request_timeout_s').value,
+        )
+
+        self.pose_pub = node.create_publisher(PoseStamped, '/robot_pose', 10)
+        self.subscription = node.create_subscription(
+            AprilTagDetectionArray, '/detections', self.on_detections, 10
+        )
+
+        if GetRobotPose is not None:
+            self.service_group = MutuallyExclusiveCallbackGroup()
+            self.service = node.create_service(
+                GetRobotPose, '/get_robot_pose', self.on_request,
+                callback_group=self.service_group,
+            )
+            node.get_logger().info('Ready: /get_robot_pose service and /robot_pose publisher')
+        else:
+            self.service = None
+            node.get_logger().info('hw2_interfaces not found; publishing on /robot_pose topic.')
+
+        self.publish_timer = node.create_timer(0.1, self.publish_pose_tick)
+        self.last_logged_tags = None
+
+    def on_detections(self, message):
+        stamp = message.header.stamp
+        detections = tuple(
+            Detection(item.id, item.family, item.hamming, item.decision_margin)
+            for item in message.detections
+        )
+        self.provider.observe(Observation(
+            stamp.sec * 10**9 + stamp.nanosec,
+            message.header.frame_id,
+            detections,
+        ))
+
+    def lookup(self, tag_frame, observation):
+        """Lookup transform with multi-candidate fallback for various apriltag_ros frame formats."""
+        stamp = self.time_type(nanoseconds=observation.stamp_ns,
+                               clock_type=self.node.get_clock().clock_type)
+
+        # Generate candidate frame names (e.g. tag_41h12_1, tag41h12:1, tag_1)
+        candidates = [tag_frame]
+        # If tag_frame is like 'tag_41h12_1'
+        if '_' in tag_frame:
+            parts = tag_frame.split('_')
+            tid = parts[-1]
+            candidates.append(f"tag_{tid}")
+            if len(parts) >= 3:
+                fam = parts[1]
+                candidates.append(f"{fam}:{tid}")
+                candidates.append(f"tag{fam}:{tid}")
+        elif ':' in tag_frame:
+            fam, tid = tag_frame.split(':')
+            candidates.append(f"tag_{tid}")
+            candidates.append(f"tag_{fam}_{tid}")
+
+        last_error = None
+        for frame in candidates:
+            try:
+                result = self.tf_buffer.lookup_transform(observation.camera_frame, frame, stamp)
+                t, q = result.transform.translation, result.transform.rotation
+                return quaternion_transform((t.x, t.y, t.z), (q.x, q.y, q.z, q.w))
+            except self.tf_exception as exception:
+                last_error = exception
+                continue
+
+        raise LookupError(f"Transform failed for {tag_frame} (candidates: {candidates}): {last_error}")
+
+    def create_pose_message(self, estimate: PoseEstimate):
+        from geometry_msgs.msg import PoseStamped
+        msg = PoseStamped()
+        msg.header.frame_id = 'map'
+        msg.header.stamp.sec = estimate.stamp_ns // 10**9
+        msg.header.stamp.nanosec = estimate.stamp_ns % 10**9
+        msg.pose.position.x = float(estimate.x)
+        msg.pose.position.y = float(estimate.y)
+        msg.pose.position.z = 0.0
+        msg.pose.orientation.z = math.sin(estimate.yaw / 2.0)
+        msg.pose.orientation.w = math.cos(estimate.yaw / 2.0)
+        return msg
+
+    def publish_pose_tick(self):
+        with self.provider._lock:
+            observation = self.provider._latest
+        if observation is None:
+            return
+        age = (self.provider.now_ns() - observation.stamp_ns) / 1e9
+        if not (observation.stamp_ns > 0 and 0 <= age <= self.provider.max_age_s):
+            return
+        try:
+            estimate = self.provider.estimator.estimate(observation, self.lookup)
+            msg = self.create_pose_message(estimate)
+            self.pose_pub.publish(msg)
+            # Periodic logging on change of tag set
+            if estimate.tag_ids != self.last_logged_tags:
+                self.last_logged_tags = estimate.tag_ids
+                tags_desc = [
+                    self.estimator.classify_tag('36h11' if tid in self.estimator.wall_tag_ids else '41h12', tid)
+                    for tid in estimate.tag_ids
+                ]
+                self.node.get_logger().info(
+                    f"Pose: ({estimate.x:.3f}, {estimate.y:.3f}) m, "
+                    f"yaw={math.degrees(estimate.yaw):.1f}° from {tags_desc}"
+                )
+        except Exception:
+            pass
+
+    def on_request(self, request, response):
+        try:
+            estimate = self.provider.request()
+        except LocalizationError as exception:
+            response.success = False
+            response.message = str(exception)
+            self.node.get_logger().warn(f'HW4 Localization failed: {response.message}')
+            return response
+        response.success = True
+        response.message = 'Pose estimated from current landmark observations'
+        response.pose = self.create_pose_message(estimate)
+        response.tag_ids = list(estimate.tag_ids)
+        return response
+
+
+def main(args=None):
+    import rclpy
+    from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+    from rclpy.node import Node
+
+    rclpy.init(args=args)
+    node = Node('hw4_localization')
+    service = None
+    executor = MultiThreadedExecutor(num_threads=3)
+    try:
+        service = HW4LocalizationService(node)
+        executor.add_node(node)
+        executor.spin()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        if service is not None:
+            service.provider.close()
+        executor.shutdown()
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

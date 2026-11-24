@@ -13,9 +13,11 @@ setup(
         ('share/' + package_name + '/launch', [
             'launch/hw1_solution.launch.py',
             'launch/hw2.launch.py',
+            'launch/hw4_safe_navigation.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/landmarks.json',
+            'config/hw4_landmarks.json',
         ]),
     ],
     install_requires=['setuptools'],
@@ -37,6 +39,10 @@ setup(
             'hw1_solution = robot_testing.hw1_solution:main',
             'hw2_control = robot_testing.hw2_control:main',
             'hw2_localization = robot_testing.hw2_localization:main',
+            'voronoi_planner = robot_testing.voronoi_planner:main',
+            'hw4_localization = robot_testing.hw4_localization:main',
+            'hw4_control = robot_testing.hw4_control:main',
+            'hw4_visualization = robot_testing.hw4_visualization:main',
         ],
     },
 )
