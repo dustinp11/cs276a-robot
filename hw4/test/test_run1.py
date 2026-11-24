@@ -21,7 +21,7 @@ from hw4.grid import build_grid, rectangle_distance
 from hw4.localization import Feedback, Localizer, stable_feedback
 from hw4.navigation import Navigator
 from hw4.observations import CaptureBuffer
-from hw4.tags import canonical_family, detector_parameters, mapped_families, tag_frame
+from hw4.tags import canonical_family, detection_topic, detector_parameters, mapped_families, tag_frame
 from hw4.fast import plan_path
 from hw4.planner import get_mode
 from hw4.preview import prepare_plans
@@ -188,6 +188,15 @@ class RunOneTests(unittest.TestCase):
         np.testing.assert_allclose((pose.x, pose.y, pose.yaw), (0.55, 0.55, 0.2), atol=1e-10)
         self.assertIn(('36h11', 1), pose.tags)
         self.assertIn(('41h12', 1), pose.tags)
+
+    def test_detection_topic_tokens_are_valid_ros_identifiers(self):
+        """Regress the physical-run failure caused by digit-prefixed topic segments."""
+        # validate generated names used across adapters
+        self.assertEqual(detection_topic('36h11'), '/detections/tag36h11')
+        self.assertEqual(detection_topic('tagStandard41h12'), '/detections/tag41h12')
+        for family in ('36h11', '41h12'):
+            for token in detection_topic(family).split('/')[1:]:
+                self.assertRegex(token, r'^[A-Za-z_][A-Za-z0-9_]*$')
 
     def test_detector_packets_count_as_one_capture(self):
         """Merge same-image packets without manufacturing independent stability samples."""

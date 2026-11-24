@@ -13,7 +13,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from hw3.coordinates import make_transform, quaternion_to_rotation_matrix
 from hw4.localization import Localizer
 from hw4.observations import CaptureBuffer
-from hw4.tags import canonical_family, mapped_families, tag_frame
+from hw4.tags import canonical_family, detection_topic, mapped_families, tag_frame
 
 
 class PoseSource:
@@ -31,7 +31,7 @@ class PoseSource:
         self.buffer = Buffer(node=node)
         self.listener = TransformListener(self.buffer, node)
         self.subscriptions = [node.create_subscription(
-            AprilTagDetectionArray, f'/detections/{family}',
+            AprilTagDetectionArray, detection_topic(family),
             partial(self.observe, family), 1) for family in self.families]
         self.publisher = node.create_publisher(PoseStamped, '/hw4/pose', 10)
 

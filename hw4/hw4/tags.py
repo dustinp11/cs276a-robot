@@ -22,6 +22,11 @@ def tag_frame(key):
     return f'tag_{key[0]}_{key[1]}'
 
 
+def detection_topic(family):
+    """Return a ROS topic with a letter-prefixed family token."""
+    return f'/detections/tag{canonical_family(family)}'
+
+
 def mapped_families(environment):
     """Return the canonical families that have surveyed landmarks."""
     return sorted({tag_key(tag)[0] for tag in environment['landmarks']})

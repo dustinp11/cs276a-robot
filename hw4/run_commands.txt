@@ -4,9 +4,12 @@ git add hw4
 git commit -m "Update HW4"
 git push -u origin HEAD
 
-ROBOT TERMINAL 1: pull, build, launch (same branch as local)
+ROBOT: pull first (same branch as local)
 cd ~/robot_testing
-git pull --ff-only &&
+git pull --ff-only
+
+ROBOT TERMINAL 1: build and launch after pulling
+cd ~/robot_testing
 source /opt/ros/jazzy/setup.bash &&
 source rubikpi_ros2/install/setup.bash &&
 colcon build --base-paths hw3 hw4 --packages-select hw3 hw4 &&

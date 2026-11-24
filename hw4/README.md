@@ -42,7 +42,7 @@ confirmed face headings 180°, 90°, 0°, and 270°, respectively, center height
 0.187 m, and printed size 0.172 m. The confirmed physical obstacle rectangle is
 x = 1.14–1.76 m and y = 1.23–1.85 m; it is not a diamond.
 
-One detector handles each family on `/detections/36h11` and `/detections/41h12`.
+One detector handles each family on `/detections/tag36h11` and `/detections/tag41h12`.
 The repository calls the second detector family `Standard41h12`; `tags.py`
 normalizes that spelling to `41h12`. Matching always uses `(family, ID)` and
 unique TF names such as `tag_36h11_1` and `tag_41h12_1`.
@@ -176,7 +176,7 @@ planning, geometry, localization, tag identity, and control remain in their own 
 `preview.py` uses the same planner offline. Hardware drivers remain reused HW3
 dependencies rather than copied implementations.
 
-Use `run_commands.txt` unchanged for build/launch/start/stop. It rebuilds HW3 and
+Use `run_commands.txt` for the separate pull step followed by build/launch/start/stop. It rebuilds HW3 and
 HW4 each time. Source measurements and motion calibration are passed explicitly;
 `navigation.yaml` is installed by the build, so rebuild after changing it.
 Restart the launch after changing any configuration. Keep the same branch on

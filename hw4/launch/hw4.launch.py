@@ -14,7 +14,7 @@ from launch_ros.substitutions import FindPackageShare
 
 from hw4.config import load_validated_environment
 from hw4.settings import load_settings
-from hw4.tags import detector_parameters, mapped_families
+from hw4.tags import detection_topic, detector_parameters, mapped_families
 
 
 def generate_launch_description():
@@ -70,7 +70,7 @@ def detectors(environment):
     return [Node(package='apriltag_ros', executable='apriltag_node', name=f'apriltag_{family}',
                  parameters=[config, detector_parameters(environment, family)], output='screen',
                  remappings=[('image_rect', '/camera/image_raw'), ('camera_info', '/camera/camera_info'),
-                             ('detections', f'/detections/{family}')])
+                             ('detections', detection_topic(family))])
             for family in mapped_families(environment)]
 
 
@@ -79,5 +79,5 @@ def recorder(output):
     return ExecuteProcess(cmd=[
         'ros2', 'bag', 'record', '-o', str(Path(output) / 'telemetry'),
         '/cmd_vel', '/cmd_vel_applied', '/motor_commands', '/imu_data',
-        '/detections/36h11', '/detections/41h12', '/tf', '/tf_static', '/hw4/pose', '/hw4/status',
+        detection_topic('36h11'), detection_topic('41h12'), '/tf', '/tf_static', '/hw4/pose', '/hw4/status',
     ], output='screen')
