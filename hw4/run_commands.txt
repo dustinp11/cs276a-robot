@@ -1,0 +1,33 @@
+LOCAL TERMINAL: commit and push after editing
+cd /Users/dustinpham/ucsd/fall2026/cs276a/robot_local
+git add hw4
+git commit -m "Update HW4"
+git push -u origin HEAD
+
+ROBOT TERMINAL 1: pull, build, launch (same branch as local)
+cd ~/robot_testing
+git pull --ff-only &&
+source /opt/ros/jazzy/setup.bash &&
+source rubikpi_ros2/install/setup.bash &&
+colcon build --base-paths hw3 hw4 --packages-select hw3 hw4 &&
+source install/setup.bash &&
+export HW4_RUN_DIR="$PWD/hw4/results/$(date +%Y%m%d_%H%M%S)" &&
+mkdir -p "$HW4_RUN_DIR/ros_logs" &&
+git rev-parse HEAD > "$HW4_RUN_DIR/commit.txt" &&
+git status --short > "$HW4_RUN_DIR/git_status.txt" &&
+export ROS_LOG_DIR="$HW4_RUN_DIR/ros_logs" &&
+ros2 launch hw4 hw4.launch.py environment_file:="$PWD/hw4/config/environment.json" motion_file:="$PWD/hw4/config/motion.yaml" output_dir:="$HW4_RUN_DIR"
+
+ROBOT TERMINAL 2: start run 1 (one mission per launch)
+cd ~/robot_testing
+source /opt/ros/jazzy/setup.bash
+source rubikpi_ros2/install/setup.bash
+source install/setup.bash
+ros2 service call /hw4/start std_srvs/srv/Trigger '{}'
+
+ROBOT TERMINAL 2: stop mission
+ros2 service call /hw4/stop std_srvs/srv/Trigger '{}'
+
+ROBOT TERMINAL 1: end launch and finish recording
+Ctrl+C
+

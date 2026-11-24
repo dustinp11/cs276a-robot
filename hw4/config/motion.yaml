@@ -1,0 +1,18 @@
+/**:
+  ros__parameters:
+    # effective hw3_navigation.launch.py mission:=slam_square values
+    # shared unchanged by the hw3 mapper and the hw4 mission node
+    forward_calibration:
+      left_input: 0.185
+      right_input: 0.15
+      # baseline was measured at [0.18, 0.15]; 0.185 trim awaits remeasurement
+      speed_mps: 0.203
+    turn_calibration:
+      enabled: true
+      # slam_square overrides the yaml's default ccw pair [-0.40, 0.37]
+      ccw_left_input: -0.35
+      ccw_right_input: 0.35
+      cw_left_input: 0.37
+      cw_right_input: -0.37
+      ccw_radps: 1.5707963267948966
+      cw_radps: 1.5707963267948966
