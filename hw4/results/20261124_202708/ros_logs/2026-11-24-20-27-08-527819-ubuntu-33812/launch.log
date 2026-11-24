@@ -1,0 +1,20 @@
+1795552028.5292366 [INFO] [launch]: All log files can be found below /home/ubuntu/robot_testing/hw4/results/20261124_202708/ros_logs/2026-11-24-20-27-08-527819-ubuntu-33812
+1795552028.5294852 [INFO] [launch]: Default logging verbosity is set to INFO
+1795552028.6718154 [INFO] [robot_vision_camera_node-1]: process started with pid [33824]
+1795552028.6721103 [INFO] [foxglove_bridge-2]: process started with pid [33825]
+1795552028.6722701 [INFO] [apriltag_node-3]: process started with pid [33826]
+1795552028.6723893 [INFO] [apriltag_node-4]: process started with pid [33827]
+1795552028.6725469 [INFO] [motor_control-5]: process started with pid [33828]
+1795552028.6726573 [INFO] [velocity_mapping-6]: process started with pid [33829]
+1795552028.6727676 [INFO] [hw4_navigation-7]: process started with pid [33830]
+1795552028.6728730 [INFO] [ros2-8]: process started with pid [33831]
+1795552080.4256964 [WARNING] [launch]: user interrupted with ctrl-c (SIGINT)
+1795552080.6372700 [WARNING] [launch]: user interrupted with ctrl-c (SIGINT) again, ignoring...
+1795552080.6385646 [ERROR] [apriltag_node-3]: process has died [pid 33826, exit code -2, cmd '/home/ubuntu/robot_testing/rubikpi_ros2/install/apriltag_ros/lib/apriltag_ros/apriltag_node --ros-args -r __node:=apriltag_36h11 --params-file /home/ubuntu/robot_testing/rubikpi_ros2/install/apriltag_ros/share/apriltag_ros/cfg/tags_36h11.yaml --params-file /tmp/launch_params_ic81n_17 -r image_rect:=/camera/image_raw -r camera_info:=/camera/camera_info -r detections:=/detections/tag36h11'].
+1795552080.6426294 [ERROR] [velocity_mapping-6]: process has died [pid 33829, exit code -2, cmd '/home/ubuntu/robot_testing/install/hw3/lib/hw3/velocity_mapping --ros-args --params-file /home/ubuntu/robot_testing/hw4/config/motion.yaml'].
+1795552080.6469743 [ERROR] [hw4_navigation-7]: process has died [pid 33830, exit code -2, cmd '/home/ubuntu/robot_testing/install/hw4/lib/hw4/hw4_navigation --ros-args --params-file /home/ubuntu/robot_testing/hw4/config/motion.yaml --params-file /tmp/launch_params_mz91thsp'].
+1795552080.6491766 [ERROR] [motor_control-5]: process has died [pid 33828, exit code -2, cmd '/home/ubuntu/robot_testing/install/hw3/lib/hw3/motor_control --ros-args --params-file /home/ubuntu/robot_testing/hw4/config/motion.yaml'].
+1795552080.6535184 [ERROR] [apriltag_node-4]: process has died [pid 33827, exit code -2, cmd '/home/ubuntu/robot_testing/rubikpi_ros2/install/apriltag_ros/lib/apriltag_ros/apriltag_node --ros-args -r __node:=apriltag_41h12 --params-file /home/ubuntu/robot_testing/rubikpi_ros2/install/apriltag_ros/share/apriltag_ros/cfg/tags_36h11.yaml --params-file /tmp/launch_params_2mxll7a_ -r image_rect:=/camera/image_raw -r camera_info:=/camera/camera_info -r detections:=/detections/tag41h12'].
+1795552080.6556430 [ERROR] [ros2-8]: process has died [pid 33831, exit code -2, cmd 'ros2 bag record -o /home/ubuntu/robot_testing/hw4/results/20261124_202708/telemetry /camera/camera_info /cmd_vel /cmd_vel_applied /motor_commands /imu_data /detections/tag36h11 /detections/tag41h12 /tf /tf_static /hw4/pose /hw4/status'].
+1795552080.7778156 [INFO] [foxglove_bridge-2]: process has finished cleanly [pid 33825]
+1795552080.8879702 [INFO] [robot_vision_camera_node-1]: process has finished cleanly [pid 33824]

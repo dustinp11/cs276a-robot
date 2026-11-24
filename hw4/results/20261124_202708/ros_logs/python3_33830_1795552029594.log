@@ -1,0 +1,22 @@
+[INFO] [1795552030.003041896] [hw4_navigation]: 
+PLANNED PATH ONLY; no measured trajectory
+Start: (234.5, 63.0) cm, heading 180.0 deg
+Headings: 0=+x/right, 90=+y/up; +turn=left, -turn=right
+Mode: fast
+Target      x_cm    y_cm   distance_cm   heading_deg   turn_deg
+W1          95.0   100.0         144.3         165.1      -14.9
+W2          85.0   120.0          22.4         116.6      -48.6
+W3          65.0   229.5         111.3         100.4      -16.2
+
+[INFO] [1795552030.003784657] [hw4_navigation]: Plan preview: /home/ubuntu/robot_testing/hw4/results/20261124_202708/planned_paths.svg
+[INFO] [1795552030.004286896] [hw4_navigation]: No mission motion until /hw4/start is called.
+[INFO] [1795552030.031390959] [hw4_navigation]: Run 1 ready. Start with /hw4/start; stop with /hw4/stop.
+[INFO] [1795552030.031917053] [hw4_navigation]: Visual feedback: near_goal; tag searches enabled: False
+[INFO] [1795552030.233970907] [hw4_navigation]: turning: executing full calibrated turn from estimated heading; waypoint 1
+[INFO] [1795552030.383619032] [hw4_navigation]: moving: driving toward waypoint for up to one second; waypoint 1
+[INFO] [1795552032.942763041] [hw4_navigation]: turning: executing full calibrated turn from estimated heading; waypoint 2
+[INFO] [1795552033.437242728] [hw4_navigation]: moving: driving toward waypoint for up to one second; waypoint 2
+[INFO] [1795552033.839898614] [hw4_navigation]: turning: executing full calibrated turn from estimated heading; waypoint 3
+[INFO] [1795552033.991237520] [hw4_navigation]: moving: driving toward waypoint for up to one second; waypoint 3
+[INFO] [1795552035.447074811] [hw4_navigation]: verifying: correcting goal approach with fresh AprilTag observations; waypoint 3
+[INFO] [1795552042.489289652] [hw4_navigation]: unverified: fresh stable goal reference 36h11:3 unavailable; no search performed; waypoint 3

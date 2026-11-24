@@ -1,0 +1,21 @@
+[INFO] [1795552029.531220646] [rosbag2_recorder]: Press SPACE for pausing/resuming
+[INFO] [1795552029.533497521] [rosbag2_recorder]: Event publisher thread: Started
+[INFO] [1795552029.585929969] [rosbag2_recorder]: Starting recording to '/home/ubuntu/robot_testing/hw4/results/20261124_202708/telemetry'
+[INFO] [1795552029.598226480] [rosbag2_recorder]: Listening for topics...
+[INFO] [1795552029.598383459] [rosbag2_recorder]: Recording...
+[INFO] [1795552029.598567782] [rosbag2_recorder]: Topics discovery started.
+[INFO] [1795552029.617115698] [rosbag2_recorder]: Subscribed to topic '/motor_commands'
+[INFO] [1795552029.633230021] [rosbag2_recorder]: Subscribed to topic '/detections/tag36h11'
+[INFO] [1795552029.649037626] [rosbag2_recorder]: Subscribed to topic '/cmd_vel_applied'
+[INFO] [1795552029.653635542] [rosbag2_recorder]: Subscribed to topic '/detections/tag41h12'
+[INFO] [1795552029.666874448] [rosbag2_recorder]: Subscribed to topic '/tf'
+[INFO] [1795552029.672202834] [rosbag2_recorder]: Subscribed to topic '/camera/camera_info'
+[INFO] [1795552029.872738719] [rosbag2_recorder]: Subscribed to topic '/imu_data'
+[INFO] [1795552030.011126428] [rosbag2_recorder]: Subscribed to topic '/cmd_vel'
+[INFO] [1795552030.014611844] [rosbag2_recorder]: Subscribed to topic '/hw4/status'
+[INFO] [1795552030.037287105] [rosbag2_recorder]: Subscribed to topic '/hw4/pose'
+[INFO] [1795552080.421535158] [rosbag2_recorder]: Topics discovery stopped.
+[INFO] [1795552080.431866773] [rosbag2_recorder]: Pausing recording.
+[INFO] [1795552080.432024637] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while
+[INFO] [1795552080.465048335] [rosbag2_recorder]: Recording stopped
+[WARN] [1795552080.465143804] [rosbag2_recorder]: Number of messages lost on the transport layer: 1

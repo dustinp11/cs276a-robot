@@ -1,0 +1,19 @@
+[INFO] [1795552028.916257990] [foxglove_bridge]: Starting foxglove_bridge (jazzy, 3.5.0@)
+[INFO] [1795552028.920624293] [foxglove_bridge]: Server listening on port 8765
+[INFO] [1795552028.922236636] [foxglove_bridge]: Advertising new channel 2 for topic "/rosout"
+[INFO] [1795552028.922958563] [foxglove_bridge]: Advertising new channel 3 for topic "/parameter_events"
+[INFO] [1795552029.455224344] [foxglove_bridge]: Advertising new channel 4 for topic "/detections/tag36h11"
+[INFO] [1795552029.455335959] [foxglove_bridge]: Advertising new channel 5 for topic "/detections/tag41h12"
+[INFO] [1795552029.455684605] [foxglove_bridge]: Advertising new channel 6 for topic "/camera/image_raw"
+[INFO] [1795552029.456517105] [foxglove_bridge]: Advertising new channel 7 for topic "/tf"
+[INFO] [1795552029.457167209] [foxglove_bridge]: Advertising new channel 8 for topic "/camera/camera_info"
+[INFO] [1795552030.083853042] [foxglove_bridge]: Advertising new channel 9 for topic "/tf_static"
+[INFO] [1795552030.085017417] [foxglove_bridge]: Advertising new channel 10 for topic "/motor_commands"
+[INFO] [1795552030.085356375] [foxglove_bridge]: Advertising new channel 11 for topic "/hw4/status"
+[INFO] [1795552030.086114657] [foxglove_bridge]: Advertising new channel 12 for topic "/hw4/pose"
+[INFO] [1795552030.086534813] [foxglove_bridge]: Advertising new channel 13 for topic "/imu_data"
+[INFO] [1795552030.086894396] [foxglove_bridge]: Advertising new channel 14 for topic "/cmd_vel"
+[INFO] [1795552030.087466532] [foxglove_bridge]: Advertising new channel 15 for topic "/camera/image_raw/compressed"
+[INFO] [1795552032.819926374] [foxglove_bridge]: Advertising new channel 16 for topic "/cmd_vel_applied"
+[INFO] [1795552033.447844812] [foxglove_bridge]: Advertising new channel 17 for topic "/events/write_split"
+[INFO] [1795552080.422094169] [rclcpp]: signal_handler(SIGINT/SIGTERM)
