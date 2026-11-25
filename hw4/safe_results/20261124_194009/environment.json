@@ -1,0 +1,144 @@
+{
+  "workspace": {
+    "width_m": 3.0,
+    "height_m": 2.925
+  },
+  "robot": {
+    "length_m": 0.16,
+    "width_m": 0.16,
+    "safety_margin_m": 0.1
+  },
+  "start": {
+    "x_m": 2.345,
+    "y_m": 0.63,
+    "yaw_deg": 180.0
+  },
+  "goal": {
+    "x_m": 0.75,
+    "y_m": 1.54,
+    "label": "intermediate goal"
+  },
+  "obstacles": [
+    {
+      "name": "middle",
+      "x_min_m": 1.14,
+      "x_max_m": 1.76,
+      "y_min_m": 1.23,
+      "y_max_m": 1.85
+    }
+  ],
+  "landmarks": [
+    {
+      "id": 5,
+      "x_m": 1.83,
+      "y_m": 0.0,
+      "z_m": 0.172,
+      "face_yaw_deg": 90,
+      "tag_size_m": 0.172,
+      "family": "36h11"
+    },
+    {
+      "id": 9,
+      "x_m": 0.965,
+      "y_m": 0.0,
+      "z_m": 0.172,
+      "face_yaw_deg": 90,
+      "tag_size_m": 0.172,
+      "family": "36h11"
+    },
+    {
+      "id": 8,
+      "x_m": 0.0,
+      "y_m": 1.0,
+      "z_m": 0.172,
+      "face_yaw_deg": 0,
+      "tag_size_m": 0.172,
+      "family": "36h11"
+    },
+    {
+      "id": 4,
+      "x_m": 0.0,
+      "y_m": 1.98,
+      "z_m": 0.172,
+      "face_yaw_deg": 0,
+      "tag_size_m": 0.172,
+      "family": "36h11"
+    },
+    {
+      "id": 3,
+      "x_m": 1.0,
+      "y_m": 2.925,
+      "z_m": 0.172,
+      "face_yaw_deg": 270,
+      "tag_size_m": 0.172,
+      "family": "36h11"
+    },
+    {
+      "id": 1,
+      "x_m": 1.975,
+      "y_m": 2.925,
+      "z_m": 0.172,
+      "face_yaw_deg": 270,
+      "tag_size_m": 0.172,
+      "family": "36h11"
+    },
+    {
+      "id": 7,
+      "x_m": 3.0,
+      "y_m": 1.97,
+      "z_m": 0.172,
+      "face_yaw_deg": 180,
+      "tag_size_m": 0.172,
+      "family": "36h11"
+    },
+    {
+      "id": 0,
+      "x_m": 3.0,
+      "y_m": 0.95,
+      "z_m": 0.172,
+      "face_yaw_deg": 180,
+      "tag_size_m": 0.172,
+      "family": "36h11"
+    },
+    {
+      "family": "41h12",
+      "id": 1,
+      "x_m": 1.14,
+      "y_m": 1.54,
+      "z_m": 0.187,
+      "tag_size_m": 0.185,
+      "face_yaw_deg": 180.0
+    },
+    {
+      "family": "41h12",
+      "id": 2,
+      "x_m": 1.45,
+      "y_m": 1.85,
+      "z_m": 0.187,
+      "tag_size_m": 0.185,
+      "face_yaw_deg": 90.0
+    },
+    {
+      "family": "41h12",
+      "id": 3,
+      "x_m": 1.76,
+      "y_m": 1.54,
+      "z_m": 0.187,
+      "tag_size_m": 0.185,
+      "face_yaw_deg": 0.0
+    },
+    {
+      "family": "41h12",
+      "id": 4,
+      "x_m": 1.45,
+      "y_m": 1.23,
+      "z_m": 0.187,
+      "tag_size_m": 0.185,
+      "face_yaw_deg": 270.0
+    }
+  ],
+  "final_goal": {
+    "x_m": 0.65,
+    "y_m": 2.295
+  }
+}

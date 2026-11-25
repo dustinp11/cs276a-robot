@@ -193,8 +193,8 @@ class HW4Navigator:
 class HW4ControlNode(Node):
     """ROS 2 Node executing safe Voronoi path planning and closed-loop visual navigation."""
 
-    def __init__(self):
-        super().__init__('hw4_control')
+    def __init__(self, node_name: str = 'hw4_safe'):
+        super().__init__(node_name)
 
         # Publishers & Subscribers
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)

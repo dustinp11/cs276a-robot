@@ -94,11 +94,11 @@ def generate_launch_description():
         }],
     )
 
-    # Node 4: HW4 Closed-Loop Navigation Node
+    # Node 4: HW4 Safe Voronoi Navigation Node (hw4_safe)
     control_node = Node(
         package='robot_testing',
-        executable='hw4_control',
-        name='hw4_control',
+        executable='hw4_safe',
+        name='hw4_safe',
         output='screen',
         emulate_tty=True,
         parameters=[{

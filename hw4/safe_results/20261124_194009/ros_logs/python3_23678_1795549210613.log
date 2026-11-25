@@ -1,0 +1,31 @@
+[INFO] [1795549210.994498128] [hw4_navigation]: 
+PLANNED PATH ONLY; no measured trajectory
+Start: (234.5, 63.0) cm, heading 180.0 deg
+Headings: 0=+x/right, 90=+y/up; +turn=left, -turn=right
+Mode: fast
+Target      x_cm    y_cm   distance_cm   heading_deg   turn_deg
+W1          95.0   100.0         144.3         165.1      -14.9
+W2          85.0   120.0          22.4         116.6      -48.6
+W3          75.0   154.0          35.4         106.4      -10.2
+Final goal (65.0, 229.5) cm is saved but not executed.
+
+[INFO] [1795549210.995109170] [hw4_navigation]: Plan preview: /home/ubuntu/robot_testing/hw4/results/20261124_194009/planned_paths.svg
+[INFO] [1795549210.995601513] [hw4_navigation]: No mission motion until /hw4/start is called.
+[INFO] [1795549211.025693336] [hw4_navigation]: Run 1 ready. Start with /hw4/start; stop with /hw4/stop.
+[INFO] [1795549226.283865987] [hw4_navigation]: turning: executing full calibrated turn from estimated heading; waypoint 1
+[INFO] [1795549226.439723955] [hw4_navigation]: moving: driving toward waypoint for up to one second; waypoint 1
+[INFO] [1795549227.482433382] [hw4_navigation]: waiting: brief checkpoint; visual correction optional; waypoint 1
+[INFO] [1795549228.541688486] [hw4_navigation]: moving: driving toward waypoint for up to one second; waypoint 1
+[INFO] [1795549229.598900360] [hw4_navigation]: waiting: brief checkpoint; visual correction optional; waypoint 1
+[INFO] [1795549230.640145985] [hw4_navigation]: moving: driving toward waypoint for up to one second; waypoint 1
+[INFO] [1795549231.081949735] [hw4_navigation]: waiting: brief checkpoint; visual correction optional; waypoint 1
+[INFO] [1795549232.090284266] [hw4_navigation]: verifying: verifying waypoint 1 with fresh AprilTag observations; waypoint 1
+[INFO] [1795549235.245276348] [hw4_navigation]: turning: executing full calibrated turn from estimated heading; waypoint 1
+[INFO] [1795549235.382981191] [hw4_navigation]: moving: driving toward waypoint for up to one second; waypoint 1
+[INFO] [1795549235.785077077] [hw4_navigation]: waiting: brief checkpoint; visual correction optional; waypoint 1
+[INFO] [1795549236.832307701] [hw4_navigation]: verifying: verifying waypoint 1 with fresh AprilTag observations; waypoint 1
+[INFO] [1795549238.735704315] [hw4_navigation]: turning: executing full calibrated turn from estimated heading; waypoint 2
+[INFO] [1795549239.034515565] [hw4_navigation]: moving: driving toward waypoint for up to one second; waypoint 2
+[INFO] [1795549239.532707857] [hw4_navigation]: waiting: brief checkpoint; visual correction optional; waypoint 2
+[INFO] [1795549240.542885096] [hw4_navigation]: verifying: verifying waypoint 2 with fresh AprilTag observations; waypoint 2
+[INFO] [1795549249.541261290] [hw4_navigation]: failed: waypoint verification timed out; target not advanced; waypoint 2
