@@ -159,7 +159,8 @@ class MissionNode(Node):
                                    nav.grid.clearance(sample.xy) if sample else '',
                                    nav.turn_target_yaw, nav.turn_progress, nav.pose_source, nav.feedback_note,
                                    *target, measured_distance, predicted_distance, goal_distance,
-                                   nav.target_tolerance(), nav.motion_clearance])
+                                   nav.target_tolerance(), nav.motion_clearance,
+                                   nav.visual_feedback_mode, nav.visual_feedback_enabled()])
         status = nav.state, nav.reason, nav.index
         if status == self.last_status:
             return
@@ -173,6 +174,10 @@ class MissionNode(Node):
                    'commanded_segment_distance_m': nav.commanded_distance,
                    'segment_budget_m': nav.segment_budget,
                    'pose_source': nav.pose_source, 'feedback_note': nav.feedback_note,
+                   'unverified_waypoints': list(nav.unverified_waypoints),
+                   'search_attempted': nav.search_attempted,
+                   'visual_feedback_mode': nav.visual_feedback_mode,
+                   'visual_feedback_enabled': nav.visual_feedback_enabled(),
                    'target_xy_m': target, 'measured_target_distance_m': measured_distance,
                    'predicted_target_distance_m': predicted_distance,
                    'measured_goal_distance_m': goal_distance,

@@ -119,30 +119,50 @@ substitutes an older latest TF for the requested image timestamp.
    `/hw4/start`; no initial visual acquisition is required.
 2. Execute the full turn toward the current waypoint using the measured motor
    pair and full-rotation calibration, then drive up to one second per segment.
-3. When prediction reaches a waypoint, stop and obtain three distinct consistent
-   post-settle AprilTag poses before advancing. Older observations may span up
-   to two seconds while stopped, but the newest must be at most one second old.
-4. Replace dead reckoning with the measured checkpoint pose. If still short or
-   off course, retain the target, turn toward it, and continue correcting.
-5. Require **all three confirming goal observations within 5 cm** of the active
-   goal. A predicted endpoint cannot finish the run. Missing observations or
-   exhausted correction budgets stop with an explicit failure.
+3. By default, `visual_feedback: near_goal` ignores observed poses and follows
+   intermediate waypoints entirely from command prediction, without visual
+   verification stops or tag searches. Camera observations are still recorded.
+   It enables visual correction on the final leg once predicted goal distance
+   reaches `visual_enable_distance_m: 0.30`. That switch stays on after corrections.
+4. Within the approach zone, limit each forward step to 10 cm and half the
+   estimated remaining distance, with stops between steps. Motor inputs remain
+   `[0.4, 0.4]`; shorter steps do not constitute a calibrated lower driving speed.
+   Stop briefly for visual correction. If feedback is missing,
+   search once per waypoint with a calibrated CCW turn of at most one revolution.
+   Stop when a fresh accepted tag pose appears, let the camera settle, and collect
+   stable post-stop observations. If they are unusable, resume the remaining sweep.
+   The whole search is limited to 20 seconds. The same target and command budgets
+   are retained, and predicted heading accounts for the executed search rotation.
+5. Use accepted feedback to correct position, reorient toward the current
+   waypoint, and continue. Outlier rejection still requires two agreeing tags.
+6. If the search finds no usable feedback, continue toward the same target using
+   command prediction. A waypoint within predicted tolerance can advance with an
+   explicit unverified record. At a previously searched waypoint, confirmation
+   waits at most three seconds after settling before this fallback.
+7. A visually confirmed goal reports `complete`; reaching the predicted route
+   end without visual confirmation reports `unverified`, with `goal_reached: false`.
+   Status events retain all unverified waypoint indices. Stop, watchdog, clearance,
+   correction, travel, and mission-time limits remain active.
 
-The goal tolerance is a localization estimate, not guaranteed exact physical
-placement. At fixed `[0.4, 0.4]` inputs, startup, braking, and 20 Hz timing affect
-small final corrections; assess actual accuracy from physical measurements.
-`feedback_required: false` permits calibrated motion between checkpoints; it
-no longer makes waypoint verification optional. `true` additionally requires
-initial acquisition and measured continuous-turn feedback.
+Select visual correction timing in `config/navigation.yaml`:
 
-The physical run reached a 3–5 cm goal error, then oscillated while chasing a
-3 cm threshold. The current goal tolerance is 5 cm, still requiring three fresh
-confirming observations. Once a measured checkpoint is within 20 cm of the goal,
-subsequent position corrections over 12 cm are rejected rather than chased.
-Outlier rejection uses the configurable 20 cm / 20 degree consensus described
-above. These gates identify disagreement; they do not guarantee 5 cm accuracy.
-Waypoint verification still needs three stable, recent accepted frames. Missing
-consensus can therefore lead to verification timeout; it never means arrival.
+- `visual_feedback: near_goal`: current default; blind traversal, correction near
+  the predicted active goal. Initial motor segments continue without camera waits.
+- `visual_feedback: throughout`: use visual corrections and bounded searches
+  throughout the route, preserving the previous behavior.
+- `visual_feedback: off`: ignore vision for the whole run, perform no tag searches,
+  and report the predicted route end as unverified. Final travel steps still shorten.
+
+`feedback_required: false` permits best-effort prediction fallback once vision is
+active. `true` requires `visual_feedback: throughout` and retains mandatory initial
+acquisition, visual verification, and continuous-turn feedback. Commands and
+predicted motion are not measured odometry or physical arrival. The approach
+threshold is estimated from commands, not independently measured distance.
+
+The goal tolerance remains 5 cm and measured goal success requires every one of
+three confirming samples within tolerance. Near-goal visual corrections remain
+bounded to avoid chasing large jumps. The 20 cm / 20 degree outlier gates identify
+disagreement; they do not guarantee 5 cm position accuracy.
 
 Consistent checkpoint corrections can otherwise override up to 1 m of position
 drift and 90° of heading drift. A measured robot already inside the usual safety margin

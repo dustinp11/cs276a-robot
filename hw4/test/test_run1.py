@@ -70,7 +70,7 @@ class RunOneTests(unittest.TestCase):
         # share synthetic plans across controller checks
         cls.environment = load_validated_environment(ROOT / 'test/sample_environment.json')
         cls.settings = load_settings(ROOT / 'config/navigation.yaml')
-        cls.policy = dict(cls.settings['navigation'], feedback_required=True)
+        cls.policy = dict(cls.settings['navigation'], feedback_required=True, visual_feedback='throughout')
         cls.grid, cls.plans = prepare_plans(cls.environment, cls.policy)
         cls.forward, cls.turn = calibrations()
 
@@ -354,21 +354,117 @@ class RunOneTests(unittest.TestCase):
                 self.assertIn('visual correction rejected', nav.feedback_note)
                 self.assertFalse(nav.finished)
 
-    def test_predicted_waypoint_waits_for_tags_and_never_advances_blindly(self):
-        """Start moving without tags, but stop explicitly if waypoint verification is unavailable."""
+    def test_missing_tags_search_then_finish_predicted_route_as_unverified(self):
+        """Exercise bounded searches and predicted waypoint progress with no observations."""
         # exercise the full route without observations
         policy = dict(self.policy, feedback_required=False)
         grid = deepcopy(self.grid)
         grid.margin = self.environment['robot']['safety_margin_m']
         nav = Navigator(grid, self.plans['fast'], self.forward, self.turn, policy, 10)
         state, reason, pose, clearance = simulate(nav, (0.55, 0.55, 0), feedback=False)
-        self.assertEqual(state, 'failed', reason)
-        self.assertIn('waypoint verification timed out', reason)
-        self.assertEqual(nav.index, 1)
+        self.assertEqual(state, 'unverified', reason)
+        self.assertIn('goal not visually confirmed', reason)
+        self.assertEqual(nav.index, len(nav.path))
+        self.assertEqual(nav.unverified_waypoints, list(range(1, len(nav.path))))
         self.assertIsNone(nav.measured)
         self.assertGreaterEqual(clearance, grid.margin)
-        self.assertLessEqual(math.dist(pose[:2], self.plans['fast'][1]), self.policy['position_tolerance_m'])
+        self.assertLessEqual(math.dist(pose[:2], nav.path[-1]), self.policy['goal_tolerance_m'])
         self.assertEqual(nav.command, (0, 0))
+
+    def test_search_stops_for_tags_and_requires_post_stop_confirmation(self):
+        """Keep the target while reacquiring a stopped pose and then reorienting."""
+        # start recovery without changing the active waypoint
+        policy = dict(self.policy, feedback_required=False)
+        nav = Navigator(self.grid, [(0.55, 0.55), (0.55, 2.5)], self.forward, self.turn, policy, 10)
+        nav.begin_search(10)
+        for i in range(1, 11):
+            nav.tick(10 + i * 0.05, [])
+        self.assertEqual(nav.index, 1)
+        self.assertEqual(nav.state, 'searching')
+        self.assertGreater(nav.command[1], 0)
+
+        # brake on detection and ignore pre-stop samples
+        nav.tick(10.55, [Feedback(0.55, 0.55, 0.9, 10.5)])
+        self.assertEqual(nav.command, (0, 0))
+        self.assertEqual(nav.search.phase, 'observing')
+        after, yaw = nav.search.after, nav.expected[2]
+        samples = [Feedback(0.55, 0.55, yaw, after + dt) for dt in (0.01, 0.11, 0.21)]
+        for i in range(12, 40):
+            now = 10 + i * 0.05
+            nav.tick(now, [p for p in samples if p.stamp <= now])
+            if nav.state != 'searching':
+                break
+        self.assertIsNotNone(nav.measured)
+        self.assertEqual(nav.index, 1)
+        self.assertEqual(nav.state, 'turning')
+        self.assertAlmostEqual(nav.turn_target_yaw, math.pi / 2)
+        self.assertEqual(nav.unverified_waypoints, [])
+
+    def test_exhausted_search_preserves_heading_and_target_before_driving(self):
+        """Track the full predicted sweep and reorient toward the same waypoint."""
+        policy = dict(self.policy, feedback_required=False)
+        nav = Navigator(self.grid, [(0.55, 0.55), (0.55, 2.5)], self.forward, self.turn, policy, 10, 0.3)
+        nav.begin_search(10)
+        for i in range(1, 401):
+            nav.tick(10 + i * 0.05, [])
+            if nav.state != 'searching':
+                break
+        self.assertEqual(nav.index, 1)
+        self.assertEqual(nav.state, 'turning')
+        self.assertGreaterEqual(nav.search.rotated, 2 * math.pi)
+        self.assertLess(nav.search.rotated, 2 * math.pi + self.turn.ccw_radps * 0.051)
+        self.assertAlmostEqual(nav.turn_origin.yaw, nav.search.expected[2])
+        self.assertAlmostEqual(nav.turn_target_yaw, math.pi / 2)
+        self.assertLess(10 + i * 0.05, 10 + policy['search_timeout_s'])
+
+    def test_near_goal_mode_ignores_bad_vision_through_initial_traversal(self):
+        """Ignore camera poses and tag searches until predicted arrival in the approach zone."""
+        # inject wrong observations throughout the initial path
+        policy = dict(self.policy, feedback_required=False, visual_feedback='near_goal')
+        path = [(0.55, 0.55), (0.55, 1.0), (0.55, 2.5)]
+        nav = Navigator(self.grid, path, self.forward, self.turn, policy, 10, math.pi / 2)
+        for i in range(1, 151):
+            now = 10 + i * 0.05
+            samples = [Feedback(2.5, 0.55, 0, now - age) for age in (0.3, 0.2, 0.1)]
+            nav.tick(now, samples)
+            self.assertIsNone(nav.measured)
+            self.assertFalse(nav.finished)
+            self.assertNotEqual(nav.state, 'searching')
+            if nav.goal_feedback_active:
+                break
+        self.assertTrue(nav.goal_feedback_active)
+        self.assertEqual(nav.index, 2)
+        self.assertEqual(nav.unverified_waypoints, [1])
+        self.assertLessEqual(math.dist(nav.expected[:2], path[-1]), policy['visual_enable_distance_m'])
+        self.assertEqual(nav.command, (0, 0))
+
+    def test_goal_feedback_stays_enabled_and_shortens_fixed_power_steps(self):
+        """Keep corrections active after a pose update moves the estimated robot farther away."""
+        # enter and latch the predicted approach zone
+        policy = dict(self.policy, feedback_required=False, visual_feedback='near_goal')
+        path = [(0.55, 0.55), (0.55, 2.5)]
+        nav = Navigator(self.grid, path, self.forward, self.turn, policy, 10, math.pi / 2)
+        nav.expected = (0.55, 2.21, math.pi / 2)
+        self.assertTrue(nav.visual_feedback_enabled())
+        pose = Feedback(0.55, 2.1, math.pi / 2, 11)
+        self.assertIsNone(nav.apply_checkpoint_pose(pose))
+        self.assertTrue(nav.visual_feedback_enabled())
+        self.assertAlmostEqual(nav.approach_step_limit(pose, path[-1]), 0.1)
+        self.assertEqual(nav.drive_segment(11, pose, path[-1]), (self.forward.speed_mps, 0))
+        self.assertAlmostEqual(nav.deadline - 11, 0.1 / self.forward.speed_mps)
+        closer = Feedback(0.55, 2.42, math.pi / 2, 12)
+        self.assertAlmostEqual(nav.approach_step_limit(closer, path[-1]), 0.04)
+
+    def test_off_mode_never_uses_available_vision_or_searches(self):
+        """Finish predicted traversal unverified even when ideal feedback is available."""
+        policy = dict(self.policy, feedback_required=False, visual_feedback='off')
+        path = [(0.55, 0.55), (0.55, 1.0), (0.55, 2.5)]
+        nav = Navigator(self.grid, path, self.forward, self.turn, policy, 10, math.pi / 2)
+        state, reason, pose, gap = simulate(nav, (0.55, 0.55, math.pi / 2))
+        self.assertEqual(state, 'unverified', reason)
+        self.assertIsNone(nav.measured)
+        self.assertIsNone(nav.search)
+        self.assertEqual(nav.unverified_waypoints, [1, 2])
 
     def test_reported_short_stop_triggers_measured_goal_correction(self):
         """Replay the observed 34 cm goal error instead of accepting predicted arrival."""

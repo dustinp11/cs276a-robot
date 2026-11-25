@@ -14,13 +14,20 @@ def load_settings(path):
     nav = data['navigation']
     get_mode(nav['mode'])
     for name, value in nav.items():
-        if name in ('mode', 'feedback_required'):
+        if name in ('mode', 'feedback_required', 'visual_feedback'):
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f'navigation.{name} must be positive and finite.')
 
     if type(nav['feedback_required']) is not bool:
         raise ValueError('navigation.feedback_required must be true or false.')
+
+    if nav['visual_feedback'] not in ('near_goal', 'throughout', 'off'):
+        raise ValueError('navigation.visual_feedback must be near_goal, throughout, or off.')
+    if nav['feedback_required'] and nav['visual_feedback'] != 'throughout':
+        raise ValueError('Required feedback needs visual_feedback: throughout.')
+    if nav['goal_step_fraction'] > 1:
+        raise ValueError('navigation.goal_step_fraction must be at most one.')
 
     # constrain sampling and footprint integration limits
     for name in ('stable_samples', 'max_turns', 'max_checkpoint_corrections'):

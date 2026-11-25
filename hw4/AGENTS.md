@@ -37,12 +37,23 @@
   must report unimplemented before hardware starts, without falling back to fast.
 - Start fast mode from the configured pose without mandatory initial visual
   acquisition. Execute full calibrated timed turns and up to one-second drives.
-  The latest user instruction requires fresh stopped AprilTag verification at
-  EVERY waypoint and at the active goal; prediction must not advance the index.
+  The latest user request defaults to `visual_feedback: near_goal`: ignore all
+  observed poses during initial traversal, advance intermediate targets by
+  prediction, and enable feedback only on the final leg inside 0.30 m predicted
+  goal distance. Latch that enablement after corrections. Use `throughout` for
+  the previous feedback behavior and `off` for a fully blind unverified run.
+  Within the goal approach, cap drives to 0.10 m and half the remaining distance;
+  preserve motor inputs rather than claiming a lower calibrated driving speed.
+  Once visual feedback is enabled, use best-effort predicted progress
+  after bounded tag reacquisition. Search once per waypoint, up to a full CCW
+  revolution and 20 seconds total; brake on a fresh accepted observation, settle,
+  and require stable post-stop samples before using it. Preserve the target,
+  predicted search heading, estimator state, and command budgets during recovery.
 - At waypoint checks, accept stable bounded corrections even when command
   prediction drifted by more than the usual optional correction gate. Keep the
-  same target and correct until measured arrival; fail explicitly if no usable
-  observations arrive or correction budgets are exhausted.
+  same target and correct when feedback is usable. If feedback stays missing,
+  resume predicted travel; mark any predicted waypoint advancement unverified.
+  Correction, collision, watchdog, and mission limits still fail explicitly.
 - Goal success requires all confirming fresh observations within 0.05 m of the
   active goal. The 0.03 m threshold caused oscillations around a 3–5 cm error in
   the physical run; do not restore it without improved calibration. This is measured localization tolerance, not exact ground truth.
@@ -50,7 +61,9 @@
   outward recovery preserving its measured starting clearance, never below the
   configured recovery floor. Log that temporary clearance and the correction.
 - Log observed per-tag ranges, target/goal distances, and measured versus
-  predicted pose. Never complete a route solely from command prediction.
+  predicted pose. A predicted-only route end must report `unverified`, never
+  measured goal success. A visually confirmed goal may report `complete` while
+  preserving the list of earlier unverified waypoint advances.
 - Preserve successful/failed terminal outcomes when stop or shutdown follows.
 - Label this iteration `run1` in archived status. The synthetic test map is
   never a replacement for `config/environment.json` measurements.

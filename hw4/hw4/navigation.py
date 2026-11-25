@@ -4,6 +4,7 @@ import math
 from hw3.coordinates import wrap_angle
 from hw4.localization import Feedback, stable_feedback
 from hw4.checkpoint import checkpoint_pose, goal_confirmed
+from hw4.tag_search import TagSearch
 
 
 class Navigator:
@@ -24,13 +25,34 @@ class Navigator:
         self.initial_yaw = initial_yaw
         self.commanded_distance, self.segment_budget = 0.0, None
         self.feedback_required = policy['feedback_required']
+        self.visual_feedback_mode = policy['visual_feedback']
+        self.goal_feedback_active = False
         self.motion_clearance = grid.margin
         self.checkpoint_attempts = 0
+        self.search, self.search_attempted = None, False
+        self.unverified_waypoints = []
         self.pose_source, self.feedback_note = 'waiting for vision', ''
         if not self.feedback_required:
             self.expected = (*path[0], initial_yaw)
             self.pose_source = 'configured start'
             self.reason = 'ready to move from configured start pose'
+
+    def visual_feedback_enabled(self):
+        """Latch optional visual correction on inside the predicted goal approach, in meters."""
+        # keep approach feedback active after any correction
+        if self.visual_feedback_mode == 'near_goal' and self.expected is not None:
+            final = self.index >= len(self.path) - 1
+            distance = math.dist(self.expected[:2], self.path[-1])
+            if final and distance <= self.policy['visual_enable_distance_m'] + 1e-6:
+                self.goal_feedback_active = True
+        return (self.visual_feedback_mode == 'throughout'
+                or self.visual_feedback_mode == 'near_goal' and self.goal_feedback_active)
+
+    def continue_prediction(self, now):
+        """Follow the frozen path while deliberately ignoring all observed poses."""
+        self.state, self.pose_source = 'waiting', 'command prediction'
+        self.feedback_note = 'visual feedback intentionally disabled during planned traversal'
+        return self.decide(now, Feedback(*self.expected, now), measured=False)
 
     @property
     def finished(self):
@@ -51,7 +73,7 @@ class Navigator:
             return 0.0, 0.0
         if now - self.started > self.policy['mission_timeout_s']:
             return self.finish('failed', 'mission time budget exhausted')
-        if self.state in ('moving', 'turning') and now - self.last_tick > 0.15:
+        if self.state in ('moving', 'turning', 'searching') and any(self.command) and now - self.last_tick > 0.15:
             return self.finish('failed', 'control tick exceeded motor watchdog interval')
 
         # dispatch bounded motion or stopped acquisition
@@ -62,8 +84,12 @@ class Navigator:
             return self.turn_tick(now, samples)
         if self.state == 'verifying':
             return self.verify_tick(now, samples)
+        if self.state == 'searching':
+            return self.search_tick(now, samples)
         if now < self.after:
             return 0.0, 0.0
+        if not self.visual_feedback_enabled():
+            return self.continue_prediction(now)
         pose = stable_feedback(samples, self.after, now, self.policy)
         if pose is not None:
             error = self.accept_pose(pose)
@@ -72,6 +98,8 @@ class Navigator:
                 return self.decide(now, pose)
             self.feedback_note = f'visual correction rejected: {error}'
         if not self.feedback_required:
+            if pose is None and self.commanded_distance > 0 and not self.search_attempted:
+                return self.begin_search(now)
             self.pose_source = 'command prediction' if self.measured or self.expected[:2] != self.path[0] else self.pose_source
             if pose is None:
                 self.feedback_note = 'no stable visual correction; continuing predicted route'
@@ -94,10 +122,12 @@ class Navigator:
         v, omega = self.command
         self.expected = (x + v * duration * math.cos(yaw), y + v * duration * math.sin(yaw),
                          wrap_angle(yaw + omega * duration))
+        if not self.visual_feedback_enabled():
+            return self.continue_prediction(now)
         return self.wait_for_feedback(now)
 
     def wait_for_feedback(self, now):
-        """Stop and require fresh stable post-settle images before the next action."""
+        """Stop to allow fresh post-settle images before the next action."""
         # separate measured arrival from motor completion
         self.state, self.command = 'waiting', (0.0, 0.0)
         self.after = now + self.policy['settle_s']
@@ -147,21 +177,31 @@ class Navigator:
 
     def begin_verification(self, now):
         """Hold the current target until fresh stopped tag observations verify it."""
-        # prediction cannot advance or complete waypoints
+        # advance blind traversal without a visual stop
+        if not self.visual_feedback_enabled():
+            return self.advance_waypoint(now, Feedback(*self.expected, now), verified=False)
+
+        # prefer visual confirmation before predicted fallback
         self.wait_for_feedback(now)
         self.state = 'verifying'
+        if not self.feedback_required:
+            self.deadline = self.after + self.policy['search_observation_wait_s']
         self.reason = f'verifying waypoint {self.index} with fresh AprilTag observations'
         return self.command
 
     def verify_tick(self, now, samples):
-        """Correct from measured pose; stop explicitly if verification is unavailable."""
+        """Prefer measured arrival; search or use explicit prediction fallback in fast mode."""
         # collect independent frames after the stop
         if now < self.after:
             return 0.0, 0.0
         final = self.index == len(self.path) - 1
         pose = checkpoint_pose(samples, self.after, now, self.policy, final)
         if pose is None:
+            if not self.feedback_required and not self.search_attempted:
+                return self.begin_search(now)
             if now >= self.deadline:
+                if not self.feedback_required:
+                    return self.resume_prediction(now)
                 return self.finish('failed', 'waypoint verification timed out; target not advanced')
             return 0.0, 0.0
 
@@ -180,16 +220,70 @@ class Navigator:
         # verify every goal frame before finishing
         if final and not goal_confirmed(samples, self.after, now, self.path[self.index], self.policy):
             if now >= self.deadline:
+                if not self.feedback_required:
+                    return self.resume_prediction(now)
                 return self.finish('failed', 'goal observations did not all confirm arrival tolerance')
             self.feedback_note = 'waiting for all goal samples to confirm tolerance'
             return 0.0, 0.0
+        return self.advance_waypoint(now, pose, verified=True)
+
+    def advance_waypoint(self, now, pose, verified):
+        """Record how a target was reached and preserve unverified progress explicitly."""
+        # distinguish estimated progress from measured arrival
+        if not verified:
+            self.unverified_waypoints.append(self.index)
         self.index += 1
         self.commanded_distance, self.segment_budget, self.corrections = 0.0, None, 0
-        self.checkpoint_attempts = 0
+        self.checkpoint_attempts, self.search_attempted = 0, False
         if self.index == len(self.path):
-            return self.finish('complete', 'goal verified by fresh stable AprilTag observations')
+            if verified:
+                return self.finish('complete', 'goal verified by fresh stable AprilTag observations')
+            return self.finish('unverified', 'predicted route end reached; goal not visually confirmed')
         self.state = 'waiting'
-        return self.decide(now, pose)
+        return self.decide(now, pose, measured=verified)
+
+    def begin_search(self, now):
+        """Search once per waypoint while retaining its target and predicted position."""
+        if not self.segment_is_clear(self.expected[:2], self.expected[:2]):
+            return self.finish('failed', 'predicted search position violates robot clearance')
+
+        # search without resetting waypoint or distance budgets
+        self.search = TagSearch(now, self.expected, self.turn, self.policy)
+        self.search_attempted, self.state = True, 'searching'
+        self.turn_target_yaw, self.turn_progress = None, 0.0
+        self.reason = 'turning to reacquire agreeing tags; current waypoint retained'
+        self.command = self.search.command
+        return self.command
+
+    def search_tick(self, now, samples):
+        """Use stopped reacquired feedback, or resume prediction after the bounded search."""
+        # preserve estimated rotation even without visual observations
+        self.command = self.search.tick(now, samples)
+        self.expected = self.search.expected
+        self.turn_progress = self.search.rotated
+        self.pose_source = 'command prediction during tag search'
+        self.reason = f'tag search: {self.search.phase}; current waypoint retained'
+        if self.search.phase == 'found':
+            error = self.apply_checkpoint_pose(self.search.pose)
+            if error:
+                self.feedback_note = f'search correction rejected: {error}'
+                self.command = self.search.resume(now)
+            else:
+                return self.decide(now, self.search.pose)
+        if self.search.phase == 'done':
+            self.feedback_note = 'bounded tag search exhausted; resuming predicted route'
+            return self.resume_prediction(now)
+        return self.command
+
+    def resume_prediction(self, now):
+        """Continue the same target, advancing only if predicted position is within tolerance."""
+        # never label fallback progress as measured success
+        self.state, self.pose_source = 'waiting', 'command prediction'
+        self.feedback_note = 'visual confirmation unavailable; using predicted waypoint progress'
+        pose = Feedback(*self.expected, now)
+        if math.dist(pose.xy, self.path[self.index]) <= self.target_tolerance():
+            return self.advance_waypoint(now, pose, verified=False)
+        return self.decide(now, pose, measured=False)
 
     def apply_checkpoint_pose(self, pose):
         """Replace prediction with a stable measured pose within bounded correction limits."""
@@ -304,7 +398,7 @@ class Navigator:
             return self.begin_verification(now)
         if not self.segment_is_clear(pose.xy, target):
             return self.finish('failed', 'measured pose no longer has a clear route to waypoint')
-        maximum = self.forward.speed_mps * self.policy['drive_duration_s']
+        maximum = self.approach_step_limit(pose, target)
         requested = min(math.dist(pose.xy, target), maximum)
         distance = self.clear_drive_distance(pose, requested)
         if distance < min(requested, 0.05) - 1e-6:
@@ -312,12 +406,29 @@ class Navigator:
 
         # bound commands without claiming measured arrival
         if self.segment_budget is None:
-            self.segment_budget = 1.5 * math.dist(pose.xy, target) + maximum
+            self.segment_budget = (1.5 * math.dist(pose.xy, target)
+                                   + self.forward.speed_mps * self.policy['drive_duration_s'])
         if self.commanded_distance + distance > self.segment_budget:
             return self.finish('failed', 'forward command budget exhausted without measured waypoint arrival')
         self.commanded_distance += distance
         return self.begin_segment(now, pose, self.forward.speed_mps, 0.0,
                                   distance / self.forward.speed_mps, 'driving toward waypoint for up to one second')
+
+    def approach_step_limit(self, pose, target):
+        """Shorten final moves without changing fixed-power motor calibration."""
+        # stop at the visual approach boundary
+        maximum = self.forward.speed_mps * self.policy['drive_duration_s']
+        if self.index < len(self.path) - 1:
+            return maximum
+        distance = math.dist(pose.xy, target)
+        radius = self.policy['visual_enable_distance_m']
+        if self.visual_feedback_mode == 'near_goal' and not self.goal_feedback_active and distance > radius:
+            return min(maximum, distance - radius)
+
+        # shrink correction distance as the goal approaches
+        if self.goal_feedback_active or distance <= radius:
+            return min(maximum, self.policy['goal_max_step_m'], distance * self.policy['goal_step_fraction'])
+        return maximum
 
     def forward_sweep_free(self, pose, distance):
         """Include one motor-watchdog interval of possible stopping overrun."""

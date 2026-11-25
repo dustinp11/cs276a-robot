@@ -55,7 +55,7 @@ class RunLog:
             'turn_steps', 'commanded_segment_distance_m', 'segment_budget_m', 'measured_body_clearance_m', 'turn_target_yaw_rad', 'turn_progress_rad',
             'pose_source', 'feedback_note', 'target_x_m', 'target_y_m',
             'measured_target_distance_m', 'predicted_target_distance_m', 'measured_goal_distance_m',
-            'target_tolerance_m', 'active_clearance_m'])
+            'target_tolerance_m', 'active_clearance_m', 'visual_feedback_mode', 'visual_feedback_enabled'])
 
     def open_csv(self, name, header):
         """Open a line-buffered CSV stream with explicit units in its header."""
