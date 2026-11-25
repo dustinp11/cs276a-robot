@@ -38,9 +38,9 @@ class Navigator:
             self.reason = 'ready to move from configured start pose'
 
     def visual_feedback_enabled(self):
-        """Latch optional visual correction on inside the predicted goal approach, in meters."""
+        """Latch the goal approach inside its predicted radius, in world meters."""
         # keep approach feedback active after any correction
-        if self.visual_feedback_mode == 'near_goal' and self.expected is not None:
+        if self.visual_feedback_mode != 'off' and self.expected is not None:
             final = self.index >= len(self.path) - 1
             distance = math.dist(self.expected[:2], self.path[-1])
             if final and distance <= self.policy['visual_enable_distance_m'] + 1e-6:
@@ -124,6 +124,8 @@ class Navigator:
                          wrap_angle(yaw + omega * duration))
         if not self.visual_feedback_enabled():
             return self.continue_prediction(now)
+        if self.goal_feedback_active and self.index == len(self.path) - 1:
+            return self.begin_verification(now)
         return self.wait_for_feedback(now)
 
     def wait_for_feedback(self, now):
@@ -186,7 +188,9 @@ class Navigator:
         self.state = 'verifying'
         if not self.feedback_required:
             self.deadline = self.after + self.policy['search_observation_wait_s']
-        self.reason = f'verifying waypoint {self.index} with fresh AprilTag observations'
+        self.reason = ('correcting goal approach with fresh AprilTag observations'
+                       if self.goal_feedback_active else
+                       f'verifying waypoint {self.index} with fresh AprilTag observations')
         return self.command
 
     def verify_tick(self, now, samples):
@@ -197,9 +201,9 @@ class Navigator:
         final = self.index == len(self.path) - 1
         pose = checkpoint_pose(samples, self.after, now, self.policy, final)
         if pose is None:
-            if not self.feedback_required and not self.search_attempted:
-                return self.begin_search(now)
             if now >= self.deadline:
+                if not self.feedback_required and not self.search_attempted:
+                    return self.begin_search(now)
                 if not self.feedback_required:
                     return self.resume_prediction(now)
                 return self.finish('failed', 'waypoint verification timed out; target not advanced')
@@ -422,7 +426,7 @@ class Navigator:
             return maximum
         distance = math.dist(pose.xy, target)
         radius = self.policy['visual_enable_distance_m']
-        if self.visual_feedback_mode == 'near_goal' and not self.goal_feedback_active and distance > radius:
+        if self.visual_feedback_mode != 'off' and not self.goal_feedback_active and distance > radius + 1e-6:
             return min(maximum, distance - radius)
 
         # shrink correction distance as the goal approaches

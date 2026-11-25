@@ -37,14 +37,14 @@
   must report unimplemented before hardware starts, without falling back to fast.
 - Start fast mode from the configured pose without mandatory initial visual
   acquisition. Execute full calibrated timed turns and up to one-second drives.
-  The latest user request defaults to `visual_feedback: "off"`: ignore all visual
-  feedback for the entire run, including the goal; never search for tags.
-  Keep `feedback_required: false` and label predicted completion unverified.
-  The optional `near_goal` mode ignores all
-  observed poses during initial traversal, advance intermediate targets by
-  prediction, and enable feedback only on the final leg inside 0.30 m predicted
-  goal distance. Latch that enablement after corrections. Use `throughout` for
-  the previous feedback behavior and `off` for a fully blind unverified run.
+  The latest user request restores `visual_feedback: throughout`: use visual
+  corrections throughout the route to the assignment goal (0.65, 2.295) m.
+  Keep `feedback_required: false` so bounded tag search and prediction fallback
+  remain available. The optional `near_goal` mode defers visual correction until
+  0.30 m predicted goal distance; `off` ignores all vision and tag searches.
+  For both visual modes, stop at the 0.30 m predicted goal approach boundary and
+  use fresh stopped pose verification after every subsequent drive. Latch this
+  refinement even if a correction moves the estimate outside the approach zone.
   Within the goal approach, cap drives to 0.10 m and half the remaining distance;
   preserve motor inputs rather than claiming a lower calibrated driving speed.
   Once visual feedback is enabled, use best-effort predicted progress

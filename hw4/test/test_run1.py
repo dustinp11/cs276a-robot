@@ -455,6 +455,37 @@ class RunOneTests(unittest.TestCase):
         closer = Feedback(0.55, 2.42, math.pi / 2, 12)
         self.assertAlmostEqual(nav.approach_step_limit(closer, path[-1]), 0.04)
 
+    def test_throughout_mode_stops_at_goal_approach_and_corrects_from_vision(self):
+        """Stop near the goal and replace prediction with a fresh stopped pose."""
+        # shorten the drive at the approach boundary
+        policy = dict(self.policy, feedback_required=False, visual_feedback='throughout')
+        path = [(0.55, 0.55), (0.55, 2.5)]
+        nav = Navigator(self.grid, path, self.forward, self.turn, policy, 10, math.pi / 2)
+        start = Feedback(0.55, 2.1, math.pi / 2, 10)
+        nav.expected = start.x, start.y, start.yaw
+        self.assertAlmostEqual(nav.approach_step_limit(start, path[-1]), 0.1)
+        nav.drive_segment(10, start, path[-1])
+        for i in range(1, 5):
+            nav.tick(10 + i * 0.05, [])
+        self.assertEqual(nav.state, 'verifying')
+        self.assertTrue(nav.goal_feedback_active)
+        self.assertEqual(nav.command, (0, 0))
+
+        # correct a short physical stop before more travel
+        after = nav.after
+        samples = [Feedback(0.55, 2.12, math.pi / 2, after + dt) for dt in (0.01, 0.11, 0.21)]
+        for i in range(5, 35):
+            now = 10 + i * 0.05
+            nav.tick(now, [pose for pose in samples if pose.stamp <= now])
+            if nav.state == 'moving':
+                break
+        self.assertEqual(nav.state, 'moving')
+        self.assertTrue(nav.goal_feedback_active)
+        self.assertAlmostEqual(nav.segment_pose.y, 2.12)
+        self.assertAlmostEqual(nav.deadline - nav.segment_start, 0.1 / self.forward.speed_mps)
+        self.assertEqual(nav.index, 1)
+        self.assertEqual(nav.unverified_waypoints, [])
+
     def test_off_mode_never_uses_available_vision_or_searches(self):
         """Finish predicted traversal unverified even when ideal feedback is available."""
         policy = dict(self.policy, feedback_required=False, visual_feedback='off')

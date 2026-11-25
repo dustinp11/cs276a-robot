@@ -118,15 +118,18 @@ substitutes an older latest TF for the requested image timestamp.
    `/hw4/start`; no initial visual acquisition is required.
 2. Execute the full turn toward the current waypoint using the measured motor
    pair and full-rotation calibration, then drive up to one second per segment.
-3. The default is `visual_feedback: "off"`: ignore vision for the entire run and
-   perform no tag searches, including near the goal.
+3. The default is `visual_feedback: throughout`: use stopped visual corrections
+   and bounded tag searches throughout the route to **(65, 229.5) cm**.
    Optional `visual_feedback: near_goal` ignores observed poses and follows
    intermediate waypoints entirely from command prediction, without visual
    verification stops or tag searches. Camera observations are still recorded.
    It enables visual correction on the final leg once predicted goal distance
    reaches `visual_enable_distance_m: 0.30`. That switch stays on after corrections.
-4. Within the approach zone, limit each forward step to 10 cm and half the
-   estimated remaining distance, with stops between steps. Motor inputs remain
+4. On the final leg, stop at the 30 cm predicted approach boundary for fresh
+   stopped localization. Limit each forward step to 10 cm and half the estimated
+   remaining distance, verifying the pose again after each step. This refinement
+   stays active if a visual correction moves the estimate outside the approach
+   radius; it applies to both `throughout` and `near_goal` modes. Motor inputs remain
    `[0.4, 0.4]`; shorter steps do not constitute a calibrated lower driving speed.
    Stop briefly for visual correction. If feedback is missing,
    search once per waypoint with a calibrated CCW turn of at most one revolution.
@@ -149,9 +152,9 @@ Select visual correction timing in `config/navigation.yaml`:
 
 - `visual_feedback: near_goal`: blind traversal, correction near
   the predicted active goal. Initial motor segments continue without camera waits.
-- `visual_feedback: throughout`: use visual corrections and bounded searches
+- `visual_feedback: throughout`: current default; use visual corrections and bounded searches
   throughout the route, preserving the previous behavior.
-- `visual_feedback: "off"`: current default; ignore vision for the whole run, perform no tag searches,
+- `visual_feedback: "off"`: ignore vision for the whole run, perform no tag searches,
   and report the predicted route end as unverified. Final travel steps still shorten.
 
 `feedback_required: false` permits best-effort prediction fallback once vision is
