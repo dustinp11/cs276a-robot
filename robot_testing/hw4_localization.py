@@ -33,13 +33,12 @@ from robot_testing.hw2_localization import (
 
 
 class HW4PoseEstimator(PoseEstimator):
-    """Extends PoseEstimator to distinguish wall vs obstacle tags and log tag sources."""
+    """Extends PoseEstimator to distinguish wall vs obstacle tags and normalize frame names."""
 
     def __init__(self, landmark_map: LandmarkMap):
         super().__init__(landmark_map)
-        # Classify landmarks as wall vs obstacle for logging
-        self.wall_tag_ids: Set[int] = set()
-        self.obstacle_tag_ids: Set[int] = set()
+        self.wall_tag_ids: set = set()
+        self.obstacle_tag_ids: set = set()
         for (family, tag_id), lm in landmark_map.landmarks.items():
             if family == '36h11':
                 self.wall_tag_ids.add(tag_id)
@@ -53,6 +52,20 @@ class HW4PoseEstimator(PoseEstimator):
         if fam == '41h12':
             return f"Obstacle Tag {tag_id} (41h12)"
         return f"Tag {tag_id} ({family})"
+
+    def estimate(self, observation, lookup):
+        # Normalize camera frames to ignore leading slashes
+        cam_frame = observation.camera_frame.lstrip('/')
+        map_cam_frame = self.map.camera_frame.lstrip('/')
+        if cam_frame != map_cam_frame and 'camera' not in cam_frame:
+            raise LocalizationError(
+                f"Detection camera frame '{observation.camera_frame}' does not match map '{self.map.camera_frame}'"
+            )
+        # Use existing consensus estimation logic
+        return super().estimate(
+            Observation(observation.stamp_ns, self.map.camera_frame, observation.detections),
+            lookup,
+        )
 
 
 class HW4LocalizationService:
@@ -138,6 +151,12 @@ class HW4LocalizationService:
             Detection(item.id, item.family, item.hamming, item.decision_margin)
             for item in message.detections
         )
+        if len(detections) > 0:
+            tag_summary = [f"{d.family}:{d.id}" for d in detections]
+            self.node.get_logger().info(
+                f"AprilTag detections received ({len(detections)}): {tag_summary}",
+                throttle_duration_sec=2.0,
+            )
         self.provider.observe(Observation(
             stamp.sec * 10**9 + stamp.nanosec,
             message.header.frame_id,
@@ -145,13 +164,13 @@ class HW4LocalizationService:
         ))
 
     def lookup(self, tag_frame, observation):
-        """Lookup transform with multi-candidate fallback for various apriltag_ros frame formats."""
-        stamp = self.time_type(nanoseconds=observation.stamp_ns,
-                               clock_type=self.node.get_clock().clock_type)
+        """Lookup transform with multi-candidate and time-fallback for apriltag_ros frames."""
+        exact_stamp = self.time_type(nanoseconds=observation.stamp_ns,
+                                     clock_type=self.node.get_clock().clock_type)
+        # Try exact observation timestamp first, then latest available Time()
+        stamps_to_try = [exact_stamp, self.time_type()]
 
-        # Generate candidate frame names (e.g. tag_41h12_1, tag41h12:1, tag_1)
         candidates = [tag_frame]
-        # If tag_frame is like 'tag_41h12_1'
         if '_' in tag_frame:
             parts = tag_frame.split('_')
             tid = parts[-1]
@@ -160,20 +179,30 @@ class HW4LocalizationService:
                 fam = parts[1]
                 candidates.append(f"{fam}:{tid}")
                 candidates.append(f"tag{fam}:{tid}")
+                candidates.append(f"tag_{fam}_{tid}")
         elif ':' in tag_frame:
             fam, tid = tag_frame.split(':')
             candidates.append(f"tag_{tid}")
             candidates.append(f"tag_{fam}_{tid}")
+            candidates.append(f"tag{fam}:{tid}")
+
+        cam_frames_to_try = [
+            observation.camera_frame,
+            observation.camera_frame.lstrip('/'),
+            'camera_frame',
+        ]
 
         last_error = None
-        for frame in candidates:
-            try:
-                result = self.tf_buffer.lookup_transform(observation.camera_frame, frame, stamp)
-                t, q = result.transform.translation, result.transform.rotation
-                return quaternion_transform((t.x, t.y, t.z), (q.x, q.y, q.z, q.w))
-            except self.tf_exception as exception:
-                last_error = exception
-                continue
+        for st in stamps_to_try:
+            for cam in cam_frames_to_try:
+                for frame in candidates:
+                    try:
+                        result = self.tf_buffer.lookup_transform(cam, frame, st)
+                        t, q = result.transform.translation, result.transform.rotation
+                        return quaternion_transform((t.x, t.y, t.z), (q.x, q.y, q.z, q.w))
+                    except self.tf_exception as exception:
+                        last_error = exception
+                        continue
 
         raise LookupError(f"Transform failed for {tag_frame} (candidates: {candidates}): {last_error}")
 
@@ -202,7 +231,7 @@ class HW4LocalizationService:
             estimate = self.provider.estimator.estimate(observation, self.lookup)
             msg = self.create_pose_message(estimate)
             self.pose_pub.publish(msg)
-            # Periodic logging on change of tag set
+            # Periodic logging on change of tag set or position
             if estimate.tag_ids != self.last_logged_tags:
                 self.last_logged_tags = estimate.tag_ids
                 tags_desc = [
@@ -210,11 +239,14 @@ class HW4LocalizationService:
                     for tid in estimate.tag_ids
                 ]
                 self.node.get_logger().info(
-                    f"Pose: ({estimate.x:.3f}, {estimate.y:.3f}) m, "
+                    f"Visual Pose: ({estimate.x:.3f}, {estimate.y:.3f}) m, "
                     f"yaw={math.degrees(estimate.yaw):.1f}° from {tags_desc}"
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            self.node.get_logger().warn(
+                f"Localization update skipped: {e}",
+                throttle_duration_sec=2.0
+            )
 
     def on_request(self, request, response):
         try:

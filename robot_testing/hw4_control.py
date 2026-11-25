@@ -330,19 +330,28 @@ class HW4ControlNode(Node):
     def run_mission(self):
         """Main waypoint-following control loop."""
         time.sleep(1.0)
-        self.get_logger().info("Mission thread started. Waiting for initial AprilTag pose...")
+        self.get_logger().info("Mission thread started. Waiting for initial AprilTag pose on /robot_pose...")
 
         # 1. Wait for visual pose
+        wait_start = time.monotonic()
         while self.running and rclpy.ok():
             with self.lock:
                 last_time = self.navigator.last_pose_time
-            if last_time > 0 and (time.monotonic() - last_time) <= 1.0:
+            if last_time > 0 and (time.monotonic() - last_time) <= 1.5:
                 self.get_logger().info(
                     f"Initial visual pose acquired: ({self.navigator.current_x_m * 100.0:.1f}, "
                     f"{self.navigator.current_y_m * 100.0:.1f}) cm, "
                     f"yaw={math.degrees(self.navigator.current_yaw_rad):.1f}°"
                 )
                 break
+
+            elapsed = time.monotonic() - wait_start
+            if int(elapsed * 2) % 6 == 0 and elapsed > 2.0:
+                self.get_logger().warn(
+                    f"Still waiting for AprilTag pose on /robot_pose ({elapsed:.0f}s elapsed). "
+                    "Ensure camera and apriltag nodes are running and an AprilTag is in camera view.",
+                    throttle_duration_sec=3.0,
+                )
             time.sleep(0.2)
 
         # 2. Closed-loop waypoint traversal
