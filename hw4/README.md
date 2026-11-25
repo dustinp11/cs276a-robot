@@ -34,7 +34,9 @@ remaining idle. `/hw4/start` executes that same frozen route.
 The start service reports whether the mission was **accepted**, not whether the
 robot reached the goal. Follow `/hw4/status`, console messages, or `status.json`
 for its eventual result. `complete` requires fresh, stable measured goal proximity.
-`unverified` means the predicted route ended without visual confirmation.
+Waypoint verification is mandatory: prediction cannot advance the waypoint
+index or finish the route. Missing feedback ends with an explicit verification
+failure instead of a predicted finish.
 
 The current test starts facing 180° and stops at the intermediate goal
 **(75, 154) cm**, left of the obstacle. The original final goal is retained in
@@ -106,34 +108,37 @@ tag solutions. It can use a single usable tag; it does not estimate a calibrated
 pose covariance. `ros_localization.py` preserves capture timestamps and never
 substitutes an older latest TF for the requested image timestamp.
 
-`navigation.py` follows fixed waypoints. The current fast configuration sets
-`navigation.feedback_required: false`, as requested for the physical test:
+`navigation.py` follows fixed waypoints with measured verification:
 
-1. Begin from the configured start position and **180° heading** immediately
-   after `/hw4/start`; do not wait to acquire a visual pose.
-2. Execute the full turn toward the next waypoint using the calibrated motor
-   pair and nominal angular rate. Motor commands remain active for the calculated
-   duration; turn completion is **predicted**, not measured, in this mode.
-3. Switch directly to `[0.4, 0.4]` forward travel for up to **one second**.
-   Shorten travel near waypoints or a projected collision limit, including a
-   watchdog interval of possible stopping overrun.
-4. Stop for the configured settling interval, accept a fresh stable visual
-   correction if available and consistent, then continue. Missing or rejected
-   corrections do not block the next movement; their reason is logged.
-5. Stop at the end of the predicted path with state `unverified` unless fresh
-   stable landmark feedback confirms arrival within 0.08 m, yielding `complete`.
+1. Start immediately from the configured position and **180° heading** after
+   `/hw4/start`; no initial visual acquisition is required.
+2. Execute the full turn toward the current waypoint using the measured motor
+   pair and full-rotation calibration, then drive up to one second per segment.
+3. When prediction reaches a waypoint, stop and obtain three distinct consistent
+   post-settle AprilTag poses before advancing. Older observations may span up
+   to two seconds while stopped, but the newest must be at most one second old.
+4. Replace dead reckoning with the measured checkpoint pose. If still short or
+   off course, retain the target, turn toward it, and continue correcting.
+5. Require **all three confirming goal observations within 3 cm** of the active
+   goal. A predicted endpoint cannot finish the run. Missing observations or
+   exhausted correction budgets stop with an explicit failure.
 
-Without visual correction, wheel slip and imperfect turn/speed calibration cause
-position and heading error to accumulate. Collision checks then protect the
-**predicted** footprint; they cannot establish physical clearance. Place the robot
-at the configured start pose for every run. This code does not detect unmapped
-obstacles.
+The goal tolerance is a localization estimate, not guaranteed exact physical
+placement. At fixed `[0.4, 0.4]` inputs, startup, braking, and 20 Hz timing affect
+small final corrections; assess actual accuracy from physical measurements.
+`feedback_required: false` permits calibrated motion between checkpoints; it
+no longer makes waypoint verification optional. `true` additionally requires
+initial acquisition and measured continuous-turn feedback.
 
-`feedback_required: true` retains the previous strict behavior for comparison:
-initial/post-drive stable-pose acquisition, continuous visually measured turns,
-and failure on lost feedback. This is not the default fast experiment. Both
-settings retain command-refresh watchdog checks, collision checks on their pose
-estimate, bounded motion budgets, explicit stop, and a mission timeout.
+Consistent checkpoint corrections can override up to 1 m of position drift and
+90° of heading drift. A measured robot already inside the usual safety margin
+may recover outward while preserving its measured initial body clearance, with
+an absolute 3 cm clearance floor. It must move toward greater clearance; normal
+10 cm checks resume after recovery. Unsafe poses or a blocked corrective route
+stop the robot rather than continuing on an incorrect predicted pose.
+
+The code does not detect unmapped obstacles. Keep the same measured map, initial
+placement, and motor calibration when comparing runs.
 
 ## Calibration baseline
 
@@ -174,10 +179,11 @@ and videos of the physical run. Results are excluded from Git.
   Axes and the text table use centimeters to match the survey. These are
   planned coordinates, not a measured robot trajectory.
 - `observations.csv`: capture timestamps, accepted/rejected feedback, rejection
-  reasons, measured world poses, and tag IDs.
+  reasons, measured world poses, tag IDs, and camera-to-tag ranges in meters.
 - `commands.csv`: state/waypoint, nominal commands, feedback age, measured pose,
   command-predicted pose, correction budgets, measured body clearance, turn
-  target/progress angles, pose source, and optional-correction rejection reason.
+  target/progress angles, pose source, correction reason, measured/predicted
+  distances to the active waypoint, measured goal distance, tolerance, and active clearance.
 - `status.json` and `events.jsonl`: iteration label `run1`, current/terminal
   state, explicit arrival status, elapsed time, and transition history.
 - `environment.json`, `motion.yaml`, `navigation.yaml`, `camera_parameter.yaml`:

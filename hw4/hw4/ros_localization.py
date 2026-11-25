@@ -3,6 +3,7 @@
 from collections import deque
 from functools import partial
 import math
+import json
 import time
 import numpy as np
 from apriltag_msgs.msg import AprilTagDetectionArray
@@ -107,7 +108,9 @@ class PoseSource:
         self.frames.finish(ns)
         self.samples.append(pose)
         reason = 'mapped landmark estimate; some TF unavailable' if missing else 'mapped landmark estimate'
-        self.log.observations.writerow([now, ns, True, reason, pose.x, pose.y, pose.yaw, pose.tags])
+        ranges = {f'{key[0]}:{key[1]}': round(float(np.linalg.norm(transform[:3, 3])), 4)
+                  for key, transform in measurements if key in pose.tags}
+        self.log.observations.writerow([now, ns, True, reason, pose.x, pose.y, pose.yaw, pose.tags, json.dumps(ranges)])
         output = PoseStamped()
         output.header.stamp = next(iter(capture.messages.values())).header.stamp
         output.header.frame_id = 'map'
@@ -118,4 +121,4 @@ class PoseSource:
     def reject(self, now, stamp, reason):
         """Record a rejection without refreshing the age of the previous pose."""
         self.frames.finish(stamp)
-        self.log.observations.writerow([now, stamp, False, reason, '', '', '', ''])
+        self.log.observations.writerow([now, stamp, False, reason, '', '', '', '', ''])

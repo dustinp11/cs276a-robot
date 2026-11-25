@@ -23,7 +23,7 @@ def load_settings(path):
         raise ValueError('navigation.feedback_required must be true or false.')
 
     # constrain sampling and footprint integration limits
-    for name in ('stable_samples', 'max_turns'):
+    for name in ('stable_samples', 'max_turns', 'max_checkpoint_corrections'):
         if type(nav[name]) is not int or nav[name] < 1:
             raise ValueError(f'navigation.{name} must be a positive integer.')
     if nav['stable_samples'] < 3 or nav['stable_samples'] > 20:
@@ -32,6 +32,9 @@ def load_settings(path):
         raise ValueError('Use grid resolution between 0.02 and 0.20 meters.')
     if nav['drive_duration_s'] > 1.0:
         raise ValueError('Drive segments must not exceed one second between stopped checks.')
+
+    if nav['goal_tolerance_m'] > nav['position_tolerance_m']:
+        raise ValueError('Goal tolerance must not exceed waypoint tolerance.')
 
     # reject unusable quality and mount settings
     for name, value in data['localization'].items():

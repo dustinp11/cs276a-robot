@@ -3,6 +3,7 @@
 import math
 from hw3.coordinates import wrap_angle
 from hw4.localization import Feedback, stable_feedback
+from hw4.checkpoint import checkpoint_pose, goal_confirmed
 
 
 class Navigator:
@@ -23,6 +24,8 @@ class Navigator:
         self.initial_yaw = initial_yaw
         self.commanded_distance, self.segment_budget = 0.0, None
         self.feedback_required = policy['feedback_required']
+        self.motion_clearance = grid.margin
+        self.checkpoint_attempts = 0
         self.pose_source, self.feedback_note = 'waiting for vision', ''
         if not self.feedback_required:
             self.expected = (*path[0], initial_yaw)
@@ -57,6 +60,8 @@ class Navigator:
             return self.motion_tick(now, samples)
         if self.state == 'turning':
             return self.turn_tick(now, samples)
+        if self.state == 'verifying':
+            return self.verify_tick(now, samples)
         if now < self.after:
             return 0.0, 0.0
         pose = stable_feedback(samples, self.after, now, self.policy)
@@ -105,7 +110,7 @@ class Navigator:
     def accept_pose(self, pose):
         """Reject unsafe poses and large disagreements with command prediction."""
         # check physical clearance and prediction consistency
-        if not self.grid.segment_free(pose.xy, pose.xy):
+        if not self.segment_is_clear(pose.xy, pose.xy):
             return 'measured pose violates configured robot clearance'
         reference = self.expected or (*self.path[0], self.initial_yaw)
         if math.dist(pose.xy, reference[:2]) > self.policy['max_position_jump_m']:
@@ -122,14 +127,9 @@ class Navigator:
             return self.finish('failed', error)
         if measured:
             self.measured = pose
-        while self.index < len(self.path) and math.dist(pose.xy, self.path[self.index]) <= self.policy['position_tolerance_m']:
-            self.index += 1
-            self.corrections = 0
-            self.commanded_distance, self.segment_budget = 0.0, None
-        if self.index == len(self.path):
-            if measured:
-                return self.finish('complete', 'goal reached using fresh stable landmark pose')
-            return self.finish('unverified', 'planned route completed by prediction; physical arrival unverified')
+        tolerance = self.target_tolerance()
+        if math.dist(pose.xy, self.path[self.index]) <= tolerance:
+            return self.begin_verification(now)
 
         # select the next fixed waypoint
         target = self.path[self.index]
@@ -139,6 +139,83 @@ class Navigator:
             return self.begin_turn(now, pose, residual)
         self.corrections = 0
         return self.drive_segment(now, pose, target)
+
+    def target_tolerance(self):
+        """Use tighter accuracy at the active goal than at intermediate waypoints."""
+        return (self.policy['goal_tolerance_m'] if self.index >= len(self.path) - 1
+                else self.policy['position_tolerance_m'])
+
+    def begin_verification(self, now):
+        """Hold the current target until fresh stopped tag observations verify it."""
+        # prediction cannot advance or complete waypoints
+        self.wait_for_feedback(now)
+        self.state = 'verifying'
+        self.reason = f'verifying waypoint {self.index} with fresh AprilTag observations'
+        return self.command
+
+    def verify_tick(self, now, samples):
+        """Correct from measured pose; stop explicitly if verification is unavailable."""
+        # collect independent frames after the stop
+        if now < self.after:
+            return 0.0, 0.0
+        final = self.index == len(self.path) - 1
+        pose = checkpoint_pose(samples, self.after, now, self.policy, final)
+        if pose is None:
+            if now >= self.deadline:
+                return self.finish('failed', 'waypoint verification timed out; target not advanced')
+            return 0.0, 0.0
+
+        # accept bounded measured correction over dead reckoning
+        error = self.apply_checkpoint_pose(pose)
+        if error:
+            return self.finish('failed', error)
+        distance = math.dist(pose.xy, self.path[self.index])
+        if distance > self.target_tolerance():
+            self.checkpoint_attempts += 1
+            if self.checkpoint_attempts > self.policy['max_checkpoint_corrections']:
+                return self.finish('failed', 'waypoint correction budget exhausted without measured arrival')
+            self.state = 'waiting'
+            return self.decide(now, pose)
+
+        # verify every goal frame before finishing
+        if final and not goal_confirmed(samples, self.after, now, self.path[self.index], self.policy):
+            if now >= self.deadline:
+                return self.finish('failed', 'goal observations did not all confirm arrival tolerance')
+            self.feedback_note = 'waiting for all goal samples to confirm tolerance'
+            return 0.0, 0.0
+        self.index += 1
+        self.commanded_distance, self.segment_budget, self.corrections = 0.0, None, 0
+        self.checkpoint_attempts = 0
+        if self.index == len(self.path):
+            return self.finish('complete', 'goal verified by fresh stable AprilTag observations')
+        self.state = 'waiting'
+        return self.decide(now, pose)
+
+    def apply_checkpoint_pose(self, pose):
+        """Replace prediction with a stable measured pose within bounded correction limits."""
+        # permit correction without trusting arbitrary pose jumps
+        clearance = self.grid.clearance(pose.xy)
+        if clearance < self.policy['recovery_min_clearance_m']:
+            return 'checkpoint pose too close to collision for automatic correction'
+        if self.expected and math.dist(pose.xy, self.expected[:2]) > self.policy['checkpoint_max_correction_m']:
+            return 'checkpoint localization correction exceeds position limit'
+        if self.expected and abs(wrap_angle(pose.yaw - self.expected[2])) > self.policy['checkpoint_max_heading_rad']:
+            return 'checkpoint localization correction exceeds heading limit'
+        self.expected, self.measured = (pose.x, pose.y, pose.yaw), pose
+        self.motion_clearance = min(self.grid.margin, clearance)
+        self.pose_source = 'measured AprilTag checkpoint'
+        self.feedback_note = f'checkpoint correction accepted; target distance {math.dist(pose.xy, self.path[self.index]):.3f} m'
+        return None
+
+    def segment_is_clear(self, start, end):
+        """Allow only outward recovery when a measured pose is inside the safety margin."""
+        # never move closer while recovering clearance
+        gap = self.grid.clearance(start, end)
+        if gap < self.motion_clearance - 1e-8:
+            return False
+        if start != end and self.motion_clearance < self.grid.margin:
+            return self.grid.clearance(end) > self.grid.clearance(start) + 1e-4
+        return True
 
     def begin_turn(self, now, pose, residual):
         """Rotate continuously until facing the next planned waypoint."""
@@ -203,7 +280,7 @@ class Navigator:
     def check_turn_pose(self, pose):
         """Reject unsafe displacement and implausible frame-to-frame heading jumps."""
         # preserve footprint clearance throughout measured rotation
-        if not self.grid.segment_free(pose.xy, pose.xy):
+        if not self.segment_is_clear(pose.xy, pose.xy):
             return 'measured turn position violates robot clearance'
         if math.dist(pose.xy, self.turn_origin.xy) > self.policy['max_position_jump_m']:
             return 'excessive measured translation during in-place turn'
@@ -217,8 +294,10 @@ class Navigator:
 
     def drive_segment(self, now, pose, target):
         """Drive for up to one second, shortening near a waypoint or clearance limit."""
-        # preserve the route before committing forward
-        if not self.grid.segment_free(pose.xy, target):
+        # verify arrival before issuing tiny corrections
+        if math.dist(pose.xy, target) <= self.target_tolerance():
+            return self.begin_verification(now)
+        if not self.segment_is_clear(pose.xy, target):
             return self.finish('failed', 'measured pose no longer has a clear route to waypoint')
         maximum = self.forward.speed_mps * self.policy['drive_duration_s']
         requested = min(math.dist(pose.xy, target), maximum)
@@ -239,7 +318,7 @@ class Navigator:
         """Include one motor-watchdog interval of possible stopping overrun."""
         guarded = distance + self.forward.speed_mps * 0.15
         end = pose.x + guarded * math.cos(pose.yaw), pose.y + guarded * math.sin(pose.yaw)
-        return self.grid.segment_free(pose.xy, end)
+        return self.segment_is_clear(pose.xy, end)
 
     def clear_drive_distance(self, pose, requested):
         """Shorten a segment only when its full projected sweep is blocked."""

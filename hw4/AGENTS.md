@@ -35,13 +35,21 @@
 - `fast.py` is implemented; `safe.py` contains function signatures/docstrings
   only. Do not implement safe mode until the user requests it. Selecting safe
   must report unimplemented before hardware starts, without falling back to fast.
-- The user explicitly requested movement without mandatory pose acquisition.
-  Default fast mode has `feedback_required: false`: start from the configured
-  pose, execute full calibrated timed turns, drive up to one second, then check
-  optional stopped visual corrections. Do not block motion on missing tags.
-- Log command prediction versus accepted visual correction and rejection reason.
-  Predicted route completion must end as `unverified`, never measured arrival.
-  Keep strict feedback mode available for comparison, not enabled by default.
+- Start fast mode from the configured pose without mandatory initial visual
+  acquisition. Execute full calibrated timed turns and up to one-second drives.
+  The latest user instruction requires fresh stopped AprilTag verification at
+  EVERY waypoint and at the active goal; prediction must not advance the index.
+- At waypoint checks, accept stable bounded corrections even when command
+  prediction drifted by more than the usual optional correction gate. Keep the
+  same target and correct until measured arrival; fail explicitly if no usable
+  observations arrive or correction budgets are exhausted.
+- Goal success requires all confirming fresh observations within 0.03 m of the
+  active goal. This is measured localization tolerance, not exact ground truth.
+- If measured drift placed the robot inside the 0.10 m safety margin, allow only
+  outward recovery preserving its measured starting clearance, never below the
+  configured recovery floor. Log that temporary clearance and the correction.
+- Log observed per-tag ranges, target/goal distances, and measured versus
+  predicted pose. Never complete a route solely from command prediction.
 - Preserve successful/failed terminal outcomes when stop or shutdown follows.
 - Label this iteration `run1` in archived status. The synthetic test map is
   never a replacement for `config/environment.json` measurements.

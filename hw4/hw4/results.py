@@ -47,13 +47,15 @@ class RunLog:
         # open separate observation and command streams
         self.handles = []
         self.observations = self.open_csv('observations.csv', [
-            'time_s', 'image_stamp_ns', 'accepted', 'reason', 'x_m', 'y_m', 'yaw_rad', 'tag_ids'])
+            'time_s', 'image_stamp_ns', 'accepted', 'reason', 'x_m', 'y_m', 'yaw_rad', 'tag_ids', 'camera_tag_ranges_m'])
         self.commands = self.open_csv('commands.csv', [
             'time_s', 'state', 'waypoint', 'reason', 'linear_mps', 'angular_radps',
             'pose_age_s', 'measured_x_m', 'measured_y_m', 'measured_yaw_rad',
             'predicted_x_m', 'predicted_y_m', 'predicted_yaw_rad',
             'turn_steps', 'commanded_segment_distance_m', 'segment_budget_m', 'measured_body_clearance_m', 'turn_target_yaw_rad', 'turn_progress_rad',
-            'pose_source', 'feedback_note'])
+            'pose_source', 'feedback_note', 'target_x_m', 'target_y_m',
+            'measured_target_distance_m', 'predicted_target_distance_m', 'measured_goal_distance_m',
+            'target_tolerance_m', 'active_clearance_m'])
 
     def open_csv(self, name, header):
         """Open a line-buffered CSV stream with explicit units in its header."""

@@ -38,14 +38,14 @@ def calibrations():
     return forward, TurnCalibration(**turns)
 
 
-def simulate(navigator, pose, duration=240.0, feedback=True):
+def simulate(navigator, pose, duration=240.0, feedback=True, linear_scale=1.0):
     """Integrate perfect motor response and 10 Hz exact observations at 20 Hz control."""
     command, samples, minimum = (0.0, 0.0), [], math.inf
     for index in range(int(duration / 0.05)):
         now = 10.0 + index * 0.05
         x, y, yaw = pose
-        x += command[0] * 0.05 * math.cos(yaw)
-        y += command[0] * 0.05 * math.sin(yaw)
+        x += command[0] * linear_scale * 0.05 * math.cos(yaw)
+        y += command[0] * linear_scale * 0.05 * math.sin(yaw)
         yaw += command[1] * 0.05
         pose = x, y, yaw
         minimum = min(minimum, navigator.grid.clearance((x, y)))
@@ -354,19 +354,103 @@ class RunOneTests(unittest.TestCase):
                 self.assertIn('visual correction rejected', nav.feedback_note)
                 self.assertFalse(nav.finished)
 
-    def test_predicted_route_finishes_without_false_measured_arrival(self):
-        """Missing tags do not block movement or fabricate verified physical arrival."""
+    def test_predicted_waypoint_waits_for_tags_and_never_advances_blindly(self):
+        """Start moving without tags, but stop explicitly if waypoint verification is unavailable."""
         # exercise the full route without observations
         policy = dict(self.policy, feedback_required=False)
         grid = deepcopy(self.grid)
         grid.margin = self.environment['robot']['safety_margin_m']
         nav = Navigator(grid, self.plans['fast'], self.forward, self.turn, policy, 10)
         state, reason, pose, clearance = simulate(nav, (0.55, 0.55, 0), feedback=False)
-        self.assertEqual(state, 'unverified', reason)
+        self.assertEqual(state, 'failed', reason)
+        self.assertIn('waypoint verification timed out', reason)
+        self.assertEqual(nav.index, 1)
         self.assertIsNone(nav.measured)
         self.assertGreaterEqual(clearance, grid.margin)
-        self.assertLessEqual(math.dist(pose[:2], self.plans['fast'][-1]), self.policy['position_tolerance_m'])
+        self.assertLessEqual(math.dist(pose[:2], self.plans['fast'][1]), self.policy['position_tolerance_m'])
         self.assertEqual(nav.command, (0, 0))
+
+    def test_reported_short_stop_triggers_measured_goal_correction(self):
+        """Replay the observed 34 cm goal error instead of accepting predicted arrival."""
+        # reproduce the measured obstacle-side stopping position
+        data = deepcopy(self.environment)
+        data['robot'].update(length_m=0.16, width_m=0.16)
+        data['obstacles'][0].update(x_min_m=1.14, x_max_m=1.76, y_min_m=1.23, y_max_m=1.85)
+        grid = build_grid(data)
+        path = [(2.345, 0.63), (0.95, 1.0), (0.85, 1.2), (0.75, 1.54)]
+        policy = dict(self.policy, feedback_required=False)
+        nav = Navigator(grid, path, self.forward, self.turn, policy, 10, math.pi)
+        nav.index, nav.expected = 3, (0.75384, 1.56843, 1.8344)
+        nav.begin_verification(10)
+        samples = [Feedback(0.9412, 1.2560, 2.2664, stamp, (('41h12', 1),))
+                   for stamp in (11.05, 11.25, 11.45)]
+        self.assertEqual(nav.tick(11.5, samples), (self.forward.speed_mps, 0))
+        self.assertEqual(nav.index, 3)
+        self.assertEqual(nav.state, 'moving')
+        self.assertAlmostEqual(nav.expected[0], 0.9412)
+        self.assertIn('checkpoint correction accepted', nav.feedback_note)
+        self.assertTrue(nav.segment_is_clear(samples[-1].xy, path[-1]))
+
+    def test_margin_recovery_must_move_outward_and_respect_collision_floor(self):
+        """A checkpoint inside the safety margin cannot authorize motion closer to obstacles."""
+        # preserve measured clearance while leaving the margin
+        grid = build_grid(self.environment)
+        x = 1.2 - grid.radius - 0.08
+        path = [(0.55, 0.55), (0.55, 1.5)]
+        nav = Navigator(grid, path, self.forward, self.turn, self.policy, 10)
+        pose = Feedback(x, 1.5, math.pi, 11)
+        nav.expected = pose.x, pose.y, pose.yaw
+        self.assertIsNone(nav.apply_checkpoint_pose(pose))
+        self.assertTrue(nav.segment_is_clear(pose.xy, (x - 0.1, 1.5)))
+        self.assertFalse(nav.segment_is_clear(pose.xy, (x + 0.01, 1.5)))
+        unsafe = Feedback(1.2 - grid.radius - 0.01, 1.5, math.pi, 12)
+        self.assertIn('too close to collision', nav.apply_checkpoint_pose(unsafe))
+
+    def test_goal_requires_all_fresh_frames_inside_three_centimeters(self):
+        """A close average cannot hide one confirming observation outside tolerance."""
+        # hold the target until every frame agrees
+        path = [(0.55, 0.55), (0.55, 1.0)]
+        nav = Navigator(self.grid, path, self.forward, self.turn, self.policy, 10)
+        nav.expected = 0.55, 1.0, math.pi / 2
+        nav.begin_verification(10)
+        samples = [Feedback(0.55 + dx, 1.0, math.pi / 2, stamp, (0,))
+                   for dx, stamp in zip((0.02, 0.021, 0.031), (11.1, 11.3, 11.5))]
+        self.assertEqual(nav.tick(11.55, samples), (0, 0))
+        self.assertEqual(nav.state, 'verifying')
+        self.assertEqual(nav.index, 1)
+
+        # finish only after new measured confirmation
+        samples = [Feedback(0.55 + dx, 1.0, math.pi / 2, stamp, (0,))
+                   for dx, stamp in zip((0.01, 0.015, 0.02), (11.6, 11.8, 12.0))]
+        self.assertEqual(nav.tick(12.05, samples), (0, 0))
+        self.assertEqual(nav.state, 'complete')
+        self.assertEqual(nav.index, 2)
+
+    def test_waypoint_verification_cannot_use_pre_stop_or_stale_frames(self):
+        """Repeated or old observations do not confirm an intermediate waypoint."""
+        # preserve the current waypoint on timeout
+        path = [(0.55, 0.55), (0.55, 1.0), (0.55, 2.5)]
+        nav = Navigator(self.grid, path, self.forward, self.turn, self.policy, 10)
+        nav.expected = 0.55, 1.0, math.pi / 2
+        nav.begin_verification(10)
+        old = [Feedback(0.55, 1.0, math.pi / 2, stamp, (0,)) for stamp in (9.7, 9.8, 9.9)]
+        self.assertEqual(nav.tick(12, old), (0, 0))
+        self.assertEqual(nav.index, 1)
+        self.assertEqual(nav.tick(20, old), (0, 0))
+        self.assertEqual(nav.index, 1)
+        self.assertEqual(nav.state, 'failed')
+
+    def test_measured_checkpoints_correct_a_slower_than_predicted_robot(self):
+        """A robot moving at 65 percent of nominal speed must still reach measured goal."""
+        # exercise repeated corrections instead of predicted completion
+        policy = dict(self.policy, feedback_required=False)
+        grid = deepcopy(self.grid)
+        grid.margin = self.environment['robot']['safety_margin_m']
+        nav = Navigator(grid, self.plans['fast'], self.forward, self.turn, policy, 10)
+        state, reason, pose, clearance = simulate(nav, (0.55, 0.55, 0), linear_scale=0.65)
+        self.assertEqual(state, 'complete', reason)
+        self.assertLessEqual(math.dist(pose[:2], self.plans['fast'][-1]), policy['goal_tolerance_m'])
+        self.assertGreaterEqual(clearance, grid.margin)
 
     def test_ideal_feedback_completes_fast_route(self):
         """Check fast-mode control under exact localization and ideal motor response."""

@@ -149,11 +149,17 @@ class MissionNode(Node):
         sample = self.poses.samples[-1] if self.poses.samples else None
         measured = (sample.x, sample.y, sample.yaw) if sample else ('', '', '')
         age = now - sample.stamp if sample else ''
+        target = nav.path[min(nav.index, len(nav.path) - 1)]
+        measured_distance = math.dist(sample.xy, target) if sample else ''
+        predicted_distance = math.dist(nav.expected[:2], target) if nav.expected else ''
+        goal_distance = math.dist(sample.xy, nav.path[-1]) if sample else ''
         self.log.commands.writerow([now, nav.state, nav.index, nav.reason, *command, age,
                                    *measured, *(nav.expected or ('', '', '')),
                                    nav.corrections, nav.commanded_distance, nav.segment_budget,
                                    nav.grid.clearance(sample.xy) if sample else '',
-                                   nav.turn_target_yaw, nav.turn_progress, nav.pose_source, nav.feedback_note])
+                                   nav.turn_target_yaw, nav.turn_progress, nav.pose_source, nav.feedback_note,
+                                   *target, measured_distance, predicted_distance, goal_distance,
+                                   nav.target_tolerance(), nav.motion_clearance])
         status = nav.state, nav.reason, nav.index
         if status == self.last_status:
             return
@@ -166,7 +172,11 @@ class MissionNode(Node):
                    'accepted_pose': (nav.measured.x, nav.measured.y, nav.measured.yaw) if nav.measured else None,
                    'commanded_segment_distance_m': nav.commanded_distance,
                    'segment_budget_m': nav.segment_budget,
-                   'pose_source': nav.pose_source, 'feedback_note': nav.feedback_note}
+                   'pose_source': nav.pose_source, 'feedback_note': nav.feedback_note,
+                   'target_xy_m': target, 'measured_target_distance_m': measured_distance,
+                   'predicted_target_distance_m': predicted_distance,
+                   'measured_goal_distance_m': goal_distance,
+                   'target_tolerance_m': nav.target_tolerance(), 'active_clearance_m': nav.motion_clearance}
         self.log.status(nav.state, nav.reason, **details)
         self.status_pub.publish(String(data=json.dumps({'state': nav.state, 'reason': nav.reason, **details})))
         self.get_logger().info(f'{nav.state}: {nav.reason}; waypoint {nav.index}')
