@@ -200,14 +200,30 @@ class HW4ControlNode(Node):
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.pose_sub = self.create_subscription(PoseStamped, '/robot_pose', self.on_pose, 10)
 
-        # Trajectory logging paths
+        # Trajectory logging paths (1-second periodic recording)
+        pkg_root = Path(__file__).resolve().parent.parent
         self.coord_paths = [
             Path('hw4_trajectory.txt').resolve(),
             Path('coordinates.txt').resolve(),
+            Path('coordinate.txt').resolve(),
+            (pkg_root / 'hw4_trajectory.txt').resolve(),
+            (pkg_root / 'coordinates.txt').resolve(),
         ]
+        self.coord_paths = list(dict.fromkeys(self.coord_paths))
         for p in self.coord_paths:
             try:
                 p.write_text('', encoding='utf-8')
+            except Exception:
+                pass
+
+        self.csv_paths = [
+            Path('hw4_actual_trajectory.csv').resolve(),
+            (pkg_root / 'hw4_actual_trajectory.csv').resolve(),
+        ]
+        self.csv_paths = list(dict.fromkeys(self.csv_paths))
+        for p in self.csv_paths:
+            try:
+                p.write_text('timestamp_s,x_cm,y_cm,yaw_deg,state,fresh\n', encoding='utf-8')
             except Exception:
                 pass
 
@@ -258,11 +274,54 @@ class HW4ControlNode(Node):
             self.get_logger().info(f'  WP {i}: ({wx:.1f}, {wy:.1f}) cm')
         self.get_logger().info('=' * 60)
 
+        # 1-second periodic coordinate recording timer based on localization
+        self.record_timer = self.create_timer(1.0, self.record_coordinates_tick)
+
         # Control thread
         self.running = True
         self.lock = threading.Lock()
         self.mission_thread = threading.Thread(target=self.run_mission, daemon=True)
         self.mission_thread.start()
+
+    def record_coordinates_tick(self):
+        """Record current localized coordinates to trajectory files every 1 second."""
+        with self.lock:
+            x_m = self.navigator.current_x_m
+            y_m = self.navigator.current_y_m
+            yaw_rad = self.navigator.current_yaw_rad
+            last_time = self.navigator.last_pose_time
+            state = self.navigator.state.value
+
+        x_cm = x_m * 100.0
+        y_cm = y_m * 100.0
+        yaw_deg = math.degrees(yaw_rad)
+        now_s = time.monotonic()
+        is_fresh = (last_time > 0.0) and ((now_s - last_time) <= 2.0)
+
+        # Write (x, y) tuple format to coordinates.txt, hw4_trajectory.txt
+        coord_line = f"({x_cm:.2f}, {y_cm:.2f})\n"
+        for p in self.coord_paths:
+            try:
+                with open(p, 'a', encoding='utf-8') as f:
+                    f.write(coord_line)
+                    f.flush()
+            except Exception:
+                pass
+
+        # Write structured CSV format to hw4_actual_trajectory.csv
+        csv_line = f"{now_s:.2f},{x_cm:.2f},{y_cm:.2f},{yaw_deg:.2f},{state},{int(is_fresh)}\n"
+        for p in self.csv_paths:
+            try:
+                with open(p, 'a', encoding='utf-8') as f:
+                    f.write(csv_line)
+                    f.flush()
+            except Exception:
+                pass
+
+        self.get_logger().info(
+            f"[1s Record] Logged pose: ({x_cm:.1f}, {y_cm:.1f}) cm, yaw={yaw_deg:.1f}° [{state}]",
+            throttle_duration_sec=3.0
+        )
 
     def on_pose(self, msg: PoseStamped):
         """Update robot pose from visual AprilTag localization."""
@@ -275,15 +334,6 @@ class HW4ControlNode(Node):
 
         with self.lock:
             self.navigator.update_pose(px, py, yaw, now_s)
-
-        # Log coordinate to file
-        coord_line = f"({px * 100.0:.2f}, {py * 100.0:.2f})\n"
-        for p in self.coord_paths:
-            try:
-                with open(p, 'a', encoding='utf-8') as f:
-                    f.write(coord_line)
-            except Exception:
-                pass
 
     def stop_robot(self):
         """Publish zero velocity to stop motors."""
@@ -450,6 +500,7 @@ class HW4ControlNode(Node):
 
             if curr_state == NavigationState.GOAL_REACHED:
                 self.stop_robot()
+                self.record_coordinates_tick()
                 self.get_logger().info("=" * 60)
                 self.get_logger().info("GOAL REACHED! Safe Voronoi mission complete!")
                 self.get_logger().info("=" * 60)
@@ -480,6 +531,7 @@ class HW4ControlNode(Node):
             time.sleep(0.1)
 
         self.stop_robot()
+        self.record_coordinates_tick()
 
 
 def main(args=None):
