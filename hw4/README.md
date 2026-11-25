@@ -97,22 +97,22 @@ substitutes an older latest TF for the requested image timestamp.
 
 `navigation.py` follows fixed waypoints:
 
-1. Require three distinct, fresh, consistent pose observations.
-2. Rotate continuously toward a measured heading up to 30° away. Typical
-   turns are 15–30°; a final alignment may be smaller to avoid overshoot. The
-   command remains active until fresh heading feedback reaches the target,
-   rather than ending after a short timed pulse.
-3. Stop, settle for one second, and obtain new consistent observations.
-4. Drive at the HW3 fixed speed for at most 0.20 m, checking the actual forward
-   sweep plus a watchdog interval of stopping overrun.
+1. Require three distinct, fresh, consistent pose observations initially and
+   after stopped drive checkpoints.
+2. Turn continuously until measured heading faces the next planned waypoint.
+   There are no intermediate 15°/30° stages or timed turn pulses.
+3. Switch directly from turning to forward travel once aligned; do not pause
+   for another stopped acquisition between the turn and drive.
+4. Drive at `[0.4, 0.4]` for up to **one second**, then stop and check pose.
+   Shorten travel near the next waypoint or a projected collision limit,
+   including one motor-watchdog interval of stopping overrun.
 5. Repeat until a fresh stable pose is within 0.08 m of the goal.
 
 Continuous turns require heading feedback no older than 0.35 s and fail after
-3 s without measured heading arrival. Large turns use successive stages of at
-most 30°, with stopped localization between completed stages. Straight motion
-and pivoting remain separate. Feedback loss, implausible pose
-jumps, unsafe sweep, control stalls, and exhausted budgets stop the mission.
-There is no blind timed continuation or automatic searching when tags disappear.
+8 s without measured alignment. The planner's heading is the target, not an
+intermediate angle. Straight motion and pivoting remain separate. Feedback loss,
+implausible pose jumps, unsafe motion, control stalls, and exhausted budgets stop
+the mission. There is no blind timed continuation or automatic tag searching.
 The pose can be unavailable near the obstacle or during turns; those failures
 are useful run-1 evidence for the next iteration. The code does not detect an
 unmapped obstacle; it uses the measured obstacle map.

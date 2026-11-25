@@ -5,11 +5,9 @@
       mode: fast
       grid_resolution_m: 0.05
       planning_buffer_m: 0.05
-      drive_chunk_m: 0.20
-      turn_step_rad: 0.5235987755982988
-      turn_stop_tolerance_rad: 0.03
+      drive_duration_s: 1.0
       turn_feedback_timeout_s: 0.35
-      turn_timeout_s: 3.0
+      turn_timeout_s: 8.0
       position_tolerance_m: 0.08
       heading_tolerance_rad: 0.12
       settle_s: 1.0

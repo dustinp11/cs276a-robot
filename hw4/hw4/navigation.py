@@ -59,7 +59,7 @@ class Navigator:
         return 0.0, 0.0
 
     def motion_tick(self, now, samples):
-        """Stop on stale vision or pulse completion; never advance a waypoint here."""
+        """Stop on stale vision or segment completion; never advance a waypoint here."""
         # require fresh vision throughout bounded motion
         if not samples or not 0 <= now - samples[-1].stamp <= self.policy['pose_timeout_s']:
             return self.finish('failed', 'localization became stale during motion')
@@ -67,8 +67,8 @@ class Navigator:
             return self.command
 
         # predict only the executed command interval
-        duration = now - self.pulse_start
-        x, y, yaw = self.pulse_pose.x, self.pulse_pose.y, self.pulse_pose.yaw
+        duration = now - self.segment_start
+        x, y, yaw = self.segment_pose.x, self.segment_pose.y, self.segment_pose.yaw
         v, omega = self.command
         self.expected = (x + v * duration * math.cos(yaw), y + v * duration * math.sin(yaw),
                          wrap_angle(yaw + omega * duration))
@@ -116,22 +116,23 @@ class Navigator:
         if abs(residual) > self.policy['heading_tolerance_rad']:
             return self.begin_turn(now, pose, residual)
         self.corrections = 0
-        return self.drive_pulse(now, pose, target)
+        return self.drive_segment(now, pose, target)
 
     def begin_turn(self, now, pose, residual):
-        """Rotate continuously toward a measured heading at most 30 degrees away."""
-        # limit whole turns without timed pulses
+        """Rotate continuously until facing the next planned waypoint."""
+        # target the full planned travel heading
         if self.corrections >= self.policy['max_turns']:
             return self.finish('failed', 'heading correction budget exhausted')
         self.corrections += 1
-        self.turn_angle = min(abs(residual), self.policy['turn_step_rad'])
+        self.turn_angle = abs(residual)
         self.turn_direction = 1.0 if residual > 0 else -1.0
         self.turn_origin, self.turn_start = pose, now
+        self.last_turn_pose = pose
         self.turn_progress = 0.0
         self.turn_target_yaw = wrap_angle(pose.yaw + self.turn_direction * self.turn_angle)
 
         # refresh motors until measured heading arrives
-        self.state, self.reason = 'turning', 'continuous measured turn toward waypoint'
+        self.state, self.reason = 'turning', 'turning continuously to planned waypoint heading'
         self.deadline = now + self.policy['turn_timeout_s']
         self.command = 0.0, self.turn.rate(residual)
         return self.command
@@ -147,54 +148,79 @@ class Navigator:
             if error:
                 return self.finish('failed', error)
             self.turn_progress = self.turn_direction * wrap_angle(pose.yaw - self.turn_origin.yaw)
-            if self.turn_progress >= self.turn_angle - self.policy['turn_stop_tolerance_rad']:
+            residual = wrap_angle(self.turn_target_yaw - pose.yaw)
+            if abs(residual) <= self.policy['heading_tolerance_rad']:
+                self.measured = pose
                 self.expected = pose.x, pose.y, pose.yaw
-                return self.wait_for_feedback(now)
+                self.corrections = 0
+                return self.drive_segment(now, pose, self.path[self.index])
+            self.command = 0.0, self.turn.rate(residual)
 
         if now >= self.deadline:
             return self.finish('failed', 'continuous turn timed out without measured heading arrival')
         return self.command
 
     def check_turn_pose(self, pose):
-        """Reject unsafe displacement, heading flips, or rotation in the wrong direction."""
+        """Reject unsafe displacement and implausible frame-to-frame heading jumps."""
         # preserve footprint clearance throughout measured rotation
         if not self.grid.segment_free(pose.xy, pose.xy):
             return 'measured turn position violates robot clearance'
         if math.dist(pose.xy, self.turn_origin.xy) > self.policy['max_position_jump_m']:
             return 'excessive measured translation during in-place turn'
-        progress = self.turn_direction * wrap_angle(pose.yaw - self.turn_origin.yaw)
-        if progress < -self.policy['heading_tolerance_rad']:
-            return 'measured rotation is opposite to requested turn'
-        if progress > self.turn_angle + self.policy['max_heading_jump_rad']:
-            return 'measured heading jumped beyond continuous turn target'
+        change = abs(wrap_angle(pose.yaw - self.last_turn_pose.yaw))
+        elapsed = max(0.0, pose.stamp - self.last_turn_pose.stamp)
+        limit = self.policy['max_heading_jump_rad'] + abs(self.command[1]) * elapsed
+        if change > limit:
+            return 'measured heading jumped during continuous turn'
+        self.last_turn_pose = pose
         return None
 
-    def drive_pulse(self, now, pose, target):
-        """Check the actual forward sweep, including one watchdog interval of overrun."""
-        # validate measured route before committing forward
+    def drive_segment(self, now, pose, target):
+        """Drive for up to one second, shortening near a waypoint or clearance limit."""
+        # preserve the route before committing forward
         if not self.grid.segment_free(pose.xy, target):
             return self.finish('failed', 'measured pose no longer has a clear route to waypoint')
-        distance = min(math.dist(pose.xy, target), self.policy['drive_chunk_m'])
+        maximum = self.forward.speed_mps * self.policy['drive_duration_s']
+        requested = min(math.dist(pose.xy, target), maximum)
+        distance = self.clear_drive_distance(pose, requested)
+        if distance < min(requested, 0.05) - 1e-6:
+            return self.finish('failed', 'predicted forward sweep violates robot clearance')
+
+        # bound commands without claiming measured arrival
         if self.segment_budget is None:
-            self.segment_budget = 1.5 * math.dist(pose.xy, target) + self.policy['drive_chunk_m']
+            self.segment_budget = 1.5 * math.dist(pose.xy, target) + maximum
         if self.commanded_distance + distance > self.segment_budget:
             return self.finish('failed', 'forward command budget exhausted without measured waypoint arrival')
         self.commanded_distance += distance
+        return self.begin_segment(now, pose, self.forward.speed_mps, 0.0,
+                                  distance / self.forward.speed_mps, 'driving toward waypoint for up to one second')
 
-        # reserve clearance for delayed motor stopping
+    def forward_sweep_free(self, pose, distance):
+        """Include one motor-watchdog interval of possible stopping overrun."""
         guarded = distance + self.forward.speed_mps * 0.15
         end = pose.x + guarded * math.cos(pose.yaw), pose.y + guarded * math.sin(pose.yaw)
-        if not self.grid.segment_free(pose.xy, end):
-            return self.finish('failed', 'predicted forward sweep violates robot clearance')
+        return self.grid.segment_free(pose.xy, end)
 
-        return self.begin_pulse(now, pose, self.forward.speed_mps, 0.0,
-                                distance / self.forward.speed_mps, 'driving short straight segment')
+    def clear_drive_distance(self, pose, requested):
+        """Shorten a segment only when its full projected sweep is blocked."""
+        # retain long travel wherever clearance allows
+        if self.forward_sweep_free(pose, requested):
+            return requested
+        lower, upper = 0.0, requested
+        for _ in range(12):
+            middle = (lower + upper) / 2
+            if self.forward_sweep_free(pose, middle):
+                lower = middle
+            else:
+                upper = middle
 
-    def begin_pulse(self, now, pose, linear, angular, duration, reason):
-        """Freeze the calibrated command and monotonic deadline for one pulse."""
-        # freeze pulse timing before publishing movement
+        return lower * 0.95
+
+    def begin_segment(self, now, pose, linear, angular, duration, reason):
+        """Freeze the calibrated command and monotonic deadline for straight travel."""
+        # refresh motors throughout the requested duration
         self.state, self.reason = 'moving', reason
-        self.pulse_start, self.pulse_pose = now, pose
+        self.segment_start, self.segment_pose = now, pose
         self.deadline = now + duration
         self.command = linear, angular
         return self.command

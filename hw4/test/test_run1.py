@@ -239,30 +239,34 @@ class RunOneTests(unittest.TestCase):
         self.assertEqual(nav.state, 'failed')
         self.assertEqual(nav.index, 1)
 
-    def test_stale_vision_and_timer_overrun_stop_active_pulses(self):
+    def test_stale_vision_and_timer_overrun_stop_active_segments(self):
         """Active motion cannot continue after missing feedback or a watchdog overrun."""
         # exercise both active motion failure conditions
         for now, samples in [(10.05, []), (10.25, [Feedback(0.55, 0.55, 0, 10.25)])]:
             nav = Navigator(self.grid, self.plans['fast'], self.forward, self.turn, self.policy, 10)
-            nav.begin_pulse(10, Feedback(0.55, 0.55, 0, 10), self.forward.speed_mps, 0, 1, 'test pulse')
+            nav.begin_segment(10, Feedback(0.55, 0.55, 0, 10), self.forward.speed_mps, 0, 1, 'test straight segment')
             self.assertEqual(nav.tick(now, samples), (0, 0))
             self.assertEqual(nav.state, 'failed')
             self.assertEqual(nav.index, 1)
 
-    def test_continuous_turn_stops_at_measured_thirty_degrees(self):
-        """Hold the turn command until new measured heading reaches its stage target."""
-        # verify both directions across angular wrapping
+    def test_continuous_turn_faces_full_plan_then_drives_without_pause(self):
+        """Keep turning through intermediate angles and drive immediately when aligned."""
+        # verify full turns across angular wrapping
         for direction, origin in [(1.0, math.radians(179)), (-1.0, math.radians(-179))]:
-            nav = Navigator(self.grid, self.plans['fast'], self.forward, self.turn, self.policy, 10)
-            pose = Feedback(0.55, 0.55, origin, 10)
+            desired = origin + direction * math.pi / 2
+            target = 0.55 + math.cos(desired) * 0.5, 1.0 + math.sin(desired) * 0.5
+            path = [(0.55, 1.0), target]
+            nav = Navigator(self.grid, path, self.forward, self.turn, self.policy, 10)
+            pose = Feedback(0.55, 1.0, origin, 10)
             command = nav.begin_turn(10, pose, direction * math.pi / 2)
-            self.assertEqual(nav.state, 'turning')
-            self.assertAlmostEqual(nav.turn_angle, math.pi / 6)
-            sample = Feedback(0.55, 0.55, origin + direction * math.radians(10), 10.05)
-            self.assertEqual(nav.tick(10.05, [sample]), command)
-            sample = Feedback(0.55, 0.55, origin + direction * math.radians(30), 10.1)
-            self.assertEqual(nav.tick(10.1, [sample]), (0, 0))
-            self.assertEqual(nav.state, 'waiting')
+            self.assertAlmostEqual(nav.turn_angle, math.pi / 2)
+            for index, degrees in enumerate((15, 30, 60), 1):
+                sample = Feedback(0.55, 1.0, origin + direction * math.radians(degrees), 10 + index * 0.1)
+                self.assertEqual(nav.tick(10 + index * 0.1, [sample]), command)
+                self.assertEqual(nav.state, 'turning')
+            sample = Feedback(0.55, 1.0, desired, 10.4)
+            self.assertEqual(nav.tick(10.4, [sample]), (self.forward.speed_mps, 0))
+            self.assertEqual(nav.state, 'moving')
             self.assertEqual(nav.index, 1)
 
     def test_continuous_turn_does_not_use_timer_as_measured_arrival(self):
@@ -271,10 +275,10 @@ class RunOneTests(unittest.TestCase):
         nav = Navigator(self.grid, self.plans['fast'], self.forward, self.turn, self.policy, 10)
         pose = Feedback(0.55, 0.55, 0, 10)
         command = nav.begin_turn(10, pose, math.pi / 2)
-        for index in range(1, 61):
+        for index in range(1, int(self.policy['turn_timeout_s'] / 0.05) + 1):
             now = 10 + index * 0.05
             result = nav.tick(now, [Feedback(0.55, 0.55, 0, now)])
-            if index < 60:
+            if now < 10 + self.policy['turn_timeout_s']:
                 self.assertEqual(result, command)
                 self.assertEqual(nav.state, 'turning')
         self.assertEqual(nav.state, 'failed')
@@ -292,6 +296,35 @@ class RunOneTests(unittest.TestCase):
         self.assertEqual(nav.state, 'failed')
         self.assertIn('heading feedback unavailable', nav.reason)
         self.assertEqual(nav.command, (0, 0))
+
+    def test_forward_travel_lasts_one_second_before_checking(self):
+        """Keep driving for a full second in open space before stopped acquisition."""
+        # retain movement throughout the requested duration
+        path = [(0.55, 0.55), (0.55, 2.5)]
+        nav = Navigator(self.grid, path, self.forward, self.turn, self.policy, 10)
+        pose = Feedback(0.55, 0.55, math.pi / 2, 10)
+        command = nav.drive_segment(10, pose, path[-1])
+        self.assertEqual(command, (self.forward.speed_mps, 0))
+        self.assertAlmostEqual(nav.deadline, 11.0)
+        for index in range(1, 20):
+            now = 10 + index * 0.05
+            sample = Feedback(0.55, 0.55 + self.forward.speed_mps * (now - 10), math.pi / 2, now)
+            self.assertEqual(nav.tick(now, [sample]), command)
+        sample = Feedback(0.55, 0.55 + self.forward.speed_mps, math.pi / 2, 11)
+        self.assertEqual(nav.tick(11, [sample]), (0, 0))
+        self.assertEqual(nav.state, 'waiting')
+        self.assertEqual(nav.index, 1)
+
+    def test_forward_segment_shortens_near_waypoint_and_clearance(self):
+        """Preserve robot clearance rather than blindly driving a full second."""
+        # stop short of corners when necessary
+        path = [(0.55, 1.5), (0.85, 1.5)]
+        nav = Navigator(self.grid, path, self.forward, self.turn, self.policy, 10)
+        pose = Feedback(0.55, 1.5, 0, 10)
+        self.assertEqual(nav.drive_segment(10, pose, path[-1]), (self.forward.speed_mps, 0))
+        self.assertLess(nav.commanded_distance, 0.30)
+        self.assertLess(nav.deadline - 10, 1.0)
+        self.assertTrue(nav.forward_sweep_free(pose, nav.commanded_distance))
 
     def test_ideal_feedback_completes_fast_route(self):
         """Check fast-mode control under exact localization and ideal motor response."""
@@ -328,7 +361,7 @@ class RunOneTests(unittest.TestCase):
         nav = Navigator(self.grid, self.plans['fast'], self.forward, self.turn, self.policy, 10)
         nav.segment_budget, nav.commanded_distance = 0.1, 0.1
         pose = Feedback(0.55, 0.55, 0, 10)
-        self.assertEqual(nav.drive_pulse(10, pose, (1.0, 0.55)), (0, 0))
+        self.assertEqual(nav.drive_segment(10, pose, (1.0, 0.55)), (0, 0))
         self.assertEqual(nav.state, 'failed')
         self.assertIn('budget', nav.reason)
 
