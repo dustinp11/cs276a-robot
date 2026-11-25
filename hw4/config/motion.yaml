@@ -3,8 +3,8 @@
     # shared by the mapper and mission
     # forward inputs selected for current surface
     forward_calibration:
-      left_input: 0.4
-      right_input: 0.4
+      left_input: 0.42
+      right_input: 0.42
       # historical speed estimate; remeasure current surface
       speed_mps: 0.567333
     turn_calibration:

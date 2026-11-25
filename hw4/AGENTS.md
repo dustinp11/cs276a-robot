@@ -7,9 +7,10 @@
   `/hw4/start`, and `/hw4/stop`. Extend their internals as features are added.
 - Keep physical measurements in `config/environment.json`; use
   `config/motion.yaml` as the shared source for mapper/controller calibration.
-- Use forward `[0.4, 0.4]`, explicitly requested by the user on November 24,
-  2026. The user observed that `[0.185, 0.15]` does not move the robot on the
-  current surface. Do not restore that pair from HW3 defaults.
+- Use forward `[0.42, 0.42]`, increased from `[0.4, 0.4]` at the user's request
+  after the physical run stopped about 20 cm short of the final mark. This input
+  change is not a measured speed calibration. The user observed that
+  `[0.185, 0.15]` does not move the robot; do not restore those HW3 defaults.
 - Forward speed 0.567333 m/s is a historical estimate from the older mapper,
   not a new measurement on this surface. Keep mapper and pulse timing aligned;
   update this speed after physical calibration. Reverse remains uncalibrated.

@@ -711,7 +711,7 @@ class RunOneTests(unittest.TestCase):
         mapper = VelocityMapper(self.turn, self.forward)
         self.assertAlmostEqual(2 * math.pi / self.turn.ccw_radps, 3.55)
         self.assertAlmostEqual(2 * math.pi / self.turn.cw_radps, 3.59)
-        for command, pair in [((self.forward.speed_mps, 0), (0.4, 0.4)), ((0, 1), (-0.43, 0.43)),
+        for command, pair in [((self.forward.speed_mps, 0), (0.42, 0.42)), ((0, 1), (-0.43, 0.43)),
                               ((0, -1), (0.4, -0.4)), ((0, 0), (0., 0.))]:
             applied = mapper.map_command(*command)
             self.assertEqual((applied.left, applied.right), pair)
