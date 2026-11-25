@@ -37,21 +37,16 @@
   must report unimplemented before hardware starts, without falling back to fast.
 - Start fast mode from the configured pose without mandatory initial visual
   acquisition. Execute full calibrated timed turns and up to one-second drives.
-  The latest user request restores `visual_feedback: throughout`: use visual
-  corrections throughout the route to the assignment goal (0.65, 2.295) m.
-  Keep `feedback_required: false` so bounded tag search and prediction fallback
-  remain available. The optional `near_goal` mode defers visual correction until
-  0.30 m predicted goal distance; `off` ignores all vision and tag searches.
-  For both visual modes, stop at the 0.30 m predicted goal approach boundary and
-  use fresh stopped pose verification after every subsequent drive. Latch this
-  refinement even if a correction moves the estimate outside the approach zone.
-  Within the goal approach, cap drives to 0.10 m and half the remaining distance;
-  preserve motor inputs rather than claiming a lower calibrated driving speed.
-  Once visual feedback is enabled, use best-effort predicted progress
-  after bounded tag reacquisition. Search once per waypoint, up to a full CCW
-  revolution and 20 seconds total; brake on a fresh accepted observation, settle,
-  and require stable post-stop samples before using it. Preserve the target,
-  predicted search heading, estimator state, and command budgets during recovery.
+  The latest user request is **NO 360 / NO TAG SEARCH**, correction only at the
+  END. Default to `visual_feedback: at_goal`, `tag_search_enabled: false`, and
+  `feedback_required: false`. Follow the entire frozen path using prediction,
+  then stop for visual correction only within the predicted final goal tolerance.
+  Keep correction active once enabled, even after a large accepted position update.
+  Cap correction drives to 0.10 m and half the remaining distance, checking fresh
+  stopped poses after each. Preserve the calibrated motor inputs.
+  Never start a search when the search flag is false. Missing final feedback must
+  produce an unverified predicted finish; ordinary turns toward the goal remain.
+  Other feedback modes and search are optional baselines, not this run's defaults.
 - At waypoint checks, accept stable bounded corrections even when command
   prediction drifted by more than the usual optional correction gate. Keep the
   same target and correct when feedback is usable. If feedback stays missing,

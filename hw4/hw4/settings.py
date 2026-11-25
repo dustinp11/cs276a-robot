@@ -14,16 +14,17 @@ def load_settings(path):
     nav = data['navigation']
     get_mode(nav['mode'])
     for name, value in nav.items():
-        if name in ('mode', 'feedback_required', 'visual_feedback'):
+        if name in ('mode', 'feedback_required', 'visual_feedback', 'tag_search_enabled'):
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f'navigation.{name} must be positive and finite.')
 
-    if type(nav['feedback_required']) is not bool:
-        raise ValueError('navigation.feedback_required must be true or false.')
+    for name in ('feedback_required', 'tag_search_enabled'):
+        if type(nav[name]) is not bool:
+            raise ValueError(f'navigation.{name} must be true or false.')
 
-    if nav['visual_feedback'] not in ('near_goal', 'throughout', 'off'):
-        raise ValueError('navigation.visual_feedback must be near_goal, throughout, or off.')
+    if nav['visual_feedback'] not in ('at_goal', 'near_goal', 'throughout', 'off'):
+        raise ValueError('navigation.visual_feedback must be at_goal, near_goal, throughout, or off.')
     if nav['feedback_required'] and nav['visual_feedback'] != 'throughout':
         raise ValueError('Required feedback needs visual_feedback: throughout.')
     if nav['goal_step_fraction'] > 1:

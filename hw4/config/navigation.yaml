@@ -3,10 +3,11 @@
     # select fast; safe remains an unimplemented skeleton
     navigation:
       mode: fast
-      # use visual corrections throughout the full route
+      # follow the plan; use vision only at its predicted end
       feedback_required: false
-      # options: near_goal, throughout, off
-      visual_feedback: throughout
+      # options: at_goal, near_goal, throughout, off
+      visual_feedback: at_goal
+      tag_search_enabled: false
       visual_enable_distance_m: 0.30
       goal_max_step_m: 0.10
       goal_step_fraction: 0.5

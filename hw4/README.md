@@ -118,44 +118,33 @@ substitutes an older latest TF for the requested image timestamp.
    `/hw4/start`; no initial visual acquisition is required.
 2. Execute the full turn toward the current waypoint using the measured motor
    pair and full-rotation calibration, then drive up to one second per segment.
-3. The default is `visual_feedback: throughout`: use stopped visual corrections
-   and bounded tag searches throughout the route to **(65, 229.5) cm**.
-   Optional `visual_feedback: near_goal` ignores observed poses and follows
-   intermediate waypoints entirely from command prediction, without visual
-   verification stops or tag searches. Camera observations are still recorded.
-   It enables visual correction on the final leg once predicted goal distance
-   reaches `visual_enable_distance_m: 0.30`. That switch stays on after corrections.
-4. On the final leg, stop at the 30 cm predicted approach boundary for fresh
-   stopped localization. Limit each forward step to 10 cm and half the estimated
-   remaining distance, verifying the pose again after each step. This refinement
-   stays active if a visual correction moves the estimate outside the approach
-   radius; it applies to both `throughout` and `near_goal` modes. Motor inputs remain
-   `[0.4, 0.4]`; shorter steps do not constitute a calibrated lower driving speed.
-   Stop briefly for visual correction. If feedback is missing,
-   search once per waypoint with a calibrated CCW turn of at most one revolution.
-   Stop when a fresh accepted tag pose appears, let the camera settle, and collect
-   stable post-stop observations. If they are unusable, resume the remaining sweep.
-   The whole search is limited to 20 seconds. The same target and command budgets
-   are retained, and predicted heading accounts for the executed search rotation.
-5. Use accepted feedback to correct position, reorient toward the current
-   waypoint, and continue. Outlier rejection still requires two agreeing tags.
-6. If the search finds no usable feedback, continue toward the same target using
-   command prediction. A waypoint within predicted tolerance can advance with an
-   explicit unverified record. At a previously searched waypoint, confirmation
-   waits at most three seconds after settling before this fallback.
-7. A visually confirmed goal reports `complete`; reaching the predicted route
-   end without visual confirmation reports `unverified`, with `goal_reached: false`.
-   Status events retain all unverified waypoint indices. Stop, watchdog, clearance,
-   correction, travel, and mission-time limits remain active.
+3. The default is `visual_feedback: at_goal`: ignore observations throughout
+   the planned traversal to **(65, 229.5) cm**. Advance intermediate targets by
+   prediction. Only stop for visual correction once prediction reaches the end
+   within the 5 cm goal tolerance. Camera observations are still recorded.
+4. At that end stop, obtain fresh stable tag estimates and correct the measured
+   position error. Limit each correction drive to 10 cm and half the remaining
+   distance; verify again after each drive. Keep end correction active even if
+   vision places the robot farther from the goal. Motor inputs remain `[0.4, 0.4]`.
+5. **No tag-search spins:** `tag_search_enabled: false` disables all recovery
+   searches. Ordinary planned turns and turns toward a measured goal correction
+   remain. If usable feedback does not arrive within three seconds after settling,
+   use prediction fallback and report an unverified finish instead of searching.
+6. A visually confirmed goal reports `complete`; a predicted-only route end
+   reports `unverified`, with `goal_reached: false`. Status events preserve the
+   unverified waypoint indices. Existing watchdog, clearance, correction, travel,
+   and mission-time limits remain active.
 
 Select visual correction timing in `config/navigation.yaml`:
 
-- `visual_feedback: near_goal`: blind traversal, correction near
-  the predicted active goal. Initial motor segments continue without camera waits.
-- `visual_feedback: throughout`: current default; use visual corrections and bounded searches
-  throughout the route, preserving the previous behavior.
-- `visual_feedback: "off"`: ignore vision for the whole run, perform no tag searches,
-  and report the predicted route end as unverified. Final travel steps still shorten.
+- `visual_feedback: at_goal`: current default; correction only at the predicted
+  route end. Tag search is disabled independently by `tag_search_enabled: false`.
+- `visual_feedback: near_goal`: start correction at 30 cm predicted goal distance.
+- `visual_feedback: throughout`: visual corrections throughout the route.
+- `visual_feedback: "off"`: ignore vision for the entire run and finish unverified.
+
+The optional recovery-search implementation remains available only when
+`tag_search_enabled: true` is explicitly selected. It is disabled in this run.
 
 `feedback_required: false` permits best-effort prediction fallback once vision is
 active. `true` requires `visual_feedback: throughout` and retains mandatory initial

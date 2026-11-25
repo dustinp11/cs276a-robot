@@ -37,6 +37,8 @@ class MissionNode(Node):
         self.setup_inputs()
         self.setup_interfaces()
         self.get_logger().info('Run 1 ready. Start with /hw4/start; stop with /hw4/stop.')
+        self.get_logger().info(f'Visual feedback: {self.policy["visual_feedback"]}; '
+                               f'tag searches enabled: {self.policy["tag_search_enabled"]}')
 
     def setup_inputs(self):
         """Archive effective configs before accepting mission commands."""

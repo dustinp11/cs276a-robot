@@ -43,10 +43,12 @@ class Navigator:
         if self.visual_feedback_mode != 'off' and self.expected is not None:
             final = self.index >= len(self.path) - 1
             distance = math.dist(self.expected[:2], self.path[-1])
-            if final and distance <= self.policy['visual_enable_distance_m'] + 1e-6:
+            radius = (self.policy['goal_tolerance_m'] if self.visual_feedback_mode == 'at_goal'
+                      else self.policy['visual_enable_distance_m'])
+            if final and distance <= radius + 1e-6:
                 self.goal_feedback_active = True
         return (self.visual_feedback_mode == 'throughout'
-                or self.visual_feedback_mode == 'near_goal' and self.goal_feedback_active)
+                or self.visual_feedback_mode in ('at_goal', 'near_goal') and self.goal_feedback_active)
 
     def continue_prediction(self, now):
         """Follow the frozen path while deliberately ignoring all observed poses."""
@@ -248,6 +250,8 @@ class Navigator:
 
     def begin_search(self, now):
         """Search once per waypoint while retaining its target and predicted position."""
+        if not self.policy['tag_search_enabled']:
+            return self.resume_prediction(now)
         if not self.segment_is_clear(self.expected[:2], self.expected[:2]):
             return self.finish('failed', 'predicted search position violates robot clearance')
 
@@ -426,7 +430,7 @@ class Navigator:
             return maximum
         distance = math.dist(pose.xy, target)
         radius = self.policy['visual_enable_distance_m']
-        if self.visual_feedback_mode != 'off' and not self.goal_feedback_active and distance > radius + 1e-6:
+        if self.visual_feedback_mode in ('near_goal', 'throughout') and not self.goal_feedback_active and distance > radius + 1e-6:
             return min(maximum, distance - radius)
 
         # shrink correction distance as the goal approaches

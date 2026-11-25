@@ -70,7 +70,7 @@ class RunOneTests(unittest.TestCase):
         # share synthetic plans across controller checks
         cls.environment = load_validated_environment(ROOT / 'test/sample_environment.json')
         cls.settings = load_settings(ROOT / 'config/navigation.yaml')
-        cls.policy = dict(cls.settings['navigation'], feedback_required=True, visual_feedback='throughout')
+        cls.policy = dict(cls.settings['navigation'], feedback_required=True, visual_feedback='throughout', tag_search_enabled=True)
         cls.grid, cls.plans = prepare_plans(cls.environment, cls.policy)
         cls.forward, cls.turn = calibrations()
 
@@ -485,6 +485,46 @@ class RunOneTests(unittest.TestCase):
         self.assertAlmostEqual(nav.deadline - nav.segment_start, 0.1 / self.forward.speed_mps)
         self.assertEqual(nav.index, 1)
         self.assertEqual(nav.unverified_waypoints, [])
+
+    def test_end_only_mode_ignores_initial_vision_then_corrects_without_search(self):
+        """Use observations only after predicted arrival; prohibit recovery spins."""
+        # follow the route without accepting initial observations
+        policy = dict(self.policy, feedback_required=False, visual_feedback='at_goal', tag_search_enabled=False)
+        path = [(0.55, 0.55), (0.55, 1.0), (0.55, 2.5)]
+        nav = Navigator(self.grid, path, self.forward, self.turn, policy, 10, math.pi / 2)
+        for i in range(1, 151):
+            now = 10 + i * 0.05
+            bad = [Feedback(2.5, 0.55, 0, now - age) for age in (0.3, 0.2, 0.1)]
+            nav.tick(now, bad)
+            self.assertIsNone(nav.measured)
+            self.assertIsNone(nav.search)
+            if nav.goal_feedback_active:
+                break
+        self.assertTrue(nav.goal_feedback_active)
+        self.assertLessEqual(math.dist(nav.expected[:2], path[-1]), policy['goal_tolerance_m'])
+        self.assertEqual(nav.state, 'verifying')
+
+        # correct an observed short stop using ordinary travel turns
+        after = nav.after
+        samples = [Feedback(0.55, 2.12, math.pi / 2, after + dt) for dt in (0.01, 0.11, 0.21)]
+        for j in range(i + 1, i + 40):
+            now = 10 + j * 0.05
+            nav.tick(now, [p for p in samples if p.stamp <= now])
+            if nav.state == 'moving':
+                break
+        self.assertEqual(nav.state, 'moving')
+        self.assertAlmostEqual(nav.segment_pose.y, 2.12)
+        self.assertIsNone(nav.search)
+
+    def test_end_only_mode_with_no_tags_never_searches(self):
+        """Stop unverified at the predicted end when final observations are unavailable."""
+        policy = dict(self.policy, feedback_required=False, visual_feedback='at_goal', tag_search_enabled=False)
+        path = [(0.55, 0.55), (0.55, 2.5)]
+        nav = Navigator(self.grid, path, self.forward, self.turn, policy, 10, math.pi / 2)
+        state, reason, pose, gap = simulate(nav, (0.55, 0.55, math.pi / 2), feedback=False)
+        self.assertEqual(state, 'unverified', reason)
+        self.assertIsNone(nav.search)
+        self.assertIsNone(nav.measured)
 
     def test_off_mode_never_uses_available_vision_or_searches(self):
         """Finish predicted traversal unverified even when ideal feedback is available."""
