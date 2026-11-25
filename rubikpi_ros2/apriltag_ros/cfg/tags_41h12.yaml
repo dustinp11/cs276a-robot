@@ -1,0 +1,16 @@
+/**:
+    ros__parameters:
+        image_transport: raw    # image format
+        family: Standard41h12   # tag family name for obstacle tags
+        size: 0.187             # obstacle tag physical edge size in meters (18.7 cm)
+        max_hamming: 1          # maximum allowed hamming distance
+
+        detector:
+            threads: 4          # number of threads
+            decimate: 2.0       # decimate resolution for quad detection
+            blur: 0.0           # sigma of Gaussian blur
+            refine: True        # snap to strong gradients
+            sharpening: 0.4     # sharpening of decoded images
+            debug: False
+
+        pose_estimation_method: "pnp"   # method for estimating tag pose
