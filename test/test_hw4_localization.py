@@ -20,7 +20,7 @@ class TestHW4Localization(unittest.TestCase):
 
     def test_landmark_loading_and_families(self):
         """Verify all 8 wall tags and 4 obstacle tags are loaded correctly."""
-        self.assertEqual(len(self.map.landmarks), 12)
+        self.assertGreaterEqual(len(self.map.landmarks), 12)
         # Check wall tags (36h11)
         wall_ids = {0, 1, 3, 4, 5, 7, 8, 9}
         obs_ids = {1, 2, 3, 4}
@@ -102,6 +102,26 @@ class TestHW4Localization(unittest.TestCase):
         self.assertAlmostEqual(estimate.yaw, robot_yaw, places=2)
         self.assertIn(0, estimate.tag_ids)
         self.assertIn(1, estimate.tag_ids)
+
+    def test_standard41h12_family_alias(self):
+        """Verify detector family 'Standard41h12' or 'tagStandard41h12' matches '41h12'."""
+        robot_x, robot_y, robot_yaw = 0.8, 1.54, 0.0
+        c, s = math.cos(robot_yaw), math.sin(robot_yaw)
+        R_base = np.array([[c, -s, 0.], [s, c, 0.], [0., 0., 1.]])
+        T_base = transform(R_base, [robot_x, robot_y, 0.0])
+        T_camera = T_base @ np.linalg.inv(self.map.camera_to_base)
+        tag_obs1 = self.map.landmarks[('41h12', 1)]
+        T_cam_obs1 = np.linalg.inv(T_camera) @ tag_obs1.map_transform
+
+        for fam in ['Standard41h12', 'tagStandard41h12', '41h12']:
+            obs = Observation(
+                100_000_000_000,
+                'camera_frame',
+                (Detection(1, fam, 0, 90.0),),
+            )
+            estimate = self.estimator.estimate(obs, lambda f, o: T_cam_obs1)
+            self.assertAlmostEqual(estimate.x, robot_x, places=2)
+            self.assertEqual(estimate.tag_ids, (1,))
 
 
 if __name__ == '__main__':

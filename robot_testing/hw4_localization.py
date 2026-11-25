@@ -32,6 +32,16 @@ from robot_testing.hw2_localization import (
 )
 
 
+def normalize_family(val: str) -> str:
+    """Normalize AprilTag family strings (e.g. tagStandard41h12, Standard41h12 -> 41h12)."""
+    if not isinstance(val, str) or not val:
+        return ""
+    fam = val[3:] if val.startswith('tag') else val
+    if fam.startswith('Standard'):
+        fam = fam[8:]
+    return fam
+
+
 class HW4PoseEstimator(PoseEstimator):
     """Extends PoseEstimator to distinguish wall vs obstacle tags and normalize frame names."""
 
@@ -39,14 +49,20 @@ class HW4PoseEstimator(PoseEstimator):
         super().__init__(landmark_map)
         self.wall_tag_ids: set = set()
         self.obstacle_tag_ids: set = set()
-        for (family, tag_id), lm in landmark_map.landmarks.items():
-            if family == '36h11':
+        for (family, tag_id), lm in list(landmark_map.landmarks.items()):
+            norm_fam = normalize_family(family)
+            if norm_fam == '36h11':
                 self.wall_tag_ids.add(tag_id)
-            elif family == '41h12':
+            elif norm_fam == '41h12':
                 self.obstacle_tag_ids.add(tag_id)
+            # Register family aliases in landmark dictionary so both 41h12 and Standard41h12 resolve
+            landmark_map.landmarks[(norm_fam, tag_id)] = lm
+            landmark_map.landmarks[(f"tag{norm_fam}", tag_id)] = lm
+            landmark_map.landmarks[(f"Standard{norm_fam}", tag_id)] = lm
+            landmark_map.landmarks[(f"tagStandard{norm_fam}", tag_id)] = lm
 
     def classify_tag(self, family: str, tag_id: int) -> str:
-        fam = LandmarkMap.family(family)
+        fam = normalize_family(family)
         if fam == '36h11':
             return f"Wall Tag {tag_id} (36h11)"
         if fam == '41h12':
@@ -57,13 +73,23 @@ class HW4PoseEstimator(PoseEstimator):
         # Normalize camera frames to ignore leading slashes
         cam_frame = observation.camera_frame.lstrip('/')
         map_cam_frame = self.map.camera_frame.lstrip('/')
+        target_cam = self.map.camera_frame
         if cam_frame != map_cam_frame and 'camera' not in cam_frame:
             raise LocalizationError(
                 f"Detection camera frame '{observation.camera_frame}' does not match map '{self.map.camera_frame}'"
             )
-        # Use existing consensus estimation logic
+        # Normalize detection families so that tagStandard41h12, Standard41h12, tag36h11 all match
+        normalized_detections = tuple(
+            Detection(
+                item.tag_id,
+                normalize_family(item.family),
+                item.hamming,
+                item.margin,
+            )
+            for item in observation.detections
+        )
         return super().estimate(
-            Observation(observation.stamp_ns, self.map.camera_frame, observation.detections),
+            Observation(observation.stamp_ns, target_cam, normalized_detections),
             lookup,
         )
 
@@ -146,22 +172,25 @@ class HW4LocalizationService:
         self.last_logged_tags = None
 
     def on_detections(self, message):
-        stamp = message.header.stamp
-        detections = tuple(
-            Detection(item.id, item.family, item.hamming, item.decision_margin)
-            for item in message.detections
-        )
-        if len(detections) > 0:
-            tag_summary = [f"{d.family}:{d.id}" for d in detections]
-            self.node.get_logger().info(
-                f"AprilTag detections received ({len(detections)}): {tag_summary}",
-                throttle_duration_sec=2.0,
+        try:
+            stamp = message.header.stamp
+            detections = tuple(
+                Detection(item.id, item.family, item.hamming, item.decision_margin)
+                for item in message.detections
             )
-        self.provider.observe(Observation(
-            stamp.sec * 10**9 + stamp.nanosec,
-            message.header.frame_id,
-            detections,
-        ))
+            if len(detections) > 0:
+                tag_summary = [f"{d.family}:{d.tag_id}" for d in detections]
+                self.node.get_logger().info(
+                    f"AprilTag detections received ({len(detections)}): {tag_summary}",
+                    throttle_duration_sec=2.0,
+                )
+            self.provider.observe(Observation(
+                stamp.sec * 10**9 + stamp.nanosec,
+                message.header.frame_id,
+                detections,
+            ))
+        except Exception as e:
+            self.node.get_logger().warn(f"Error processing detections: {e}")
 
     def lookup(self, tag_frame, observation):
         """Lookup transform with multi-candidate and time-fallback for apriltag_ros frames."""
