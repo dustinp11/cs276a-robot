@@ -49,3 +49,7 @@
       max_tag_distance_m: 5.0
       max_height_error_m: 0.20
       max_tilt_deg: 20.0
+      # tolerate observed wall bias but reject large outliers
+      min_inlier_tags: 2
+      outlier_position_m: 0.20
+      outlier_heading_rad: 0.3490658503988659

@@ -103,11 +103,14 @@ it never falls back to fast mode. Preview and the mission compute only the
 selected mode's route.
 
 `localization.py` combines measured tag poses with timestamp-matched camera/tag
-transforms. It rejects excessive range and implausible height/tilt, then averages
-all usable tag positions equally and uses a circular mean for heading, even when
-tag estimates disagree. Individual estimates remain in `observations.csv`.
-It can use a single usable tag; it does not estimate a calibrated
-pose covariance. `ros_localization.py` preserves capture timestamps and never
+transforms. It rejects excessive range and implausible height/tilt, then selects
+a unique mutually agreeing majority of tag poses before averaging. The configured
+limits are 20 cm in position and 20 degrees in heading. At least two agreeing
+tags are required: a single tag cannot establish whether its own pose is an
+outlier. If two tags disagree, or groups are equally plausible, the frame is
+unconfirmed. Retained positions are equally averaged; heading uses a circular
+mean. It does not estimate a calibrated pose covariance. Individual estimates,
+kept/outlier status, and rejection reasons remain in `observations.csv`. `ros_localization.py` preserves capture timestamps and never
 substitutes an older latest TF for the requested image timestamp.
 
 `navigation.py` follows fixed waypoints with measured verification:
@@ -136,8 +139,10 @@ The physical run reached a 3–5 cm goal error, then oscillated while chasing a
 3 cm threshold. The current goal tolerance is 5 cm, still requiring three fresh
 confirming observations. Once a measured checkpoint is within 20 cm of the goal,
 subsequent position corrections over 12 cm are rejected rather than chased.
-Independent tag solutions must agree within 5 cm before averaging; the earlier
-25 cm gate admitted substantially different position clusters.
+Outlier rejection uses the configurable 20 cm / 20 degree consensus described
+above. These gates identify disagreement; they do not guarantee 5 cm accuracy.
+Waypoint verification still needs three stable, recent accepted frames. Missing
+consensus can therefore lead to verification timeout; it never means arrival.
 
 Consistent checkpoint corrections can otherwise override up to 1 m of position
 drift and 90° of heading drift. A measured robot already inside the usual safety margin
@@ -255,7 +260,8 @@ Press Ctrl+C after the sweep. The timestamped output folder contains:
 
 - `observations.csv`: the original observations and individual candidate poses.
 - `per_tag.csv`: family/ID, capture timestamp, estimated robot xy/yaw, camera range,
-  signed xy error and total position error relative to the supplied center (meters).
+  signed xy error, total position error relative to the supplied center (meters),
+  and `fusion_status` (`kept`, `outlier`, `not fused`, or `rejected`).
 - `tag_summary.csv`: each observed tag's mean position, bias, RMSE, maximum error
   (centimeters), and usable sample count. Rejected candidates remain in `per_tag.csv`.
 - `tag_positions.svg`: measured map with each tag's position estimates in its own

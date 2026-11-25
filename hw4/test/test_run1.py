@@ -18,7 +18,7 @@ from hw3.turn_calibration import ForwardCalibration, TurnCalibration
 from hw3.velocity_mapping import VelocityMapper
 from hw4.config import load_validated_environment, validate_environment
 from hw4.grid import build_grid, rectangle_distance
-from hw4.localization import Feedback, Localizer, stable_feedback
+from hw4.localization import Feedback, Localizer, stable_feedback, select_inliers
 from hw4.navigation import Navigator
 from hw4.observations import CaptureBuffer
 from hw4.tags import canonical_family, detection_topic, detector_parameters, mapped_families, tag_frame
@@ -139,17 +139,16 @@ class RunOneTests(unittest.TestCase):
         np.testing.assert_allclose((pose.x, pose.y, pose.yaw), (0.55, 0.55, 0.1), atol=1e-10)
         self.assertEqual(pose.stamp, 10.0)
 
-    def test_disagreeing_mapped_tags_are_averaged(self):
-        """Average conflicting usable tag positions as requested."""
+    def test_two_conflicting_tags_have_no_majority(self):
+        """Reject two conflicting tags instead of arbitrarily trusting either one."""
         # introduce conflicting independently measured tag solutions
         localizer = Localizer(self.environment, self.settings['camera_mount'], self.settings['localization'])
         measurements = []
         for index, (tag, world) in enumerate(localizer.landmarks.items()):
             base = make_transform(np.eye(3), [0.55 + index * 0.6, 0.55, 0])
             measurements.append((tag, np.linalg.inv(base @ np.linalg.inv(localizer.camera_base)) @ world))
-        pose = localizer.estimate(measurements, 10.0)
-        np.testing.assert_allclose((pose.x, pose.y), (0.85, 0.55), atol=1e-10)
-        self.assertEqual(len(pose.tags), 2)
+        with self.assertRaisesRegex(ValueError, 'no unique agreeing majority'):
+            localizer.estimate(measurements, 10.0)
 
     def test_family_ids_and_detector_spelling_remain_distinct(self):
         """Allow overlapping IDs while preserving unique map and detector identities."""
@@ -442,17 +441,37 @@ class RunOneTests(unittest.TestCase):
         self.assertIn('position limit', error)
         self.assertEqual(nav.expected[:2], (0.775, 1.527))
 
-    def test_two_tag_estimates_twenty_four_centimeters_apart_are_averaged(self):
-        """Average the observed two-cluster disagreement at its midpoint."""
-        # preserve independent tag evidence before fusion
-        model = Localizer(self.environment, self.settings['camera_mount'], self.settings['localization'])
-        measurements = []
-        for index, (key, world) in enumerate(model.landmarks.items()):
-            base = make_transform(np.eye(3), [0.55 + index * 0.24, 0.55, 0])
-            measurements.append((key, np.linalg.inv(base @ np.linalg.inv(model.camera_base)) @ world))
-        pose = model.estimate(measurements, 10)
-        np.testing.assert_allclose((pose.x, pose.y), (0.67, 0.55), atol=1e-10)
-        self.assertEqual(len(pose.tags), 2)
+    def test_logged_bad_tag_is_excluded_from_an_agreeing_majority(self):
+        """Keep the wall pair and discard the obstacle estimate from a real capture."""
+        # reproduce the supplied rotation frame geometry
+        candidates = [(('36h11', 1), (0.758578, 2.291003, -0.134222)),
+                      (('36h11', 7), (0.780137, 2.321378, -0.101039)),
+                      (('41h12', 2), (0.265884, 2.717304, -0.126320))]
+        kept = select_inliers(candidates, self.settings['localization'])
+        self.assertEqual([tag for tag, pose in kept], [('36h11', 1), ('36h11', 7)])
+
+        # do not manufacture consensus when every tag disagrees
+        candidates[1] = (('36h11', 7), (0.800, 1.608, -0.101039))
+        with self.assertRaisesRegex(ValueError, 'no unique agreeing majority'):
+            select_inliers(candidates, self.settings['localization'])
+
+    def test_single_tag_cannot_confirm_its_own_accuracy(self):
+        """Reject lone estimates, including the bad single-tag frames in the rotation."""
+        candidates = [(('41h12', 2), (0.265884, 2.717304, -0.126320))]
+        with self.assertRaisesRegex(ValueError, 'insufficient tags'):
+            select_inliers(candidates, self.settings['localization'])
+
+    def test_heading_outliers_and_ambiguous_clusters_are_rejected(self):
+        """Handle heading wrap and refuse equally plausible overlapping clusters."""
+        # compare orientations across the angle wrapping boundary
+        candidates = [(('36h11', 1), (0.7, 2.3, math.radians(179))),
+                      (('36h11', 3), (0.72, 2.3, math.radians(-179))),
+                      (('36h11', 7), (0.71, 2.3, 0))]
+        kept = select_inliers(candidates, self.settings['localization'])
+        self.assertEqual(len(kept), 2)
+        candidates = [(('36h11', i), (x, 2.3, 0)) for i, x in enumerate((0.5, 0.65, 0.8))]
+        with self.assertRaisesRegex(ValueError, 'no unique agreeing majority'):
+            select_inliers(candidates, self.settings['localization'])
 
     def test_waypoint_verification_cannot_use_pre_stop_or_stale_frames(self):
         """Repeated or old observations do not confirm an intermediate waypoint."""

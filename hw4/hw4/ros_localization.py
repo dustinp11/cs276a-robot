@@ -78,7 +78,7 @@ class PoseSource:
 
         return result, missing
 
-    def candidate_details(self, measurements):
+    def candidate_details(self, measurements, selected=None):
         """Expose each tag's independent world pose before combining estimates."""
         # identify which landmark produces a position bias
         details = {}
@@ -86,7 +86,9 @@ class PoseSource:
             label = f'{key[0]}:{key[1]}'
             try:
                 details[label] = {'pose_xy_yaw': self.model.candidate(key, transform),
-                                  'camera_range_m': float(np.linalg.norm(transform[:3, 3]))}
+                                  'camera_range_m': float(np.linalg.norm(transform[:3, 3])),
+                                  'fusion_status': ('not fused' if selected is None else
+                                                    'kept' if key in selected else 'outlier')}
             except (ValueError, np.linalg.LinAlgError) as error:
                 details[label] = {'rejected': str(error)}
         return details
@@ -122,9 +124,15 @@ class PoseSource:
         self.frames.finish(ns)
         self.samples.append(pose)
         reason = 'mapped landmark estimate; some TF unavailable' if missing else 'mapped landmark estimate'
+        details = self.candidate_details(measurements, pose.tags)
+        discarded = [tag for tag, item in details.items() if item.get('fusion_status') == 'outlier']
+        if discarded:
+            reason += '; discarded outliers: ' + ', '.join(discarded)
+
+        # retain all candidates alongside the selected subset
         ranges = {f'{key[0]}:{key[1]}': round(float(np.linalg.norm(transform[:3, 3])), 4)
                   for key, transform in measurements if key in pose.tags}
-        self.log.observations.writerow([now, ns, True, reason, pose.x, pose.y, pose.yaw, pose.tags, json.dumps(ranges), json.dumps(self.candidate_details(measurements))])
+        self.log.observations.writerow([now, ns, True, reason, pose.x, pose.y, pose.yaw, pose.tags, json.dumps(ranges), json.dumps(details)])
         output = PoseStamped()
         output.header.stamp = next(iter(capture.messages.values())).header.stamp
         output.header.frame_id = 'map'

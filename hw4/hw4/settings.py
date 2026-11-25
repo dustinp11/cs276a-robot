@@ -40,6 +40,9 @@ def load_settings(path):
     for name, value in data['localization'].items():
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise ValueError(f'localization.{name} must be finite and nonnegative.')
+    if type(data['localization']['min_inlier_tags']) is not int or data['localization']['min_inlier_tags'] < 2:
+        raise ValueError('localization.min_inlier_tags must be an integer of at least two.')
+
     for name, value in data['camera_mount'].items():
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             raise ValueError(f'camera_mount.{name} must be finite.')

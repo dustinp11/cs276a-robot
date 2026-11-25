@@ -1,6 +1,7 @@
 """Known-map AprilTag pose estimates using HW3's camera geometry conventions."""
 
 from dataclasses import dataclass
+from itertools import combinations
 import math
 import numpy as np
 
@@ -32,8 +33,34 @@ def tag_transform(item):
     return make_transform(axes, [item['x_m'], item['y_m'], item['z_m']])
 
 
+def agreeing(first, second, policy):
+    """Compare world-frame robot poses using meter and wrapped-radian limits."""
+    return (math.dist(first[:2], second[:2]) <= policy['outlier_position_m']
+            and abs(wrap_angle(first[2] - second[2])) <= policy['outlier_heading_rad'])
+
+
+def select_inliers(candidates, policy):
+    """Keep a unique mutually agreeing majority of (tag key, pose) pairs."""
+    if not candidates:
+        raise ValueError('no usable mapped tag transform')
+
+    if len(candidates) < policy['min_inlier_tags']:
+        raise ValueError('insufficient tags for outlier verification')
+
+    # require agreement without guessing between conflicting groups
+    minimum = max(policy['min_inlier_tags'], len(candidates) // 2 + 1)
+    for size in range(len(candidates), minimum - 1, -1):
+        groups = [group for group in combinations(candidates, size)
+                  if all(agreeing(a[1], b[1], policy) for a, b in combinations(group, 2))]
+        if len(groups) == 1:
+            return list(groups[0])
+        if groups:
+            break
+    raise ValueError('mapped tags disagree; no unique agreeing majority')
+
+
 class Localizer:
-    """Reject impossible poses and average all usable mapped-tag measurements."""
+    """Reject impossible poses and outliers before averaging mapped-tag measurements."""
 
     def __init__(self, environment, mount, policy):
         """Use camera offsets relative to the footprint center, not an assumed base origin."""
@@ -64,7 +91,7 @@ class Localizer:
         return x, y, math.atan2(base[1, 0], base[0, 0])
 
     def estimate(self, measurements, stamp):
-        """Average usable tag positions in meters and circular headings in radians."""
+        """Average the agreeing majority in meters and circular headings in radians."""
         # recover independent poses from mapped tags
         candidates = []
         for tag_id, transform in measurements:
@@ -72,10 +99,9 @@ class Localizer:
                 candidates.append((tag_id, self.candidate(tag_id, transform)))
             except (ValueError, np.linalg.LinAlgError):
                 continue
-        if not candidates:
-            raise ValueError('no usable mapped tag transform')
 
-        # average all usable independent tag estimates
+        # discard outliers before averaging agreeing estimates
+        candidates = select_inliers(candidates, self.policy)
         values = np.array([pose for _, pose in candidates])
         x, y = values[:, :2].mean(axis=0)
         yaw = math.atan2(np.sin(values[:, 2]).mean(), np.cos(values[:, 2]).mean())
