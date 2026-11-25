@@ -3,10 +3,10 @@
     # select fast; safe remains an unimplemented skeleton
     navigation:
       mode: fast
-      # ignore vision until the predicted goal approach
+      # follow the full route without visual feedback
       feedback_required: false
       # options: near_goal, throughout, off
-      visual_feedback: near_goal
+      visual_feedback: "off"
       visual_enable_distance_m: 0.30
       goal_max_step_m: 0.10
       goal_step_fraction: 0.5

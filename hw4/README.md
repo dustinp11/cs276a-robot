@@ -119,7 +119,9 @@ substitutes an older latest TF for the requested image timestamp.
    `/hw4/start`; no initial visual acquisition is required.
 2. Execute the full turn toward the current waypoint using the measured motor
    pair and full-rotation calibration, then drive up to one second per segment.
-3. By default, `visual_feedback: near_goal` ignores observed poses and follows
+3. The default is `visual_feedback: "off"`: ignore vision for the entire run and
+   perform no tag searches, including near the goal.
+   Optional `visual_feedback: near_goal` ignores observed poses and follows
    intermediate waypoints entirely from command prediction, without visual
    verification stops or tag searches. Camera observations are still recorded.
    It enables visual correction on the final leg once predicted goal distance
@@ -146,11 +148,11 @@ substitutes an older latest TF for the requested image timestamp.
 
 Select visual correction timing in `config/navigation.yaml`:
 
-- `visual_feedback: near_goal`: current default; blind traversal, correction near
+- `visual_feedback: near_goal`: blind traversal, correction near
   the predicted active goal. Initial motor segments continue without camera waits.
 - `visual_feedback: throughout`: use visual corrections and bounded searches
   throughout the route, preserving the previous behavior.
-- `visual_feedback: off`: ignore vision for the whole run, perform no tag searches,
+- `visual_feedback: "off"`: current default; ignore vision for the whole run, perform no tag searches,
   and report the predicted route end as unverified. Final travel steps still shorten.
 
 `feedback_required: false` permits best-effort prediction fallback once vision is

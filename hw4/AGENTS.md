@@ -37,7 +37,10 @@
   must report unimplemented before hardware starts, without falling back to fast.
 - Start fast mode from the configured pose without mandatory initial visual
   acquisition. Execute full calibrated timed turns and up to one-second drives.
-  The latest user request defaults to `visual_feedback: near_goal`: ignore all
+  The latest user request defaults to `visual_feedback: "off"`: ignore all visual
+  feedback for the entire run, including the goal; never search for tags.
+  Keep `feedback_required: false` and label predicted completion unverified.
+  The optional `near_goal` mode ignores all
   observed poses during initial traversal, advance intermediate targets by
   prediction, and enable feedback only on the final leg inside 0.30 m predicted
   goal distance. Latch that enablement after corrections. Use `throughout` for
