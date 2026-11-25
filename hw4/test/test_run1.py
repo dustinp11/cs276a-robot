@@ -139,16 +139,17 @@ class RunOneTests(unittest.TestCase):
         np.testing.assert_allclose((pose.x, pose.y, pose.yaw), (0.55, 0.55, 0.1), atol=1e-10)
         self.assertEqual(pose.stamp, 10.0)
 
-    def test_disagreeing_mapped_tags_are_rejected(self):
-        """Two conflicting mapped-tag solutions cannot establish trustworthy feedback."""
+    def test_disagreeing_mapped_tags_are_averaged(self):
+        """Average conflicting usable tag positions as requested."""
         # introduce conflicting independently measured tag solutions
         localizer = Localizer(self.environment, self.settings['camera_mount'], self.settings['localization'])
         measurements = []
         for index, (tag, world) in enumerate(localizer.landmarks.items()):
             base = make_transform(np.eye(3), [0.55 + index * 0.6, 0.55, 0])
             measurements.append((tag, np.linalg.inv(base @ np.linalg.inv(localizer.camera_base)) @ world))
-        with self.assertRaises(ValueError):
-            localizer.estimate(measurements, 10.0)
+        pose = localizer.estimate(measurements, 10.0)
+        np.testing.assert_allclose((pose.x, pose.y), (0.85, 0.55), atol=1e-10)
+        self.assertEqual(len(pose.tags), 2)
 
     def test_family_ids_and_detector_spelling_remain_distinct(self):
         """Allow overlapping IDs while preserving unique map and detector identities."""
@@ -441,16 +442,17 @@ class RunOneTests(unittest.TestCase):
         self.assertIn('position limit', error)
         self.assertEqual(nav.expected[:2], (0.775, 1.527))
 
-    def test_two_tag_estimates_twenty_four_centimeters_apart_are_not_averaged(self):
-        """Reject the observed two-cluster disagreement instead of accepting their midpoint."""
+    def test_two_tag_estimates_twenty_four_centimeters_apart_are_averaged(self):
+        """Average the observed two-cluster disagreement at its midpoint."""
         # preserve independent tag evidence before fusion
         model = Localizer(self.environment, self.settings['camera_mount'], self.settings['localization'])
         measurements = []
         for index, (key, world) in enumerate(model.landmarks.items()):
             base = make_transform(np.eye(3), [0.55 + index * 0.24, 0.55, 0])
             measurements.append((key, np.linalg.inv(base @ np.linalg.inv(model.camera_base)) @ world))
-        with self.assertRaisesRegex(ValueError, 'disagree'):
-            model.estimate(measurements, 10)
+        pose = model.estimate(measurements, 10)
+        np.testing.assert_allclose((pose.x, pose.y), (0.67, 0.55), atol=1e-10)
+        self.assertEqual(len(pose.tags), 2)
 
     def test_waypoint_verification_cannot_use_pre_stop_or_stale_frames(self):
         """Repeated or old observations do not confirm an intermediate waypoint."""

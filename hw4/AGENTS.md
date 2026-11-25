@@ -71,7 +71,8 @@
 - For near-goal refinement, reject corrections over 0.12 m after a measured
   checkpoint already placed the robot within 0.20 m. The physical log switched
   between stationary pose clusters about 0.24 m apart; do not chase those jumps.
-  Independent tag solutions must agree within 0.05 m before averaging. Log each
-  tag's candidate pose even when the combined observation is rejected.
+  At the user's request, average all individually usable tag positions equally,
+  including disagreeing solutions; use a circular mean for heading. Do not reject
+  a frame solely for cross-tag disagreement. Log each tag's candidate pose.
 - Confirmed obstacle tag detection-square size remains 0.185 m; the user briefly
   said 0.18 m then corrected it back to 0.185 m. Do not apply a whole-pattern ratio.

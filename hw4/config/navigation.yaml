@@ -49,5 +49,3 @@
       max_tag_distance_m: 5.0
       max_height_error_m: 0.20
       max_tilt_deg: 20.0
-      max_disagreement_m: 0.05
-      max_disagreement_rad: 0.3490658503988659

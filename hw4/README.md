@@ -103,8 +103,10 @@ it never falls back to fast mode. Preview and the mission compute only the
 selected mode's route.
 
 `localization.py` combines measured tag poses with timestamp-matched camera/tag
-transforms. It rejects excessive range, implausible height/tilt, and disagreeing
-tag solutions. It can use a single usable tag; it does not estimate a calibrated
+transforms. It rejects excessive range and implausible height/tilt, then averages
+all usable tag positions equally and uses a circular mean for heading, even when
+tag estimates disagree. Individual estimates remain in `observations.csv`.
+It can use a single usable tag; it does not estimate a calibrated
 pose covariance. `ros_localization.py` preserves capture timestamps and never
 substitutes an older latest TF for the requested image timestamp.
 

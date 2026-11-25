@@ -33,7 +33,7 @@ def tag_transform(item):
 
 
 class Localizer:
-    """Reject impossible poses and disagreeing mapped-tag measurements."""
+    """Reject impossible poses and average all usable mapped-tag measurements."""
 
     def __init__(self, environment, mount, policy):
         """Use camera offsets relative to the footprint center, not an assumed base origin."""
@@ -63,13 +63,8 @@ class Localizer:
             raise ValueError('estimated robot lies outside workspace')
         return x, y, math.atan2(base[1, 0], base[0, 0])
 
-    def agree(self, first, second):
-        """Check independent tag solutions before averaging their poses."""
-        return (math.dist(first[:2], second[:2]) <= self.policy['max_disagreement_m']
-                and abs(wrap_angle(first[2] - second[2])) <= self.policy['max_disagreement_rad'])
-
     def estimate(self, measurements, stamp):
-        """Return an agreeing pose from ((family, ID), camera_tag) pairs."""
+        """Average usable tag positions in meters and circular headings in radians."""
         # recover independent poses from mapped tags
         candidates = []
         for tag_id, transform in measurements:
@@ -80,15 +75,11 @@ class Localizer:
         if not candidates:
             raise ValueError('no usable mapped tag transform')
 
-        # require an internally consistent majority
-        groups = [[other for other in candidates if self.agree(anchor[1], other[1])] for anchor in candidates]
-        group = max(groups, key=len)
-        if len(group) <= len(candidates) // 2 or any(not self.agree(a[1], b[1]) for a in group for b in group):
-            raise ValueError('mapped tags disagree about robot pose')
-        values = np.array([pose for _, pose in group])
+        # average all usable independent tag estimates
+        values = np.array([pose for _, pose in candidates])
         x, y = values[:, :2].mean(axis=0)
         yaw = math.atan2(np.sin(values[:, 2]).mean(), np.cos(values[:, 2]).mean())
-        return Feedback(float(x), float(y), yaw, stamp, tuple(tag for tag, _ in group))
+        return Feedback(float(x), float(y), yaw, stamp, tuple(tag for tag, _ in candidates))
 
 
 def stable_feedback(samples, after, now, policy):
