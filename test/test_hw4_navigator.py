@@ -94,7 +94,7 @@ class TestHW4Navigator(unittest.TestCase):
         self.assertAlmostEqual(default_nav.turn_rate, 2.0 * math.pi / 4.8, places=2)
         self.assertLess(default_nav.turn_rate, 1.50)  # Slower than previous 1.67 rad/s
         self.assertEqual(default_nav.settle_time, 1.2)
-        self.assertEqual(default_nav.max_pose_age, 1.2)
+        self.assertEqual(default_nav.max_pose_age, 3.5)
 
     def test_recovery_transition_and_reacquisition(self):
         """Verify localization recovery triggered when blind, and recovered when tag seen."""
@@ -105,7 +105,7 @@ class TestHW4Navigator(unittest.TestCase):
         self.assertNotEqual(self.nav.state, NavigationState.LOCALIZATION_RECOVERY)
 
         # After max_pose_age passes without pose update (e.g. tag lost/blind)
-        stale_time = now + 1.5
+        stale_time = now + 4.0
         lin, ang, msg = self.nav.compute_motion_command(stale_time)
         self.assertEqual(self.nav.state, NavigationState.LOCALIZATION_RECOVERY)
         self.assertEqual(lin, 0.0)

@@ -89,7 +89,7 @@ class HW4Navigator:
         drive_speed_mps: float = 0.18,         # calibrated forward speed
         turn_rate_radps: float = 1.309,        # calibrated turn rate (~4.8s per 360 deg, ~75 deg/s)
         settle_time_s: float = 1.2,            # camera stabilization pause
-        max_pose_age_s: float = 1.2,           # maximum age of visual pose
+        max_pose_age_s: float = 3.5,           # maximum age of visual pose before declaring lost (tolerant to frame latency)
     ):
         self.start_cm = start_cm
         self.goal_cm = goal_cm
@@ -406,7 +406,15 @@ class HW4ControlNode(Node):
             time.sleep(0.04)
 
         self.stop_robot()
+        stop_time = time.monotonic()
         time.sleep(self.navigator.settle_time)
+        # Wait up to 1.2s for a fresh settled visual pose to arrive
+        wait_deadline = time.monotonic() + 1.2
+        while time.monotonic() < wait_deadline and self.running and rclpy.ok():
+            with self.lock:
+                if self.navigator.last_pose_time >= stop_time:
+                    break
+            time.sleep(0.05)
 
     def recover_localization(self) -> bool:
         """
@@ -421,16 +429,20 @@ class HW4ControlNode(Node):
             f"Initiating recovery: turning {self.search_step_deg:.0f}° at a time until landmark is acquired..."
         )
 
-        # 1. First pause stationary with motors stopped to see if landmark can be acquired without moving
+        # 1. First pause stationary with motors stopped and wait for fresh pose
+        stop_time = time.monotonic()
         time.sleep(self.navigator.settle_time)
-        with self.lock:
-            if self.is_pose_fresh():
-                self.get_logger().info(
-                    f"Landmark reacquired without rotation! Pose: "
-                    f"({self.navigator.current_x_m * 100.0:.1f}, {self.navigator.current_y_m * 100.0:.1f}) cm, "
-                    f"yaw={math.degrees(self.navigator.current_yaw_rad):.1f}°"
-                )
-                return True
+        wait_deadline = time.monotonic() + 1.5
+        while time.monotonic() < wait_deadline and self.running and rclpy.ok():
+            with self.lock:
+                if self.navigator.last_pose_time >= stop_time:
+                    self.get_logger().info(
+                        f"Landmark reacquired without rotation! Pose: "
+                        f"({self.navigator.current_x_m * 100.0:.1f}, {self.navigator.current_y_m * 100.0:.1f}) cm, "
+                        f"yaw={math.degrees(self.navigator.current_yaw_rad):.1f}°"
+                    )
+                    return True
+            time.sleep(0.05)
 
         # 2. Search loop: turn 30 degrees CCW at a time, pausing in between for camera to settle
         step = 1
@@ -481,7 +493,15 @@ class HW4ControlNode(Node):
             time.sleep(0.04)
 
         self.stop_robot()
+        stop_time = time.monotonic()
         time.sleep(self.navigator.settle_time)
+        # Wait up to 1.2s for a fresh settled visual pose to arrive
+        wait_deadline = time.monotonic() + 1.2
+        while time.monotonic() < wait_deadline and self.running and rclpy.ok():
+            with self.lock:
+                if self.navigator.last_pose_time >= stop_time:
+                    break
+            time.sleep(0.05)
 
     def run_mission(self):
         """Main waypoint-following control loop."""
