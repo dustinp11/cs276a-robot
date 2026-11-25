@@ -5,6 +5,7 @@ from hw4.config import load_validated_environment
 from hw4.grid import build_grid
 from hw4.planner import get_mode
 from hw4.results import save_plans
+from hw4.plan_plot import plan_description
 from hw4.settings import load_settings
 
 
@@ -30,7 +31,8 @@ def main():
     environment = load_validated_environment(args.config)
     grid, plans = prepare_plans(environment, load_settings(args.settings)['navigation'])
     save_plans(args.output, grid, environment, plans)
-    print(f'Plans saved to {args.output}; no hardware accessed.')
+    print(plan_description(environment, plans))
+    print(f'Open {args.output}/planned_paths.svg; no hardware accessed.')
 
 
 if __name__ == '__main__':

@@ -1,3 +1,8 @@
+LOCAL TERMINAL: preview plan without ROS, camera, or motors
+cd /Users/dustinpham/ucsd/fall2026/cs276a/robot_local/hw4
+python3 -m hw4.preview config/environment.json --settings config/navigation.yaml --output results/preview
+open results/preview/planned_paths.svg
+
 LOCAL TERMINAL: commit and push after editing
 cd /Users/dustinpham/ucsd/fall2026/cs276a/robot_local
 git add hw4
@@ -21,7 +26,7 @@ git status --short > "$HW4_RUN_DIR/git_status.txt" &&
 export ROS_LOG_DIR="$HW4_RUN_DIR/ros_logs" &&
 ros2 launch hw4 hw4.launch.py environment_file:="$PWD/hw4/config/environment.json" motion_file:="$PWD/hw4/config/motion.yaml" output_dir:="$HW4_RUN_DIR"
 
-ROBOT TERMINAL 2: start run 1 (one mission per launch)
+ROBOT TERMINAL 2: start run 1 after inspecting the plan (one mission per launch)
 cd ~/robot_testing
 source /opt/ros/jazzy/setup.bash
 source rubikpi_ros2/install/setup.bash

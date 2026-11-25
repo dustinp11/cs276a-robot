@@ -26,6 +26,7 @@ from hw4.fast import plan_path
 from hw4.planner import get_mode
 from hw4.preview import prepare_plans
 from hw4.results import RunLog, path_metrics, save_plans
+from hw4.plan_plot import map_svg, plan_description, plan_segments
 from hw4.settings import load_settings
 
 
@@ -406,16 +407,41 @@ class RunOneTests(unittest.TestCase):
         self.assertEqual(nav.state, 'failed')
         self.assertIn('budget', nav.reason)
 
-    def test_motor_mapping_preserves_requested_forward_and_hw3_turns(self):
+    def test_motor_mapping_preserves_requested_forward_and_measured_turns(self):
         """Exercise actual straight, signed turn, and stop motor mapping."""
         # preserve user inputs and existing turns
         mapper = VelocityMapper(self.turn, self.forward)
-        for command, pair in [((self.forward.speed_mps, 0), (0.4, 0.4)), ((0, 1), (-0.35, 0.35)),
-                              ((0, -1), (0.37, -0.37)), ((0, 0), (0., 0.))]:
+        self.assertAlmostEqual(2 * math.pi / self.turn.ccw_radps, 3.55)
+        self.assertAlmostEqual(2 * math.pi / self.turn.cw_radps, 3.59)
+        for command, pair in [((self.forward.speed_mps, 0), (0.4, 0.4)), ((0, 1), (-0.43, 0.43)),
+                              ((0, -1), (0.4, -0.4)), ((0, 0), (0., 0.))]:
             applied = mapper.map_command(*command)
             self.assertEqual((applied.left, applied.right), pair)
             if command[0] > 0:
                 self.assertEqual(applied.linear_mps, 0.567333)
+
+    def test_plan_preview_reports_signed_turns_and_distinct_tag_labels(self):
+        """Expose turn direction and family/ID labels before executing a plan."""
+        # compare geometric instructions against known headings
+        data = deepcopy(self.environment)
+        data['start']['yaw_deg'] = 90.0
+        data['landmarks'].append(dict(data['landmarks'][1], family='41h12'))
+        path = [(0.55, 0.55), (1.0, 0.55), (1.0, 1.0)]
+        rows = plan_segments(data, path)
+        self.assertAlmostEqual(rows[0]['heading_deg'], 0.0)
+        self.assertAlmostEqual(rows[0]['turn_deg'], -90.0)
+        self.assertAlmostEqual(rows[1]['turn_deg'], 90.0)
+        description = plan_description(data, {'fast': path})
+        self.assertIn('PLANNED PATH ONLY', description)
+        self.assertIn('x_cm', description)
+        self.assertIn('heading 90.0 deg', description)
+
+        # retain labels for overlapping numeric identities
+        import xml.etree.ElementTree as ET
+        svg = map_svg(self.grid, data, {'fast': path})
+        ET.fromstring(svg)
+        for label in ('36h11:1', '41h12:1', 'START', 'GOAL', 'W1', 'OBSTACLE'):
+            self.assertIn(label, svg)
 
     def test_artifact_snapshot_and_session_reuse_protection(self):
         """Preserve inputs and prevent a second mission from overwriting the first."""
@@ -428,6 +454,7 @@ class RunOneTests(unittest.TestCase):
             log.close()
             self.assertEqual(json.loads((Path(directory) / 'status.json').read_text())['goal_reached'], False)
             self.assertTrue((Path(directory) / 'planned_paths.svg').is_file())
+            self.assertTrue((Path(directory) / 'planned_path.txt').is_file())
             with self.assertRaises(FileExistsError):
                 RunLog(directory, paths)
 

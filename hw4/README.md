@@ -10,14 +10,16 @@ remain the entry points for subsequent iterations.
 1. Check `config/environment.json` against the physical setup. Supplied wall-tag
    coordinates, headings, start/goal, obstacle points, and 16 cm robot dimensions
    are entered in meters. The wall coordinates imply a 3.000 × 2.925 m workspace.
-   The start heading is 90°, wall-tag center heights and printed sizes are both
+   The start heading is 180°, wall-tag center heights and printed sizes are both
    0.172 m, and the safety margin is 0.10 m.
 2. Check the reused camera mount in `config/navigation.yaml`. Its offsets must
    describe the camera relative to the **robot footprint center** used in the
    map, which may differ from the old `base_link` origin. The initial values
    match HW3: `(0, 0, 0.2)` m and zero mounting rotation.
-3. Set `navigation.mode` to `fast` (`safe` is an unimplemented skeleton) in that same file.
-4. Place the robot at the measured start pose. Stop other motor/navigation
+3. Inspect the plan using the preview-only block in `run_commands.txt`. It
+   opens `results/preview/planned_paths.svg` locally without ROS or motors.
+4. Set `navigation.mode` to `fast` (`safe` is an unimplemented skeleton) in that same file.
+5. Place the robot at the measured start pose. Stop other motor/navigation
    stacks before starting HW4. Run the terminal commands in `run_commands.txt`.
 
 The launcher validates measurements before starting hardware. Terminal 1 launches
@@ -26,10 +28,17 @@ mission with `/hw4/start`; `/hw4/stop` cancels it. End terminal 1 with Ctrl+C be
 copying results back. A second mission requires a new launch and timestamped
 result directory. No robot access, commit, or push happens automatically.
 
+At launch, the node saves the plot and prints the waypoint/turn table while
+remaining idle. `/hw4/start` executes that same frozen route.
+
 The start service reports whether the mission was **accepted**, not whether the
 robot reached the goal. Follow `/hw4/status`, console messages, or `status.json`
 for its eventual result. `complete` requires fresh, stable measured goal proximity.
 `unverified` means the predicted route ended without visual confirmation.
+
+The current test starts facing 180° and stops at the intermediate goal
+**(75, 154) cm**, left of the obstacle. The original final goal is retained in
+`final_goal` but is not executed. The first planned turn is about **14.9° right**.
 
 ## Measuring the map
 
@@ -61,7 +70,8 @@ counterclockwise from `+x`: right = 0°, up = 90°, left = 180°.
 | `robot.length_m`, `robot.width_m` | Full footprint including protrusions; its rectangle center is the planning/localization reference point. |
 | `robot.safety_margin_m` | Required extra robot-body clearance for localization and control errors. Choose a positive practical margin; this is a tuning choice, not a measured dimension. |
 | `start` | Initial footprint-center position and forward yaw in the fixed world frame. |
-| `goal` | Target footprint-center position; final heading is unrestricted. |
+| `goal` | Active test target: intermediate point (75, 154) cm, on the left side of the obstacle. Final heading is unrestricted. |
+| `final_goal` | Original assignment goal (65, 229.5) cm, displayed as inactive and not executed during this test. |
 | `obstacles` | Physical axis-aligned rectangle bounds **before** robot-size inflation. Duplicate entries for additional obstacles. |
 | `landmarks` | Family (`36h11` or `41h12`), numeric ID, printed-tag center `(x, y, z)`, outward printed-face normal yaw, and tag edge size. Numeric IDs may repeat across families. |
 
@@ -99,7 +109,7 @@ substitutes an older latest TF for the requested image timestamp.
 `navigation.py` follows fixed waypoints. The current fast configuration sets
 `navigation.feedback_required: false`, as requested for the physical test:
 
-1. Begin from the configured start position and **90° heading** immediately
+1. Begin from the configured start position and **180° heading** immediately
    after `/hw4/start`; do not wait to acquire a visual pose.
 2. Execute the full turn toward the next waypoint using the calibrated motor
    pair and nominal angular rate. Motor commands remain active for the calculated
@@ -128,17 +138,17 @@ estimate, bounded motion budgets, explicit stop, and a mission timeout.
 ## Calibration baseline
 
 `config/motion.yaml` contains the user-selected forward inputs for the current
-surface and the effective HW3 `slam_square` turn values. The mapper and HW4
+surface and the new user-measured full-rotation turn values. The mapper and HW4
 controller use the same file and HW3 calibration readers.
 
 | Motion | Left input | Right input | Nominal model velocity |
 | --- | --- | --- | --- |
 | Straight | 0.4 | 0.4 | 0.567333 m/s (historical estimate) |
-| Counterclockwise | -0.35 | 0.35 | +pi/2 rad/s |
-| Clockwise | 0.37 | -0.37 | -pi/2 rad/s |
+| Counterclockwise | -0.43 | 0.43 | +1.769911 rad/s (360° in 3.55 s) |
+| Clockwise | 0.4 | -0.4 | -1.750191 rad/s (360° in 3.59 s) |
 
-The HW3 default CCW pair `[-0.40, 0.37]` was overridden by `slam_square`; it is
-not used here. The user reported on November 24, 2026 that `[0.185, 0.15]` does not move
+The new measured turn inputs and direction-specific rates replace the earlier
+HW3 turn calibration. The user reported on November 24, 2026 that `[0.185, 0.15]` does not move
 the robot on the current surface and selected `[0.4, 0.4]`. Do not revert to the
 smaller pair. The 0.567333 m/s model comes from the older `robot_testing` mapper;
 it needs physical remeasurement on the current surface. Reverse is uncalibrated. Smaller requested speeds do not slow the fixed-pair mapper. Commands are
@@ -156,8 +166,13 @@ not a fix for a camera pipeline that cannot start.
 Bring back the entire `hw4/results/<timestamp>/` directory, plus your description
 and videos of the physical run. Results are excluded from Git.
 
-- `planned_paths.json` and `planned_paths.svg`: the selected route, its length,
-  and minimum planned body clearances; the SVG shows the grid and expanded obstacles.
+- `planned_paths.json`, `planned_paths.svg`, and `planned_path.txt`: the selected
+  route, numbered waypoints, segment lengths, absolute headings, signed turns,
+  and minimum planned body clearance. The overhead plot labels every landmark
+  by family/ID, draws its face normal, marks the start heading and robot radius,
+  and distinguishes physical obstacles from excluded robot-center positions.
+  Axes and the text table use centimeters to match the survey. These are
+  planned coordinates, not a measured robot trajectory.
 - `observations.csv`: capture timestamps, accepted/rejected feedback, rejection
   reasons, measured world poses, and tag IDs.
 - `commands.csv`: state/waypoint, nominal commands, feedback age, measured pose,

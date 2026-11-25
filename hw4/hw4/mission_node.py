@@ -18,6 +18,7 @@ from hw4.config import load_validated_environment
 from hw4.planner import get_mode
 from hw4.preview import prepare_plans
 from hw4.results import RunLog, save_plans
+from hw4.plan_plot import plan_description
 from hw4.ros_localization import PoseSource
 from hw4.settings import load_settings
 
@@ -48,8 +49,18 @@ class MissionNode(Node):
         self.policy = self.settings['navigation']
         output = self.declare_parameter('output_dir', '').value
         self.log = RunLog(output, paths)
+        self.prepare_preview()
         self.log.status('ready', 'awaiting explicit start', mode=self.policy['mode'],
                         forward=asdict(self.forward), turn=asdict(self.turn))
+
+    def prepare_preview(self):
+        """Freeze and display the exact route before start can execute any motion."""
+        # publish reviewable geometry before mission execution
+        self.grid, self.plans = prepare_plans(self.environment, self.policy)
+        save_plans(self.log.directory, self.grid, self.environment, self.plans)
+        self.get_logger().info('\n' + plan_description(self.environment, self.plans))
+        self.get_logger().info(f'Plan preview: {self.log.directory / "planned_paths.svg"}')
+        self.get_logger().info('No mission motion until /hw4/start is called.')
 
     def setup_interfaces(self):
         """Create fixed services and the 20 Hz controller with no startup motion."""
@@ -74,10 +85,9 @@ class MissionNode(Node):
         self.used = True
         self.publish_command((0.0, 0.0))
 
-        # freeze plans before beginning any motion
+        # execute exactly the previewed frozen route
         try:
-            grid, plans = prepare_plans(self.environment, self.policy)
-            save_plans(self.log.directory, grid, self.environment, plans)
+            grid, plans = self.grid, self.plans
             control_grid = replace(grid, margin=self.environment['robot']['safety_margin_m'])
             mode = get_mode(self.policy['mode'])
             self.navigator = mode.create_navigator(control_grid, plans[self.policy['mode']], self.forward,

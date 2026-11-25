@@ -9,10 +9,11 @@
       speed_mps: 0.567333
     turn_calibration:
       enabled: true
-      # slam_square overrides the yaml's default ccw pair [-0.40, 0.37]
-      ccw_left_input: -0.35
-      ccw_right_input: 0.35
-      cw_left_input: 0.37
-      cw_right_input: -0.37
-      ccw_radps: 1.5707963267948966
-      cw_radps: 1.5707963267948966
+      # measured full ccw rotation takes 3.55 seconds
+      ccw_left_input: -0.43
+      ccw_right_input: 0.43
+      # measured full cw rotation takes 3.59 seconds
+      cw_left_input: 0.4
+      cw_right_input: -0.4
+      ccw_radps: 1.7699113541350948
+      cw_radps: 1.7501908933647874

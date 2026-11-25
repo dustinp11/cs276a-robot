@@ -1,11 +1,12 @@
 """Small JSON, CSV, and SVG artifacts for comparing planned and observed motion."""
 
 import csv
-from html import escape
 import json
 import math
 from pathlib import Path
 import shutil
+
+from hw4.plan_plot import map_svg, plan_description, plan_segments
 
 
 def path_metrics(grid, path):
@@ -20,46 +21,12 @@ def save_plans(directory, grid, environment, plans):
     # archive the selected mode and geometry
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    payload = {name: {'waypoints_xy_m': path, **path_metrics(grid, path)} for name, path in plans.items()}
+    payload = {name: {'waypoints_xy_m': path, 'segments': plan_segments(environment, path),
+                      **path_metrics(grid, path)} for name, path in plans.items()}
     (directory / 'planned_paths.json').write_text(json.dumps(payload, indent=2) + '\n')
     (directory / 'planned_paths.svg').write_text(map_svg(grid, environment, plans))
+    (directory / 'planned_path.txt').write_text(plan_description(environment, plans))
 
-
-def map_svg(grid, environment, plans):
-    """Render world +y upward, with consistent geometry and meter labels."""
-    # map world coordinates into an overhead view
-    scale = 650 / max(grid.width, grid.height)
-    width, height = grid.width * scale, grid.height * scale
-    pieces = [f'<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="-40 -65 800 800">',
-              '<rect x="-40" y="-65" width="800" height="800" fill="white"/>',
-              '<text x="0" y="-40" font-size="18">HW4: selected mode path; meters</text>',
-              f'<g transform="translate(0 {height}) scale({scale} {-scale})">',
-              f'<rect width="{grid.width}" height="{grid.height}" fill="#f5f5f5" stroke="black" stroke-width="0.01"/>']
-
-    # show grid and expanded obstacle geometry
-    for x, y in grid.cells.values():
-        pieces.append(f'<circle cx="{x}" cy="{y}" r="0.006" fill="#bbb"/>')
-    for xmin, xmax, ymin, ymax in grid.rectangles:
-        radius = grid.radius + grid.margin
-        pieces.append(f'<rect x="{xmin-radius}" y="{ymin-radius}" width="{xmax-xmin+2*radius}" height="{ymax-ymin+2*radius}" rx="{radius}" fill="#f5cccc"/>')
-        pieces.append(f'<rect x="{xmin}" y="{ymin}" width="{xmax-xmin}" height="{ymax-ymin}" fill="#444"/>')
-
-    # overlay paths and surveyed landmark locations
-    for name, path in plans.items():
-        points = ' '.join(f'{x},{y}' for x, y in path)
-        color = '#1769cc' if name == 'fast' else '#198543'
-        pieces.append(f'<polyline points="{points}" fill="none" stroke="{color}" stroke-width="0.018"/>')
-    for item in environment['landmarks']:
-        pieces.append(f'<circle cx="{item["x_m"]}" cy="{item["y_m"]}" r="0.025" fill="#b87900"/>')
-    pieces.append('</g>')
-
-    # label endpoints outside flipped coordinate group
-    for name in ('start', 'goal'):
-        item = environment[name]
-        x, y = item['x_m'] * scale, height - item['y_m'] * scale
-        pieces.append(f'<circle cx="{x}" cy="{y}" r="4" fill="black"/><text x="{x+6}" y="{y-6}">{escape(name)}</text>')
-    pieces.append(f'<text x="0" y="{height+30}">Workspace {grid.width:.3f} × {grid.height:.3f} m; +x right, +y up</text></svg>')
-    return '\n'.join(pieces)
 
 
 class RunLog:

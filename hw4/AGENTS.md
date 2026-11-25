@@ -13,8 +13,9 @@
 - Forward speed 0.567333 m/s is a historical estimate from the older mapper,
   not a new measurement on this surface. Keep mapper and pulse timing aligned;
   update this speed after physical calibration. Reverse remains uncalibrated.
-- Preserve HW3 turns: CCW `[-0.35, 0.35]`, CW `[0.37, -0.37]`, nominal
-  pi/2 rad/s magnitudes, unless the user supplies new turn calibration.
+- Use the November 24 user turn calibration: CCW `[-0.43, 0.43]` takes
+  3.55 s per full rotation; CW `[0.4, -0.4]` takes 3.59 s. The positive rate
+  magnitudes are `2*pi/3.55` and `2*pi/3.59` rad/s. Do not restore HW3 turns.
 - Reuse HW3's calibration readers, mapper, and motor driver. Do not silently
   fall back to HW2 values or the overridden HW3 default CCW pair.
 - HW3 mapping selects fixed motor pairs, not variable-speed motion. Keep
@@ -49,3 +50,11 @@
 - Wall tags use 36h11; obstacle tags use 41h12, called `Standard41h12` by the
   detector. Match by `(family, ID)` and preserve unique family-aware TF frames.
   Combine detector packets per camera capture before counting stable samples.
+
+- Generate and print the frozen plan during launch initialization, before
+  `/hw4/start` can move the robot. Preview and execution must use the same path.
+  Keep a motor-free local preview command and label planned versus measured data.
+
+- The current physical test starts at 180 degrees and stops at intermediate
+  goal (0.75, 1.54) m, left of the obstacle. The original final goal is saved
+  in `final_goal` and must not be executed automatically during this test.
