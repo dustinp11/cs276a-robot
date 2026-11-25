@@ -496,3 +496,7 @@ def main():
         print("No recorded trajectory file found yet. Plotting planned safe Voronoi path...")
         plot_environment_and_path(path, env, landmarks, None, output_file)
         print("Tip: Run navigation first to generate coordinates.txt / hw4_trajectory.txt, then rerun this script.")
+
+
+if __name__ == '__main__':
+    main()
