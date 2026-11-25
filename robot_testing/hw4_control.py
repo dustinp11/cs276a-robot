@@ -154,6 +154,16 @@ class HW4Navigator:
             self.state = NavigationState.LOCALIZATION_RECOVERY
             return 0.0, 0.0, f"Localization stale (age={pose_age:.2f}s > {self.max_pose_age}s) - STOPPING"
 
+        # Check waypoint arrival / initialization
+        # WP 0 is the mission start position (where the path originates).
+        # Once an initial visual pose is acquired to begin navigation, advance past WP 0 to WP 1
+        # so the robot drives along the path rather than attempting to reverse to start coordinates.
+        if self.current_wp_idx == 0:
+            self.current_wp_idx = 1
+            self.state = NavigationState.WAYPOINT_REACHED
+            next_wp = self.current_waypoint
+            return 0.0, 0.0, f"Start WP 0 confirmed. Advancing to first waypoint WP 1: {next_wp}"
+
         wp = self.current_waypoint
         if wp is None:
             self.state = NavigationState.GOAL_REACHED
@@ -165,7 +175,23 @@ class HW4Navigator:
 
         # Check waypoint arrival
         target_tol = self.pos_tol if self.current_wp_idx < len(self.waypoints_m) - 1 else 0.05
-        if dist <= target_tol:
+        has_arrived = (dist <= target_tol)
+
+        # For intermediate waypoints, also check if the robot has progressed past the waypoint
+        if not has_arrived and 0 < self.current_wp_idx < len(self.waypoints_m) - 1:
+            prev_wp = self.waypoints_m[self.current_wp_idx - 1]
+            seg_dx = wp[0] - prev_wp[0]
+            seg_dy = wp[1] - prev_wp[1]
+            seg_len = math.hypot(seg_dx, seg_dy)
+            if seg_len > 0.01:
+                rob_dx = self.current_x_m - prev_wp[0]
+                rob_dy = self.current_y_m - prev_wp[1]
+                proj = (rob_dx * seg_dx + rob_dy * seg_dy) / seg_len
+                perp = abs(rob_dx * seg_dy - rob_dy * seg_dx) / seg_len
+                if proj >= (seg_len - target_tol) and perp <= 0.20:
+                    has_arrived = True
+
+        if has_arrived:
             self.current_wp_idx += 1
             if self.current_wp_idx >= len(self.waypoints_m):
                 self.state = NavigationState.GOAL_REACHED

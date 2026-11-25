@@ -123,6 +123,37 @@ class TestHW4FastNavigator(unittest.TestCase):
         lin, ang, msg = self.nav.compute_motion_command(reacquired_time)
         self.assertIn(self.nav.state, (NavigationState.ORIENTING, NavigationState.DRIVING, NavigationState.WAYPOINT_REACHED))
 
+    def test_offset_start_does_not_reverse_to_wp0(self):
+        """Verify that starting at an offset pose (e.g. 192.6, 37.6 cm) targets WP 1, never reversing to WP 0."""
+        fresh_nav = HW4FastNavigator(
+            start_cm=(234.5, 63.0),
+            goal_cm=(65.0, 229.5),
+        )
+        fresh_nav.plan_path()
+        now = time.monotonic()
+
+        # Simulated initial visual pose from user report: (192.6, 37.6) cm, yaw=174.4 deg
+        initial_x_m = 1.926
+        initial_y_m = 0.376
+        initial_yaw_rad = math.radians(174.4)
+        fresh_nav.update_pose(initial_x_m, initial_y_m, initial_yaw_rad, now)
+
+        # 1. First tick must advance past WP 0 (start point) to WP 1
+        lin, ang, msg = fresh_nav.compute_motion_command(now)
+        self.assertEqual(fresh_nav.current_wp_idx, 1)
+        self.assertEqual(fresh_nav.state, NavigationState.WAYPOINT_REACHED)
+
+        # 2. Next tick must target WP 1 (103.5, 107.5 cm), NOT reverse/turn around to WP 0
+        lin, ang, msg = fresh_nav.compute_motion_command(now + 0.05)
+        self.assertEqual(fresh_nav.current_wp_idx, 1)
+        # Heading error toward WP 1 is ~-32.5 deg (not -143 deg or -176 deg toward WP 0)
+        wp1 = fresh_nav.waypoints_m[1]
+        desired_yaw = math.atan2(wp1[1] - initial_y_m, wp1[0] - initial_x_m)
+        expected_heading_err = wrap_angle(desired_yaw - initial_yaw_rad)
+        self.assertAlmostEqual(abs(expected_heading_err), math.radians(32.5), delta=math.radians(3.0))
+        self.assertNotEqual(fresh_nav.state, NavigationState.LOCALIZATION_RECOVERY)
+        self.assertIn("WP 1", msg)
+
 
 if __name__ == '__main__':
     unittest.main()
