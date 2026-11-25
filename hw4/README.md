@@ -98,13 +98,19 @@ substitutes an older latest TF for the requested image timestamp.
 `navigation.py` follows fixed waypoints:
 
 1. Require three distinct, fresh, consistent pose observations.
-2. Turn toward the waypoint in fixed-rate pulses of at most 15°.
+2. Rotate continuously toward a measured heading up to 30° away. Typical
+   turns are 15–30°; a final alignment may be smaller to avoid overshoot. The
+   command remains active until fresh heading feedback reaches the target,
+   rather than ending after a short timed pulse.
 3. Stop, settle for one second, and obtain new consistent observations.
 4. Drive at the HW3 fixed speed for at most 0.20 m, checking the actual forward
    sweep plus a watchdog interval of stopping overrun.
 5. Repeat until a fresh stable pose is within 0.08 m of the goal.
 
-Straight motion and pivoting remain separate. Feedback loss, implausible pose
+Continuous turns require heading feedback no older than 0.35 s and fail after
+3 s without measured heading arrival. Large turns use successive stages of at
+most 30°, with stopped localization between completed stages. Straight motion
+and pivoting remain separate. Feedback loss, implausible pose
 jumps, unsafe sweep, control stalls, and exhausted budgets stop the mission.
 There is no blind timed continuation or automatic searching when tags disappear.
 The pose can be unavailable near the obstacle or during turns; those failures
@@ -147,7 +153,7 @@ and videos of the physical run. Results are excluded from Git.
 - `observations.csv`: capture timestamps, accepted/rejected feedback, rejection
   reasons, measured world poses, and tag IDs.
 - `commands.csv`: state/waypoint, nominal commands, feedback age, measured pose,
-  command-predicted pose, correction budgets, and measured body clearance.
+  command-predicted pose, correction budgets, measured body clearance, and turn target/progress angles.
 - `status.json` and `events.jsonl`: iteration label `run1`, current/terminal
   state, explicit arrival status, elapsed time, and transition history.
 - `environment.json`, `motion.yaml`, `navigation.yaml`, `camera_parameter.yaml`:

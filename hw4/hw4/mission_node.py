@@ -142,7 +142,8 @@ class MissionNode(Node):
         self.log.commands.writerow([now, nav.state, nav.index, nav.reason, *command, age,
                                    *measured, *(nav.expected or ('', '', '')),
                                    nav.corrections, nav.commanded_distance, nav.segment_budget,
-                                   nav.grid.clearance(sample.xy) if sample else ''])
+                                   nav.grid.clearance(sample.xy) if sample else '',
+                                   nav.turn_target_yaw, nav.turn_progress])
         status = nav.state, nav.reason, nav.index
         if status == self.last_status:
             return

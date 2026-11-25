@@ -1,4 +1,4 @@
-"""Stopped-feedback waypoint following with calibrated, bounded motion pulses."""
+"""Waypoint following with measured continuous turns and bounded straight travel."""
 
 import math
 from hw3.coordinates import wrap_angle
@@ -19,6 +19,7 @@ class Navigator:
         self.command, self.expected, self.measured = (0.0, 0.0), None, None
         self.deadline = now + policy['feedback_wait_s']
         self.corrections = 0
+        self.turn_progress, self.turn_target_yaw = 0.0, None
         self.initial_yaw = initial_yaw
         self.commanded_distance, self.segment_budget = 0.0, None
 
@@ -41,13 +42,15 @@ class Navigator:
             return 0.0, 0.0
         if now - self.started > self.policy['mission_timeout_s']:
             return self.finish('failed', 'mission time budget exhausted')
-        if self.state == 'moving' and now - self.last_tick > 0.15:
+        if self.state in ('moving', 'turning') and now - self.last_tick > 0.15:
             return self.finish('failed', 'control tick exceeded motor watchdog interval')
 
         # dispatch bounded motion or stopped acquisition
         self.last_tick = now
         if self.state == 'moving':
             return self.motion_tick(now, samples)
+        if self.state == 'turning':
+            return self.turn_tick(now, samples)
         pose = stable_feedback(samples, self.after, now, self.policy)
         if pose is not None:
             return self.decide(now, pose)
@@ -69,6 +72,11 @@ class Navigator:
         v, omega = self.command
         self.expected = (x + v * duration * math.cos(yaw), y + v * duration * math.sin(yaw),
                          wrap_angle(yaw + omega * duration))
+        return self.wait_for_feedback(now)
+
+    def wait_for_feedback(self, now):
+        """Stop and require fresh stable post-settle images before the next action."""
+        # separate measured arrival from motor completion
         self.state, self.command = 'waiting', (0.0, 0.0)
         self.after = now + self.policy['settle_s']
         self.deadline = self.after + self.policy['feedback_wait_s']
@@ -106,19 +114,60 @@ class Navigator:
         heading = math.atan2(target[1] - pose.y, target[0] - pose.x)
         residual = wrap_angle(heading - pose.yaw)
         if abs(residual) > self.policy['heading_tolerance_rad']:
-            return self.turn_pulse(now, pose, residual)
+            return self.begin_turn(now, pose, residual)
         self.corrections = 0
         return self.drive_pulse(now, pose, target)
 
-    def turn_pulse(self, now, pose, residual):
-        """Apply a bounded fixed-rate pivot, then verify it with stopped vision."""
-        # bound corrections before applying calibrated pivots
-        if self.corrections >= self.policy['max_turn_pulses']:
+    def begin_turn(self, now, pose, residual):
+        """Rotate continuously toward a measured heading at most 30 degrees away."""
+        # limit whole turns without timed pulses
+        if self.corrections >= self.policy['max_turns']:
             return self.finish('failed', 'heading correction budget exhausted')
         self.corrections += 1
-        angle = min(abs(residual), self.policy['turn_pulse_rad'])
-        omega = self.turn.rate(residual)
-        return self.begin_pulse(now, pose, 0.0, omega, angle / abs(omega), 'turning toward waypoint')
+        self.turn_angle = min(abs(residual), self.policy['turn_step_rad'])
+        self.turn_direction = 1.0 if residual > 0 else -1.0
+        self.turn_origin, self.turn_start = pose, now
+        self.turn_progress = 0.0
+        self.turn_target_yaw = wrap_angle(pose.yaw + self.turn_direction * self.turn_angle)
+
+        # refresh motors until measured heading arrives
+        self.state, self.reason = 'turning', 'continuous measured turn toward waypoint'
+        self.deadline = now + self.policy['turn_timeout_s']
+        self.command = 0.0, self.turn.rate(residual)
+        return self.command
+
+    def turn_tick(self, now, samples):
+        """Stop on measured turn completion, feedback loss, or an exhausted timeout."""
+        # reject stale feedback while turning continuously
+        if not samples or not 0 <= now - samples[-1].stamp <= self.policy['turn_feedback_timeout_s']:
+            return self.finish('failed', 'fresh heading feedback unavailable during continuous turn')
+        pose = samples[-1]
+        if pose.stamp > self.turn_start:
+            error = self.check_turn_pose(pose)
+            if error:
+                return self.finish('failed', error)
+            self.turn_progress = self.turn_direction * wrap_angle(pose.yaw - self.turn_origin.yaw)
+            if self.turn_progress >= self.turn_angle - self.policy['turn_stop_tolerance_rad']:
+                self.expected = pose.x, pose.y, pose.yaw
+                return self.wait_for_feedback(now)
+
+        if now >= self.deadline:
+            return self.finish('failed', 'continuous turn timed out without measured heading arrival')
+        return self.command
+
+    def check_turn_pose(self, pose):
+        """Reject unsafe displacement, heading flips, or rotation in the wrong direction."""
+        # preserve footprint clearance throughout measured rotation
+        if not self.grid.segment_free(pose.xy, pose.xy):
+            return 'measured turn position violates robot clearance'
+        if math.dist(pose.xy, self.turn_origin.xy) > self.policy['max_position_jump_m']:
+            return 'excessive measured translation during in-place turn'
+        progress = self.turn_direction * wrap_angle(pose.yaw - self.turn_origin.yaw)
+        if progress < -self.policy['heading_tolerance_rad']:
+            return 'measured rotation is opposite to requested turn'
+        if progress > self.turn_angle + self.policy['max_heading_jump_rad']:
+            return 'measured heading jumped beyond continuous turn target'
+        return None
 
     def drive_pulse(self, now, pose, target):
         """Check the actual forward sweep, including one watchdog interval of overrun."""

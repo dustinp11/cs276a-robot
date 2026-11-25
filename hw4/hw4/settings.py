@@ -20,15 +20,18 @@ def load_settings(path):
             raise ValueError(f'navigation.{name} must be positive and finite.')
 
     # constrain sampling and footprint integration limits
-    for name in ('stable_samples', 'max_turn_pulses'):
+    for name in ('stable_samples', 'max_turns'):
         if type(nav[name]) is not int or nav[name] < 1:
             raise ValueError(f'navigation.{name} must be a positive integer.')
     if nav['stable_samples'] < 3 or nav['stable_samples'] > 20:
         raise ValueError('Use 3 through 20 distinct stable samples.')
     if not 0.02 <= nav['grid_resolution_m'] <= 0.20:
         raise ValueError('Use grid resolution between 0.02 and 0.20 meters.')
-    if nav['drive_chunk_m'] > 0.30 or nav['turn_pulse_rad'] > math.pi / 6:
-        raise ValueError('Run 1 limits motion to 0.30 m and 30 degree pulses.')
+    if nav['drive_chunk_m'] > 0.30 or nav['turn_step_rad'] > math.pi / 6:
+        raise ValueError('Run 1 limits straight segments to 0.30 m and turn stages to 30 degrees.')
+
+    if nav['turn_stop_tolerance_rad'] >= nav['heading_tolerance_rad']:
+        raise ValueError('Turn stop tolerance must be smaller than heading tolerance.')
 
     # reject unusable quality and mount settings
     for name, value in data['localization'].items():

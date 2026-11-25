@@ -34,8 +34,10 @@
 - `fast.py` is implemented; `safe.py` contains function signatures/docstrings
   only. Do not implement safe mode until the user requests it. Selecting safe
   must report unimplemented before hardware starts, without falling back to fast.
-- Navigation uses stopped, fresh, distinct landmark observations between
-  bounded motion pulses. Do not substitute command prediction for measured
+- Navigation uses continuous measured turns of at most 30 degrees, with fresh
+  heading feedback and a failure timeout. Do not restore short timed turn pulses.
+  Straight travel remains in bounded segments with stopped, fresh, distinct
+  landmark observations between actions. Do not substitute command prediction for measured
   arrival, or silently continue without feedback.
 - Preserve successful/failed terminal outcomes when stop or shutdown follows.
 - Label this iteration `run1` in archived status. The synthetic test map is

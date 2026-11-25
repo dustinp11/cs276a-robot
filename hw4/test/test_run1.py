@@ -249,6 +249,50 @@ class RunOneTests(unittest.TestCase):
             self.assertEqual(nav.state, 'failed')
             self.assertEqual(nav.index, 1)
 
+    def test_continuous_turn_stops_at_measured_thirty_degrees(self):
+        """Hold the turn command until new measured heading reaches its stage target."""
+        # verify both directions across angular wrapping
+        for direction, origin in [(1.0, math.radians(179)), (-1.0, math.radians(-179))]:
+            nav = Navigator(self.grid, self.plans['fast'], self.forward, self.turn, self.policy, 10)
+            pose = Feedback(0.55, 0.55, origin, 10)
+            command = nav.begin_turn(10, pose, direction * math.pi / 2)
+            self.assertEqual(nav.state, 'turning')
+            self.assertAlmostEqual(nav.turn_angle, math.pi / 6)
+            sample = Feedback(0.55, 0.55, origin + direction * math.radians(10), 10.05)
+            self.assertEqual(nav.tick(10.05, [sample]), command)
+            sample = Feedback(0.55, 0.55, origin + direction * math.radians(30), 10.1)
+            self.assertEqual(nav.tick(10.1, [sample]), (0, 0))
+            self.assertEqual(nav.state, 'waiting')
+            self.assertEqual(nav.index, 1)
+
+    def test_continuous_turn_does_not_use_timer_as_measured_arrival(self):
+        """Fresh unchanged headings keep rotation active until the failure timeout."""
+        # require physical progress instead of elapsed time
+        nav = Navigator(self.grid, self.plans['fast'], self.forward, self.turn, self.policy, 10)
+        pose = Feedback(0.55, 0.55, 0, 10)
+        command = nav.begin_turn(10, pose, math.pi / 2)
+        for index in range(1, 61):
+            now = 10 + index * 0.05
+            result = nav.tick(now, [Feedback(0.55, 0.55, 0, now)])
+            if index < 60:
+                self.assertEqual(result, command)
+                self.assertEqual(nav.state, 'turning')
+        self.assertEqual(nav.state, 'failed')
+        self.assertIn('timed out', nav.reason)
+        self.assertEqual(nav.index, 1)
+
+    def test_continuous_turn_stops_when_heading_feedback_expires(self):
+        """Do not finish a continuous turn blindly after losing camera feedback."""
+        # retain original capture age during rotation
+        nav = Navigator(self.grid, self.plans['fast'], self.forward, self.turn, self.policy, 10)
+        pose = Feedback(0.55, 0.55, 0, 10)
+        nav.begin_turn(10, pose, math.pi / 2)
+        for index in range(1, 10):
+            nav.tick(10 + index * 0.05, [pose])
+        self.assertEqual(nav.state, 'failed')
+        self.assertIn('heading feedback unavailable', nav.reason)
+        self.assertEqual(nav.command, (0, 0))
+
     def test_ideal_feedback_completes_fast_route(self):
         """Check fast-mode control under exact localization and ideal motor response."""
         # check ideal completion without asserting hardware accuracy
