@@ -52,8 +52,13 @@ def generate_launch_description():
     )
     turn_time_arg = DeclareLaunchArgument(
         'turn_time_360_s',
-        default_value='3.75',
+        default_value='4.8',
         description='Calibrated seconds per 360-degree in-place turn'
+    )
+    turn_power_arg = DeclareLaunchArgument(
+        'turn_motor_power',
+        default_value='0.38',
+        description='Motor command magnitude for in-place turning (0.0 to 0.5)'
     )
 
     # Node 1: Motor Controller (hardware serial interface)
@@ -72,6 +77,9 @@ def generate_launch_description():
         name='velocity_mapping',
         output='screen',
         emulate_tty=True,
+        parameters=[{
+            'turn_motor_power': LaunchConfiguration('turn_motor_power'),
+        }],
     )
 
     # Node 3: AprilTag Localization Node (/detections -> /robot_pose and /get_robot_pose)
@@ -100,6 +108,7 @@ def generate_launch_description():
             'goal_y_cm': LaunchConfiguration('goal_y_cm'),
             'speed_mps': LaunchConfiguration('speed_mps'),
             'turn_time_360_s': LaunchConfiguration('turn_time_360_s'),
+            'turn_motor_power': LaunchConfiguration('turn_motor_power'),
         }],
     )
 
@@ -111,6 +120,7 @@ def generate_launch_description():
         goal_y_arg,
         speed_arg,
         turn_time_arg,
+        turn_power_arg,
         motor_controller,
         velocity_mapping,
         localization_node,

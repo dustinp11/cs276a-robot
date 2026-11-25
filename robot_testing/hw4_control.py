@@ -87,9 +87,9 @@ class HW4Navigator:
         heading_tolerance_rad: float = 0.12,  # ~6.9 deg
         max_forward_step_m: float = 0.25,      # 25 cm bounded visual drive segments
         drive_speed_mps: float = 0.18,         # calibrated forward speed
-        turn_rate_radps: float = 1.60,         # calibrated turn rate (~3.75s per 360 deg)
-        settle_time_s: float = 1.0,            # camera stabilization pause
-        max_pose_age_s: float = 0.8,           # maximum age of visual pose
+        turn_rate_radps: float = 1.309,        # calibrated turn rate (~4.8s per 360 deg, ~75 deg/s)
+        settle_time_s: float = 1.2,            # camera stabilization pause
+        max_pose_age_s: float = 1.2,           # maximum age of visual pose
     ):
         self.start_cm = start_cm
         self.goal_cm = goal_cm
@@ -219,13 +219,18 @@ class HW4ControlNode(Node):
         self.declare_parameter('position_tolerance_m', 0.06)
         self.declare_parameter('heading_tolerance_deg', 7.0)
         self.declare_parameter('speed_mps', 0.18)
-        self.declare_parameter('turn_time_360_s', 3.75)
-        self.declare_parameter('settle_time_s', 1.0)
+        self.declare_parameter('turn_time_360_s', 4.8)
+        self.declare_parameter('turn_motor_power', 0.38)
+        self.declare_parameter('settle_time_s', 1.2)
+        self.declare_parameter('search_step_deg', 30.0)
 
         start_x = self.get_parameter('start_x_cm').value
         start_y = self.get_parameter('start_y_cm').value
         goal_x = self.get_parameter('goal_x_cm').value
         goal_y = self.get_parameter('goal_y_cm').value
+        turn_time_s = float(self.get_parameter('turn_time_360_s').value)
+        settle_time_s = float(self.get_parameter('settle_time_s').value)
+        self.search_step_deg = float(self.get_parameter('search_step_deg').value)
 
         self.navigator = HW4Navigator(
             start_cm=(start_x, start_y),
@@ -233,13 +238,17 @@ class HW4ControlNode(Node):
             position_tolerance_m=self.get_parameter('position_tolerance_m').value,
             heading_tolerance_rad=math.radians(self.get_parameter('heading_tolerance_deg').value),
             drive_speed_mps=self.get_parameter('speed_mps').value,
-            turn_rate_radps=2.0 * math.pi / self.get_parameter('turn_time_360_s').value,
-            settle_time_s=self.get_parameter('settle_time_s').value,
+            turn_rate_radps=2.0 * math.pi / max(turn_time_s, 0.1),
+            settle_time_s=settle_time_s,
         )
 
         self.get_logger().info('=' * 60)
         self.get_logger().info('HW4 SAFE VORONOI NAVIGATION CONTROLLER INITIALIZING')
         self.get_logger().info(f'Start: ({start_x}, {start_y}) cm | Goal: ({goal_x}, {goal_y}) cm')
+        self.get_logger().info(
+            f'Turn config: turn_time_360={turn_time_s:.2f}s ({math.degrees(self.navigator.turn_rate):.1f}°/s), '
+            f'settle_time={settle_time_s:.1f}s, search_step={self.search_step_deg:.1f}°'
+        )
 
         # Plan the safe Voronoi path immediately
         path = self.navigator.plan_path()
@@ -283,15 +292,33 @@ class HW4ControlNode(Node):
         twist.angular.z = 0.0
         self.cmd_pub.publish(twist)
 
+    def is_pose_fresh(self, max_age: Optional[float] = None) -> bool:
+        """Check if visual pose from AprilTags has been received recently."""
+        if self.navigator.last_pose_time == 0.0:
+            return False
+        allowed_age = max_age if max_age is not None else self.navigator.max_pose_age
+        return (time.monotonic() - self.navigator.last_pose_time) <= allowed_age
+
     def execute_turn(self, angle_rad: float):
         """Execute a calibrated rotation in place with settled re-localization."""
         if abs(angle_rad) < math.radians(3.0) or not self.running:
             return
         direction = 1.0 if angle_rad > 0 else -1.0
-        duration = abs(angle_rad) / self.navigator.turn_rate
+        abs_angle = abs(angle_rad)
+
+        # Apply damping scale to avoid stopping inertia overshoot on floor
+        if abs_angle < math.radians(25.0):
+            damping_scale = 0.85
+        elif abs_angle < math.radians(45.0):
+            damping_scale = 0.90
+        else:
+            damping_scale = 0.95
+
+        duration = (abs_angle * damping_scale) / self.navigator.turn_rate
 
         self.get_logger().info(
-            f"Rotating {math.degrees(angle_rad):.1f}° ({direction:+1.0f}) for {duration:.2f}s..."
+            f"Rotating {math.degrees(angle_rad):.1f}° ({direction:+1.0f}) for {duration:.2f}s "
+            f"(calibrated turn_rate={math.degrees(self.navigator.turn_rate):.1f}°/s)..."
         )
         end_time = time.monotonic() + duration
         twist = Twist()
@@ -304,6 +331,59 @@ class HW4ControlNode(Node):
 
         self.stop_robot()
         time.sleep(self.navigator.settle_time)
+
+    def recover_localization(self) -> bool:
+        """
+        Search for AprilTag landmarks by turning thirty degrees at a time in place,
+        pausing in between each turn for the camera feed to settle, until a landmark
+        is acquired and a fresh visual pose is received on /robot_pose.
+        """
+        step_angle_rad = math.radians(self.search_step_deg)
+        self.stop_robot()
+        self.get_logger().warn(
+            f"Visual localization lost (no landmarks visible). "
+            f"Initiating recovery: turning {self.search_step_deg:.0f}° at a time until landmark is acquired..."
+        )
+
+        # 1. First pause stationary with motors stopped to see if landmark can be acquired without moving
+        time.sleep(self.navigator.settle_time)
+        with self.lock:
+            if self.is_pose_fresh():
+                self.get_logger().info(
+                    f"Landmark reacquired without rotation! Pose: "
+                    f"({self.navigator.current_x_m * 100.0:.1f}, {self.navigator.current_y_m * 100.0:.1f}) cm, "
+                    f"yaw={math.degrees(self.navigator.current_yaw_rad):.1f}°"
+                )
+                return True
+
+        # 2. Search loop: turn 30 degrees CCW at a time, pausing in between for camera to settle
+        step = 1
+        while self.running and rclpy.ok():
+            self.get_logger().info(
+                f"[RECOVERY STEP {step}] Turning {self.search_step_deg:.0f}° in place (settling after for camera frames)..."
+            )
+            self.execute_turn(step_angle_rad)
+
+            with self.lock:
+                if self.is_pose_fresh():
+                    self.get_logger().info(
+                        f"Landmark acquired after {step} recovery turn(s)! "
+                        f"Pose recovered: ({self.navigator.current_x_m * 100.0:.1f}, "
+                        f"{self.navigator.current_y_m * 100.0:.1f}) cm, "
+                        f"yaw={math.degrees(self.navigator.current_yaw_rad):.1f}°. Resuming mission."
+                    )
+                    return True
+
+            step += 1
+            if step > 24:  # 2 full 360-degree sweeps
+                self.get_logger().warn(
+                    "Still searching for AprilTags after 2 full 360° sweeps. "
+                    "Ensure AprilTags are illuminated and visible.",
+                    throttle_duration_sec=3.0,
+                )
+                time.sleep(1.0)
+
+        return False
 
     def execute_drive(self, distance_m: float):
         """Execute a forward segment bounded by max_step with settled re-localization."""
@@ -336,22 +416,23 @@ class HW4ControlNode(Node):
         wait_start = time.monotonic()
         while self.running and rclpy.ok():
             with self.lock:
-                last_time = self.navigator.last_pose_time
-            if last_time > 0 and (time.monotonic() - last_time) <= 1.5:
-                self.get_logger().info(
-                    f"Initial visual pose acquired: ({self.navigator.current_x_m * 100.0:.1f}, "
-                    f"{self.navigator.current_y_m * 100.0:.1f}) cm, "
-                    f"yaw={math.degrees(self.navigator.current_yaw_rad):.1f}°"
-                )
-                break
+                if self.is_pose_fresh():
+                    self.get_logger().info(
+                        f"Initial visual pose acquired: ({self.navigator.current_x_m * 100.0:.1f}, "
+                        f"{self.navigator.current_y_m * 100.0:.1f}) cm, "
+                        f"yaw={math.degrees(self.navigator.current_yaw_rad):.1f}°"
+                    )
+                    break
 
             elapsed = time.monotonic() - wait_start
-            if int(elapsed * 2) % 6 == 0 and elapsed > 2.0:
-                self.get_logger().warn(
-                    f"Still waiting for AprilTag pose on /robot_pose ({elapsed:.0f}s elapsed). "
-                    "Ensure camera and apriltag nodes are running and an AprilTag is in camera view.",
-                    throttle_duration_sec=3.0,
+            if elapsed > 2.5:
+                self.get_logger().info(
+                    f"No initial landmark in camera view ({elapsed:.1f}s elapsed). "
+                    "Starting 30° incremental search turns..."
                 )
+                self.recover_localization()
+                break
+
             time.sleep(0.2)
 
         # 2. Closed-loop waypoint traversal
@@ -375,9 +456,7 @@ class HW4ControlNode(Node):
                 break
 
             if curr_state == NavigationState.LOCALIZATION_RECOVERY:
-                self.stop_robot()
-                self.get_logger().warn("Visual localization lost! Pausing to reacquire AprilTags...")
-                time.sleep(1.5)
+                self.recover_localization()
                 continue
 
             if curr_state == NavigationState.ORIENTING:
@@ -386,7 +465,9 @@ class HW4ControlNode(Node):
                 dy = wp[1] - cy
                 desired_yaw = math.atan2(dy, dx)
                 heading_err = wrap_angle(desired_yaw - cyaw)
-                self.execute_turn(heading_err)
+                # Bound maximum single orientation step to 45 degrees so large turns re-measure
+                turn_step = math.copysign(min(abs(heading_err), math.radians(45.0)), heading_err)
+                self.execute_turn(turn_step)
                 continue
 
             if curr_state == NavigationState.DRIVING:

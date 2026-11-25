@@ -87,6 +87,37 @@ class TestHW4Navigator(unittest.TestCase):
         self.assertTrue(self.nav.is_finished)
         self.assertIn("Goal", msg)
 
+    def test_calibrated_slower_turn_parameters(self):
+        """Verify that default navigator settings use slower turn rate and camera settle time."""
+        default_nav = HW4Navigator()
+        # Calibrated for ~4.8s per 360 deg turn (~1.309 rad/s or ~75 deg/s)
+        self.assertAlmostEqual(default_nav.turn_rate, 2.0 * math.pi / 4.8, places=2)
+        self.assertLess(default_nav.turn_rate, 1.50)  # Slower than previous 1.67 rad/s
+        self.assertEqual(default_nav.settle_time, 1.2)
+        self.assertEqual(default_nav.max_pose_age, 1.2)
+
+    def test_recovery_transition_and_reacquisition(self):
+        """Verify localization recovery triggered when blind, and recovered when tag seen."""
+        now = time.monotonic()
+        # Initially fresh pose
+        self.nav.update_pose(2.345, 0.630, 0.0, now)
+        lin, ang, _ = self.nav.compute_motion_command(now)
+        self.assertNotEqual(self.nav.state, NavigationState.LOCALIZATION_RECOVERY)
+
+        # After max_pose_age passes without pose update (e.g. tag lost/blind)
+        stale_time = now + 1.5
+        lin, ang, msg = self.nav.compute_motion_command(stale_time)
+        self.assertEqual(self.nav.state, NavigationState.LOCALIZATION_RECOVERY)
+        self.assertEqual(lin, 0.0)
+        self.assertEqual(ang, 0.0)
+        self.assertIn("stale", msg.lower())
+
+        # Robot acquires landmark again
+        reacquired_time = stale_time + 0.1
+        self.nav.update_pose(2.0, 0.70, 0.0, reacquired_time)
+        lin, ang, msg = self.nav.compute_motion_command(reacquired_time)
+        self.assertIn(self.nav.state, (NavigationState.ORIENTING, NavigationState.DRIVING, NavigationState.WAYPOINT_REACHED))
+
 
 if __name__ == '__main__':
     unittest.main()

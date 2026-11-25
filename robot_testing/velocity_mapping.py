@@ -18,14 +18,17 @@ class VelocityToMotorNode(Node):
         self.right_linear_deadzone = 0.08
         self.right_linear_slope = 1.772915625  # 0.567333 / (0.4 - 0.08)
         
-        # Calibrated parameters: turn in place using motor input 0.5
-        self.left_angular_deadzone = 0.5
+        # Calibrated parameters: turn in place using motor input (default 0.38 for slower, controlled turns)
+        self.declare_parameter('turn_motor_power', 0.38)
+        turn_power = float(self.get_parameter('turn_motor_power').value)
+        self.left_angular_deadzone = turn_power
         self.left_angular_slope = 1e6
-        self.right_angular_deadzone = 0.5
+        self.right_angular_deadzone = turn_power
         self.right_angular_slope = 1e6
 
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.motor_pub = self.create_publisher(Float32MultiArray, '/motor_commands', 10)
+        self.get_logger().info(f'velocity_mapping initialized: turn_motor_power={turn_power:.2f}')
         
     def _wheel_velocities(self, linear: float, angular: float) -> tuple[float, float]:
         half_b = 0.5 * self.wheel_base
@@ -47,8 +50,9 @@ class VelocityToMotorNode(Node):
             left_cmd = self._map_with_deadzone(v_left, self.left_linear_deadzone, self.left_linear_slope)
             right_cmd = self._map_with_deadzone(v_right, self.right_linear_deadzone, self.right_linear_slope)
         elif ang != 0.0:
-            left_cmd = self._map_with_deadzone(v_left, self.left_angular_deadzone, self.left_angular_slope)
-            right_cmd = self._map_with_deadzone(v_right, self.right_angular_deadzone, self.right_angular_slope)
+            turn_power = float(self.get_parameter('turn_motor_power').value)
+            left_cmd = self._map_with_deadzone(v_left, turn_power, self.left_angular_slope)
+            right_cmd = self._map_with_deadzone(v_right, turn_power, self.right_angular_slope)
         else:
             left_cmd = 0.0
             right_cmd = 0.0
