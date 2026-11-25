@@ -38,9 +38,9 @@ Waypoint verification is mandatory: prediction cannot advance the waypoint
 index or finish the route. Missing feedback ends with an explicit verification
 failure instead of a predicted finish.
 
-The current test starts facing 180° and stops at the intermediate goal
-**(75, 154) cm**, left of the obstacle. The original final goal is retained in
-`final_goal` but is not executed. The first planned turn is about **14.9° right**.
+The robot starts facing 180° and navigates to the assignment goal
+**(65, 229.5) cm**. The earlier intermediate test target is retired.
+The printed plan and preview show the exact route before motion.
 
 ## Measuring the map
 
@@ -72,8 +72,7 @@ counterclockwise from `+x`: right = 0°, up = 90°, left = 180°.
 | `robot.length_m`, `robot.width_m` | Full footprint including protrusions; its rectangle center is the planning/localization reference point. |
 | `robot.safety_margin_m` | Required extra robot-body clearance for localization and control errors. Choose a positive practical margin; this is a tuning choice, not a measured dimension. |
 | `start` | Initial footprint-center position and forward yaw in the fixed world frame. |
-| `goal` | Active test target: intermediate point (75, 154) cm, on the left side of the obstacle. Final heading is unrestricted. |
-| `final_goal` | Original assignment goal (65, 229.5) cm, displayed as inactive and not executed during this test. |
+| `goal` | Assignment goal (65, 229.5) cm. Final heading is unrestricted. |
 | `obstacles` | Physical axis-aligned rectangle bounds **before** robot-size inflation. Duplicate entries for additional obstacles. |
 | `landmarks` | Family (`36h11` or `41h12`), numeric ID, printed-tag center `(x, y, z)`, outward printed-face normal yaw, and tag edge size. Numeric IDs may repeat across families. |
 

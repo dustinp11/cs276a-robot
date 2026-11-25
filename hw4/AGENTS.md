@@ -80,9 +80,9 @@
   `/hw4/start` can move the robot. Preview and execution must use the same path.
   Keep a motor-free local preview command and label planned versus measured data.
 
-- The current physical test starts at 180 degrees and stops at intermediate
-  goal (0.75, 1.54) m, left of the obstacle. The original final goal is saved
-  in `final_goal` and must not be executed automatically during this test.
+- The robot starts facing 180 degrees and must navigate to the assignment goal
+  (0.65, 2.295) m. The earlier (0.75, 1.54) m intermediate test target is retired.
+  Keep a single active `goal`; do not substitute a test endpoint for this goal.
 
 - For near-goal refinement, reject corrections over 0.12 m after a measured
   checkpoint already placed the robot within 0.20 m. The physical log switched
