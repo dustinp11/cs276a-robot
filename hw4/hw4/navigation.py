@@ -1,4 +1,4 @@
-"""Waypoint following with measured continuous turns and bounded straight travel."""
+"""Waypoint following from a known start with optional stopped visual corrections."""
 
 import math
 from hw3.coordinates import wrap_angle
@@ -22,11 +22,17 @@ class Navigator:
         self.turn_progress, self.turn_target_yaw = 0.0, None
         self.initial_yaw = initial_yaw
         self.commanded_distance, self.segment_budget = 0.0, None
+        self.feedback_required = policy['feedback_required']
+        self.pose_source, self.feedback_note = 'waiting for vision', ''
+        if not self.feedback_required:
+            self.expected = (*path[0], initial_yaw)
+            self.pose_source = 'configured start'
+            self.reason = 'ready to move from configured start pose'
 
     @property
     def finished(self):
         """Report terminal states independently of whether the robot arrived."""
-        return self.state in ('complete', 'failed', 'stopped')
+        return self.state in ('complete', 'unverified', 'failed', 'stopped')
 
     def finish(self, state, reason):
         """Latch a terminal state and immediately request a motor stop."""
@@ -51,9 +57,20 @@ class Navigator:
             return self.motion_tick(now, samples)
         if self.state == 'turning':
             return self.turn_tick(now, samples)
+        if now < self.after:
+            return 0.0, 0.0
         pose = stable_feedback(samples, self.after, now, self.policy)
         if pose is not None:
-            return self.decide(now, pose)
+            error = self.accept_pose(pose)
+            if not error or self.feedback_required:
+                self.pose_source, self.feedback_note = 'measured landmarks', ''
+                return self.decide(now, pose)
+            self.feedback_note = f'visual correction rejected: {error}'
+        if not self.feedback_required:
+            self.pose_source = 'command prediction' if self.measured or self.expected[:2] != self.path[0] else self.pose_source
+            if pose is None:
+                self.feedback_note = 'no stable visual correction; continuing predicted route'
+            return self.decide(now, Feedback(*self.expected, now), measured=False)
         if now > self.deadline:
             return self.finish('failed', 'fresh consistent post-stop localization unavailable')
         return 0.0, 0.0
@@ -61,7 +78,7 @@ class Navigator:
     def motion_tick(self, now, samples):
         """Stop on stale vision or segment completion; never advance a waypoint here."""
         # require fresh vision throughout bounded motion
-        if not samples or not 0 <= now - samples[-1].stamp <= self.policy['pose_timeout_s']:
+        if self.feedback_required and (not samples or not 0 <= now - samples[-1].stamp <= self.policy['pose_timeout_s']):
             return self.finish('failed', 'localization became stale during motion')
         if now < self.deadline:
             return self.command
@@ -80,7 +97,9 @@ class Navigator:
         self.state, self.command = 'waiting', (0.0, 0.0)
         self.after = now + self.policy['settle_s']
         self.deadline = self.after + self.policy['feedback_wait_s']
-        self.reason = 'stopped; acquiring post-settle measurements'
+        self.pose_source = 'command prediction'
+        self.reason = ('stopped; acquiring post-settle measurements' if self.feedback_required
+                       else 'brief checkpoint; visual correction optional')
         return self.command
 
     def accept_pose(self, pose):
@@ -95,19 +114,22 @@ class Navigator:
             return 'measured heading disagrees with previous command prediction'
         return None
 
-    def decide(self, now, pose):
-        """Use stopped measured feedback for arrival, heading correction, or travel."""
-        # advance only using stopped measured feedback
+    def decide(self, now, pose, measured=True):
+        """Choose the next action without confusing predicted and measured arrival."""
+        # retain the source of waypoint progress
         error = self.accept_pose(pose)
         if error:
             return self.finish('failed', error)
-        self.measured = pose
+        if measured:
+            self.measured = pose
         while self.index < len(self.path) and math.dist(pose.xy, self.path[self.index]) <= self.policy['position_tolerance_m']:
             self.index += 1
             self.corrections = 0
             self.commanded_distance, self.segment_budget = 0.0, None
         if self.index == len(self.path):
-            return self.finish('complete', 'goal reached using fresh stable landmark pose')
+            if measured:
+                return self.finish('complete', 'goal reached using fresh stable landmark pose')
+            return self.finish('unverified', 'planned route completed by prediction; physical arrival unverified')
 
         # select the next fixed waypoint
         target = self.path[self.index]
@@ -133,12 +155,18 @@ class Navigator:
 
         # refresh motors until measured heading arrives
         self.state, self.reason = 'turning', 'turning continuously to planned waypoint heading'
-        self.deadline = now + self.policy['turn_timeout_s']
         self.command = 0.0, self.turn.rate(residual)
+        duration = self.policy['turn_timeout_s'] if self.feedback_required else self.turn_angle / abs(self.command[1])
+        self.deadline = now + duration
+        if not self.feedback_required:
+            self.reason = 'executing full calibrated turn from estimated heading'
         return self.command
 
     def turn_tick(self, now, samples):
         """Stop on measured turn completion, feedback loss, or an exhausted timeout."""
+        if not self.feedback_required:
+            return self.calibrated_turn_tick(now)
+
         # reject stale feedback while turning continuously
         if not samples or not 0 <= now - samples[-1].stamp <= self.policy['turn_feedback_timeout_s']:
             return self.finish('failed', 'fresh heading feedback unavailable during continuous turn')
@@ -159,6 +187,18 @@ class Navigator:
         if now >= self.deadline:
             return self.finish('failed', 'continuous turn timed out without measured heading arrival')
         return self.command
+
+    def calibrated_turn_tick(self, now):
+        """Execute the full timed angle; its resulting heading is a prediction."""
+        # finish the turn without waiting for vision
+        if now < self.deadline:
+            return self.command
+        yaw = wrap_angle(self.turn_origin.yaw + self.command[1] * (now - self.turn_start))
+        pose = Feedback(self.turn_origin.x, self.turn_origin.y, yaw, now)
+        self.expected = pose.x, pose.y, pose.yaw
+        self.pose_source = 'command prediction'
+        self.feedback_note = 'turn completion is predicted from calibration'
+        return self.drive_segment(now, pose, self.path[self.index])
 
     def check_turn_pose(self, pose):
         """Reject unsafe displacement and implausible frame-to-frame heading jumps."""

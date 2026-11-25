@@ -1,7 +1,7 @@
 # HW4 — run 1
 
-Run 1 plans around measured obstacles and follows one route using known-map
-AprilTag localization. It reuses HW3's motor driver, fixed motor mapper, motion
+Run 1 plans around measured obstacles and starts from the configured pose.
+It executes calibrated motion with optional known-map AprilTag corrections. It reuses HW3's motor driver, fixed motor mapper, motion
 calibration, and camera calibration. The ROS interfaces in `run_commands.txt`
 remain the entry points for subsequent iterations.
 
@@ -29,6 +29,7 @@ result directory. No robot access, commit, or push happens automatically.
 The start service reports whether the mission was **accepted**, not whether the
 robot reached the goal. Follow `/hw4/status`, console messages, or `status.json`
 for its eventual result. `complete` requires fresh, stable measured goal proximity.
+`unverified` means the predicted route ended without visual confirmation.
 
 ## Measuring the map
 
@@ -95,27 +96,34 @@ tag solutions. It can use a single usable tag; it does not estimate a calibrated
 pose covariance. `ros_localization.py` preserves capture timestamps and never
 substitutes an older latest TF for the requested image timestamp.
 
-`navigation.py` follows fixed waypoints:
+`navigation.py` follows fixed waypoints. The current fast configuration sets
+`navigation.feedback_required: false`, as requested for the physical test:
 
-1. Require three distinct, fresh, consistent pose observations initially and
-   after stopped drive checkpoints.
-2. Turn continuously until measured heading faces the next planned waypoint.
-   There are no intermediate 15°/30° stages or timed turn pulses.
-3. Switch directly from turning to forward travel once aligned; do not pause
-   for another stopped acquisition between the turn and drive.
-4. Drive at `[0.4, 0.4]` for up to **one second**, then stop and check pose.
-   Shorten travel near the next waypoint or a projected collision limit,
-   including one motor-watchdog interval of stopping overrun.
-5. Repeat until a fresh stable pose is within 0.08 m of the goal.
+1. Begin from the configured start position and **90° heading** immediately
+   after `/hw4/start`; do not wait to acquire a visual pose.
+2. Execute the full turn toward the next waypoint using the calibrated motor
+   pair and nominal angular rate. Motor commands remain active for the calculated
+   duration; turn completion is **predicted**, not measured, in this mode.
+3. Switch directly to `[0.4, 0.4]` forward travel for up to **one second**.
+   Shorten travel near waypoints or a projected collision limit, including a
+   watchdog interval of possible stopping overrun.
+4. Stop for the configured settling interval, accept a fresh stable visual
+   correction if available and consistent, then continue. Missing or rejected
+   corrections do not block the next movement; their reason is logged.
+5. Stop at the end of the predicted path with state `unverified` unless fresh
+   stable landmark feedback confirms arrival within 0.08 m, yielding `complete`.
 
-Continuous turns require heading feedback no older than 0.35 s and fail after
-8 s without measured alignment. The planner's heading is the target, not an
-intermediate angle. Straight motion and pivoting remain separate. Feedback loss,
-implausible pose jumps, unsafe motion, control stalls, and exhausted budgets stop
-the mission. There is no blind timed continuation or automatic tag searching.
-The pose can be unavailable near the obstacle or during turns; those failures
-are useful run-1 evidence for the next iteration. The code does not detect an
-unmapped obstacle; it uses the measured obstacle map.
+Without visual correction, wheel slip and imperfect turn/speed calibration cause
+position and heading error to accumulate. Collision checks then protect the
+**predicted** footprint; they cannot establish physical clearance. Place the robot
+at the configured start pose for every run. This code does not detect unmapped
+obstacles.
+
+`feedback_required: true` retains the previous strict behavior for comparison:
+initial/post-drive stable-pose acquisition, continuous visually measured turns,
+and failure on lost feedback. This is not the default fast experiment. Both
+settings retain command-refresh watchdog checks, collision checks on their pose
+estimate, bounded motion budgets, explicit stop, and a mission timeout.
 
 ## Calibration baseline
 
@@ -153,7 +161,8 @@ and videos of the physical run. Results are excluded from Git.
 - `observations.csv`: capture timestamps, accepted/rejected feedback, rejection
   reasons, measured world poses, and tag IDs.
 - `commands.csv`: state/waypoint, nominal commands, feedback age, measured pose,
-  command-predicted pose, correction budgets, measured body clearance, and turn target/progress angles.
+  command-predicted pose, correction budgets, measured body clearance, turn
+  target/progress angles, pose source, and optional-correction rejection reason.
 - `status.json` and `events.jsonl`: iteration label `run1`, current/terminal
   state, explicit arrival status, elapsed time, and transition history.
 - `environment.json`, `motion.yaml`, `navigation.yaml`, `camera_parameter.yaml`:

@@ -83,8 +83,8 @@ class MissionNode(Node):
             self.navigator = mode.create_navigator(control_grid, plans[self.policy['mode']], self.forward,
                                        self.turn, self.policy, time.monotonic(),
                                        math.radians(self.environment['start']['yaw_deg']))
-            self.log.status('started', 'plans saved; waiting for measured pose', mode=self.policy['mode'])
-            response.success, response.message = True, 'Run 1 accepted; acquiring pose before motion.'
+            self.log.status('started', 'plans saved; executing configured motion policy', mode=self.policy['mode'])
+            response.success, response.message = True, 'Run 1 accepted; starting configured motion policy.'
         except Exception as error:
             if self.navigator is not None:
                 self.navigator.finish('failed', str(error))
@@ -143,7 +143,7 @@ class MissionNode(Node):
                                    *measured, *(nav.expected or ('', '', '')),
                                    nav.corrections, nav.commanded_distance, nav.segment_budget,
                                    nav.grid.clearance(sample.xy) if sample else '',
-                                   nav.turn_target_yaw, nav.turn_progress])
+                                   nav.turn_target_yaw, nav.turn_progress, nav.pose_source, nav.feedback_note])
         status = nav.state, nav.reason, nav.index
         if status == self.last_status:
             return
@@ -155,7 +155,8 @@ class MissionNode(Node):
                    'pose_age_s': age, 'mode': self.policy['mode'],
                    'accepted_pose': (nav.measured.x, nav.measured.y, nav.measured.yaw) if nav.measured else None,
                    'commanded_segment_distance_m': nav.commanded_distance,
-                   'segment_budget_m': nav.segment_budget}
+                   'segment_budget_m': nav.segment_budget,
+                   'pose_source': nav.pose_source, 'feedback_note': nav.feedback_note}
         self.log.status(nav.state, nav.reason, **details)
         self.status_pub.publish(String(data=json.dumps({'state': nav.state, 'reason': nav.reason, **details})))
         self.get_logger().info(f'{nav.state}: {nav.reason}; waypoint {nav.index}')

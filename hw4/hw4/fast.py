@@ -105,7 +105,7 @@ def plan_path(grid, start_xy, goal_xy, graph=None) -> list[tuple[float, float]]:
 def create_navigator(grid, path, forward, turn, policy, now, initial_yaw=0.0):
     """Return the existing Navigator using meter waypoints and a radian start yaw.
 
-    Fast currently means distance planning; motion retains stopped pose checks.
+    Fast uses distance planning; feedback policy selects optional or required checks.
     """
     from hw4.navigation import Navigator
     return Navigator(grid, path, forward, turn, policy, now, initial_yaw)

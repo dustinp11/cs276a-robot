@@ -14,10 +14,13 @@ def load_settings(path):
     nav = data['navigation']
     get_mode(nav['mode'])
     for name, value in nav.items():
-        if name == 'mode':
+        if name in ('mode', 'feedback_required'):
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f'navigation.{name} must be positive and finite.')
+
+    if type(nav['feedback_required']) is not bool:
+        raise ValueError('navigation.feedback_required must be true or false.')
 
     # constrain sampling and footprint integration limits
     for name in ('stable_samples', 'max_turns'):

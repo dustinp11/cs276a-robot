@@ -85,7 +85,8 @@ class RunLog:
             'time_s', 'state', 'waypoint', 'reason', 'linear_mps', 'angular_radps',
             'pose_age_s', 'measured_x_m', 'measured_y_m', 'measured_yaw_rad',
             'predicted_x_m', 'predicted_y_m', 'predicted_yaw_rad',
-            'turn_steps', 'commanded_segment_distance_m', 'segment_budget_m', 'measured_body_clearance_m', 'turn_target_yaw_rad', 'turn_progress_rad'])
+            'turn_steps', 'commanded_segment_distance_m', 'segment_budget_m', 'measured_body_clearance_m', 'turn_target_yaw_rad', 'turn_progress_rad',
+            'pose_source', 'feedback_note'])
 
     def open_csv(self, name, header):
         """Open a line-buffered CSV stream with explicit units in its header."""

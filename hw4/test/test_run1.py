@@ -37,7 +37,7 @@ def calibrations():
     return forward, TurnCalibration(**turns)
 
 
-def simulate(navigator, pose, duration=240.0):
+def simulate(navigator, pose, duration=240.0, feedback=True):
     """Integrate perfect motor response and 10 Hz exact observations at 20 Hz control."""
     command, samples, minimum = (0.0, 0.0), [], math.inf
     for index in range(int(duration / 0.05)):
@@ -50,7 +50,7 @@ def simulate(navigator, pose, duration=240.0):
         minimum = min(minimum, navigator.grid.clearance((x, y)))
 
         # feed ideal samples with original timestamps
-        if index % 2 == 0:
+        if feedback and index % 2 == 0:
             samples.append(Feedback(x, y, yaw, now, (0,)))
             samples = samples[-30:]
         command = navigator.tick(now, samples)
@@ -69,7 +69,7 @@ class RunOneTests(unittest.TestCase):
         # share synthetic plans across controller checks
         cls.environment = load_validated_environment(ROOT / 'test/sample_environment.json')
         cls.settings = load_settings(ROOT / 'config/navigation.yaml')
-        cls.policy = cls.settings['navigation']
+        cls.policy = dict(cls.settings['navigation'], feedback_required=True)
         cls.grid, cls.plans = prepare_plans(cls.environment, cls.policy)
         cls.forward, cls.turn = calibrations()
 
@@ -325,6 +325,47 @@ class RunOneTests(unittest.TestCase):
         self.assertLess(nav.commanded_distance, 0.30)
         self.assertLess(nav.deadline - 10, 1.0)
         self.assertTrue(nav.forward_sweep_free(pose, nav.commanded_distance))
+
+    def test_fast_default_moves_immediately_without_tag_feedback(self):
+        """Configured start placement starts motion without acquiring a visual pose."""
+        # begin the planned turn without observations
+        policy = dict(self.policy, feedback_required=False)
+        nav = Navigator(self.grid, [(0.55, 0.55), (0.55, 2.5)], self.forward, self.turn, policy, 10)
+        self.assertNotEqual(nav.tick(10.05, []), (0, 0))
+        self.assertEqual(nav.state, 'turning')
+        for index in range(2, 25):
+            nav.tick(10 + index * 0.05, [])
+        self.assertEqual(nav.state, 'moving')
+        self.assertEqual(nav.command, (self.forward.speed_mps, 0))
+        self.assertEqual(nav.pose_source, 'command prediction')
+        self.assertIsNone(nav.measured)
+
+    def test_optional_visual_correction_is_used_or_explicitly_rejected(self):
+        """Missing or inconsistent corrections must not stall the requested fast mode."""
+        # accept plausible observations and reject jumps
+        policy = dict(self.policy, feedback_required=False)
+        for x, y, accepted in [(0.56, 0.55, True), (2.5, 2.5, False)]:
+            nav = Navigator(self.grid, self.plans['fast'], self.forward, self.turn, policy, 10)
+            samples = [Feedback(x, y, 0, stamp, (0,)) for stamp in (10.0, 10.1, 10.2)]
+            self.assertNotEqual(nav.tick(10.2, samples), (0, 0))
+            self.assertEqual(nav.measured is not None, accepted)
+            if not accepted:
+                self.assertIn('visual correction rejected', nav.feedback_note)
+                self.assertFalse(nav.finished)
+
+    def test_predicted_route_finishes_without_false_measured_arrival(self):
+        """Missing tags do not block movement or fabricate verified physical arrival."""
+        # exercise the full route without observations
+        policy = dict(self.policy, feedback_required=False)
+        grid = deepcopy(self.grid)
+        grid.margin = self.environment['robot']['safety_margin_m']
+        nav = Navigator(grid, self.plans['fast'], self.forward, self.turn, policy, 10)
+        state, reason, pose, clearance = simulate(nav, (0.55, 0.55, 0), feedback=False)
+        self.assertEqual(state, 'unverified', reason)
+        self.assertIsNone(nav.measured)
+        self.assertGreaterEqual(clearance, grid.margin)
+        self.assertLessEqual(math.dist(pose[:2], self.plans['fast'][-1]), self.policy['position_tolerance_m'])
+        self.assertEqual(nav.command, (0, 0))
 
     def test_ideal_feedback_completes_fast_route(self):
         """Check fast-mode control under exact localization and ideal motor response."""

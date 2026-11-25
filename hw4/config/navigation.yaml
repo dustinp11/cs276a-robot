@@ -3,6 +3,8 @@
     # select fast; safe remains an unimplemented skeleton
     navigation:
       mode: fast
+      # start from surveyed pose; vision corrections optional
+      feedback_required: false
       grid_resolution_m: 0.05
       planning_buffer_m: 0.05
       drive_duration_s: 1.0

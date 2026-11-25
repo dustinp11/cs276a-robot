@@ -34,12 +34,13 @@
 - `fast.py` is implemented; `safe.py` contains function signatures/docstrings
   only. Do not implement safe mode until the user requests it. Selecting safe
   must report unimplemented before hardware starts, without falling back to fast.
-- Navigation turns continuously to the full next-waypoint heading, then
-  transitions directly to forward travel without intermediate turn stages or
-  a stopped acquisition between turn and drive. Do not restore turn pulses.
-  Drive for up to one second before stopped pose checks; shorten only near
-  waypoints or collision limits. Preserve fresh feedback and failure timeouts. Do not substitute command prediction for measured
-  arrival, or silently continue without feedback.
+- The user explicitly requested movement without mandatory pose acquisition.
+  Default fast mode has `feedback_required: false`: start from the configured
+  pose, execute full calibrated timed turns, drive up to one second, then check
+  optional stopped visual corrections. Do not block motion on missing tags.
+- Log command prediction versus accepted visual correction and rejection reason.
+  Predicted route completion must end as `unverified`, never measured arrival.
+  Keep strict feedback mode available for comparison, not enabled by default.
 - Preserve successful/failed terminal outcomes when stop or shutdown follows.
 - Label this iteration `run1` in archived status. The synthetic test map is
   never a replacement for `config/environment.json` measurements.
