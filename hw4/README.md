@@ -242,9 +242,9 @@ This mode starts the same camera, AprilTag detectors, and localization pipeline,
 but starts no motor driver, velocity mapper, or navigation controller.
 Do not call `/hw4/start` for this test.
 
-Mark the robot footprint center at the reference point: currently the active
-intermediate goal **(75, 154) cm**, not the original final goal. The launch command
-supplies `reference_x_m:=0.75 reference_y_m:=1.54`; change those meter values if
+Mark the robot footprint center at the reference point: the original final
+goal **(65, 229.5) cm**, matching the latest physical localization test. The launch command
+supplies `reference_x_m:=0.65 reference_y_m:=2.295`; change those meter values if
 using a different physically measured point. Keep that center on the mark while
 rotating by hand. Stop approximately every 30 degrees for 4–5 seconds, including
 a stationary hold before and after the full revolution. Avoid covering the camera.
@@ -267,3 +267,15 @@ Copy the entire result folder back locally for analysis. The report command in
 `run_commands.txt` can regenerate the CSV summary and SVG after an interrupted run.
 Tags that were not observed have no accuracy result. A stationary-looking cluster
 is not proof of accuracy; compare its distance from the physically placed center.
+
+
+The run commands also rebuild `robot_vision_camera` inside `rubikpi_ros2` before
+sourcing its installed setup. This is required for the camera rectification fix;
+building only `hw3 hw4` does not update the camera executable. With rectification
+enabled, the camera now publishes the same new matrix used to remap pixels in
+both CameraInfo K and P, zero distortion, and identity rectification. The loaded
+raw calibration and the unrectified mode remain unchanged. Startup prints
+`Rectified CameraInfo` with the effective focal lengths and principal point.
+Check those values against `/camera/camera_info`; D should contain zeros.
+Repeat the fixed-center rotation at the same original final goal to compare
+against the previous recording. The code correction is not hardware validation.

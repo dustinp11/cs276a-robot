@@ -189,6 +189,24 @@ void RobotVisionCamera::fillCameraInfoMessage() {
   camera_info_msg_.roi.do_rectify = false;
 }
 
+// describe the already rectified output image
+void RobotVisionCamera::fillRectifiedCameraInfo(const cv::Mat & matrix) {
+  // remove distortion and additional rectification transforms
+  camera_info_msg_.d.assign(cam_param.distortion_coefficients.total(), 0.0);
+  std::fill(camera_info_msg_.r.begin(), camera_info_msg_.r.end(), 0.0);
+  camera_info_msg_.r[0] = camera_info_msg_.r[4] = camera_info_msg_.r[8] = 1.0;
+  std::fill(camera_info_msg_.p.begin(), camera_info_msg_.p.end(), 0.0);
+
+  // match projection to the remapped pixels
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      const double value = matrix.at<double>(row, col);
+      camera_info_msg_.k[row * 3 + col] = value;
+      camera_info_msg_.p[row * 4 + col] = value;
+    }
+  }
+}
+
 // Enhanced prepareRemap function that uses the loaded camera info
 void RobotVisionCamera::prepareRemap() {
   if (!camera_info_loaded_) {
@@ -235,6 +253,13 @@ void RobotVisionCamera::prepareRemap() {
   // Build undistortion maps
   cv::Mat newK = getOptimalNewCameraMatrix(K, D, imageSize, 0.0, imageSize, 0);
   cv::initUndistortRectifyMap(K, D, cv::Mat(), newK, imageSize, CV_16SC2, map1, map2);
+
+  // publish geometry matching the rectified image
+  fillRectifiedCameraInfo(newK);
+  RCLCPP_INFO(this->get_logger(),
+    "Rectified CameraInfo: fx=%g fy=%g cx=%g cy=%g; D=0, R=identity, P=[newK|0]",
+    newK.at<double>(0,0), newK.at<double>(1,1),
+    newK.at<double>(0,2), newK.at<double>(1,2));
 
   RCLCPP_INFO(this->get_logger(),
     "Rectify ready. size=%dx%d, D=%dx%d, K=(%g,%g,%g | %g,%g,%g | %g,%g,%g)",

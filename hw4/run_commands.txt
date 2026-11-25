@@ -5,7 +5,7 @@ open results/preview/planned_paths.svg
 
 LOCAL TERMINAL: commit and push after editing
 cd /Users/dustinpham/ucsd/fall2026/cs276a/robot_local
-git add hw4
+git add hw4 rubikpi_ros2/robot_vision/src/robot_vision_camera.cpp rubikpi_ros2/robot_vision/include/robot_vision_camera/robot_vision_camera.h
 git commit -m "Update HW4"
 git push -u origin HEAD
 
@@ -16,6 +16,7 @@ git pull --ff-only
 ROBOT TERMINAL 1: build and launch after pulling
 cd ~/robot_testing
 source /opt/ros/jazzy/setup.bash &&
+(cd rubikpi_ros2 && colcon build --base-paths robot_vision --packages-select robot_vision_camera) &&
 source rubikpi_ros2/install/setup.bash &&
 colcon build --base-paths hw3 hw4 --packages-select hw3 hw4 &&
 source install/setup.bash &&
@@ -43,6 +44,7 @@ Ctrl+C
 ROBOT TERMINAL 1: manual rotation test instead of navigation (stop previous launch first)
 cd ~/robot_testing
 source /opt/ros/jazzy/setup.bash &&
+(cd rubikpi_ros2 && colcon build --base-paths robot_vision --packages-select robot_vision_camera) &&
 source rubikpi_ros2/install/setup.bash &&
 colcon build --base-paths hw3 hw4 --packages-select hw3 hw4 &&
 source install/setup.bash &&
@@ -51,7 +53,7 @@ mkdir -p "$HW4_RUN_DIR/ros_logs" &&
 git rev-parse HEAD > "$HW4_RUN_DIR/commit.txt" &&
 git status --short > "$HW4_RUN_DIR/git_status.txt" &&
 export ROS_LOG_DIR="$HW4_RUN_DIR/ros_logs" &&
-ros2 launch hw4 hw4.launch.py localization_only:=true reference_x_m:=0.75 reference_y_m:=1.54 environment_file:="$PWD/hw4/config/environment.json" output_dir:="$HW4_RUN_DIR"
+ros2 launch hw4 hw4.launch.py localization_only:=true reference_x_m:=0.65 reference_y_m:=2.295 environment_file:="$PWD/hw4/config/environment.json" output_dir:="$HW4_RUN_DIR"
 
 ROBOT TERMINAL 1: finish manual rotation and generate report
 Ctrl+C
@@ -60,3 +62,10 @@ LOCAL TERMINAL: regenerate report after copying the localization result folder h
 cd /Users/dustinpham/ucsd/fall2026/cs276a/robot_local/hw4
 python3 -m hw4.localization_report results/LOCALIZATION_RUN_FOLDER
 open results/LOCALIZATION_RUN_FOLDER/tag_positions.svg
+
+ROBOT TERMINAL 2: inspect camera calibration during manual rotation test
+cd ~/robot_testing
+source /opt/ros/jazzy/setup.bash
+source rubikpi_ros2/install/setup.bash
+source install/setup.bash
+ros2 topic echo /camera/camera_info --once

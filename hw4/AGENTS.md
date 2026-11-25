@@ -83,3 +83,10 @@
   same PoseSource and Localizer used by navigation. Log the supplied physical
   reference separately from estimates; do not claim measured heading or full
   rotation coverage from estimated yaw. Archive per-tag errors and a position plot.
+
+- The camera rectification fix lives in the shared `rubikpi_ros2/robot_vision`
+  driver: published K/P must match the remap matrix, with zero D and identity R
+  for the already rectified output. Rebuild `robot_vision_camera` in the SDK
+  workspace before sourcing it; building only hw3/hw4 leaves the old camera code.
+- The latest manual rotation reference is the original final goal (0.65, 2.295) m.
+  This diagnostic reference does not change the active navigation goal.

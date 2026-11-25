@@ -100,6 +100,7 @@ public:
   void prepareRemap();
   void loadCameraInfo();
   void fillCameraInfoMessage();
+  void fillRectifiedCameraInfo(const cv::Mat & matrix);
   void buildGStreamerPipeline();
   void startGStreamerPipeline();
   void stopGStreamerPipeline();
