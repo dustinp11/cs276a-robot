@@ -90,6 +90,13 @@ class Localizer:
             raise ValueError('estimated robot lies outside workspace')
         return x, y, math.atan2(base[1, 0], base[0, 0])
 
+    def estimate_tag(self, measurements, key, stamp):
+        """Return an independent reference-tag pose without requiring a second tag."""
+        for tag, transform in measurements:
+            if tag == key:
+                return Feedback(*self.candidate(key, transform), stamp, (key,))
+        raise ValueError(f'goal reference {key[0]}:{key[1]} unavailable')
+
     def estimate(self, measurements, stamp):
         """Average the agreeing majority in meters and circular headings in radians."""
         # recover independent poses from mapped tags

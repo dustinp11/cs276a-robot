@@ -7,8 +7,9 @@
   `/hw4/start`, and `/hw4/stop`. Extend their internals as features are added.
 - Keep physical measurements in `config/environment.json`; use
   `config/motion.yaml` as the shared source for mapper/controller calibration.
-- Use forward `[0.42, 0.42]`, increased from `[0.4, 0.4]` at the user's request
-  after the physical run stopped about 20 cm short of the final mark. This input
+- Use forward `[0.43, 0.43]`, increased at the user's request after the
+  `[0.42, 0.42]` run stopped about 10 cm short. The earlier `[0.4, 0.4]`
+  run stopped about 20 cm short of the final mark. This input
   change is not a measured speed calibration. The user observed that
   `[0.185, 0.15]` does not move the robot; do not restore those HW3 defaults.
 - Forward speed 0.567333 m/s is a historical estimate from the older mapper,
@@ -38,16 +39,18 @@
   must report unimplemented before hardware starts, without falling back to fast.
 - Start fast mode from the configured pose without mandatory initial visual
   acquisition. Execute full calibrated timed turns and up to one-second drives.
-  The latest user request is **NO 360 / NO TAG SEARCH**, correction only at the
-  END. Default to `visual_feedback: at_goal`, `tag_search_enabled: false`, and
-  `feedback_required: false`. Follow the entire frozen path using prediction,
-  then stop for visual correction only within the predicted final goal tolerance.
-  Keep correction active once enabled, even after a large accepted position update.
-  Cap correction drives to 0.10 m and half the remaining distance, checking fresh
-  stopped poses after each. Preserve the calibrated motor inputs.
-  Never start a search when the search flag is false. Missing final feedback must
-  produce an unverified predicted finish; ordinary turns toward the goal remain.
-  Other feedback modes and search are optional baselines, not this run's defaults.
+  Keep **NO 360 / NO TAG SEARCH**. The latest request slows the final approach
+  and localizes from wall tag 3: default `visual_feedback: near_goal`,
+  `tag_search_enabled: false`, and `feedback_required: false`. Follow the path
+  using prediction until the final leg is within 0.30 m predicted goal distance.
+  Stop between correction drives, capped to 0.08 m and half the remaining distance.
+  Use ONLY the independent `36h11:3` pose buffer for the goal approach. This is
+  an explicit single-tag exception to the normal two-tag consensus rule; keep
+  capture-age, quality, geometry, and three stable stopped-frame checks.
+  Keep approach correction active after a pose update. If no fresh stable goal
+  reference arrives within 6 seconds after settling, stop unverified and name the
+  missing reference. Never substitute fused poses or start a recovery spin.
+  Preserve calibrated forward inputs and ordinary goal correction turns.
 - At waypoint checks, accept stable bounded corrections even when command
   prediction drifted by more than the usual optional correction gate. Keep the
   same target and correct when feedback is usable. If feedback stays missing,

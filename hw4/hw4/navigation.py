@@ -26,7 +26,7 @@ class Navigator:
         self.commanded_distance, self.segment_budget = 0.0, None
         self.feedback_required = policy['feedback_required']
         self.visual_feedback_mode = policy['visual_feedback']
-        self.goal_feedback_active = False
+        self.goal_feedback_active, self.using_goal_reference = False, False
         self.motion_clearance = grid.margin
         self.checkpoint_attempts = 0
         self.search, self.search_attempted = None, False
@@ -68,8 +68,12 @@ class Navigator:
         self.state, self.reason, self.command = state, reason, (0.0, 0.0)
         return self.command
 
-    def tick(self, now, samples):
-        """Return forward m/s and signed rad/s for the next 20 Hz control tick."""
+    def tick(self, now, samples, goal_samples=None):
+        """Return commands, using independent reference-tag samples during the goal approach."""
+        self.using_goal_reference = self.goal_feedback_active and goal_samples is not None
+        if self.using_goal_reference:
+            samples = goal_samples
+
         # enforce mission duration and watchdog timing
         if self.finished:
             return 0.0, 0.0
@@ -189,7 +193,9 @@ class Navigator:
         self.wait_for_feedback(now)
         self.state = 'verifying'
         if not self.feedback_required:
-            self.deadline = self.after + self.policy['search_observation_wait_s']
+            wait = (self.policy['goal_feedback_wait_s'] if self.goal_feedback_active
+                    else self.policy['search_observation_wait_s'])
+            self.deadline = self.after + wait
         self.reason = ('correcting goal approach with fresh AprilTag observations'
                        if self.goal_feedback_active else
                        f'verifying waypoint {self.index} with fresh AprilTag observations')
@@ -204,6 +210,9 @@ class Navigator:
         pose = checkpoint_pose(samples, self.after, now, self.policy, final)
         if pose is None:
             if now >= self.deadline:
+                if self.using_goal_reference:
+                    tag = f"{self.policy['goal_reference_family']}:{self.policy['goal_reference_id']}"
+                    return self.finish('unverified', f'fresh stable goal reference {tag} unavailable; no search performed')
                 if not self.feedback_required and not self.search_attempted:
                     return self.begin_search(now)
                 if not self.feedback_required:
@@ -310,7 +319,9 @@ class Navigator:
             return 'checkpoint localization correction exceeds heading limit'
         self.expected, self.measured = (pose.x, pose.y, pose.yaw), pose
         self.motion_clearance = min(self.grid.margin, clearance)
-        self.pose_source = 'measured AprilTag checkpoint'
+        self.pose_source = ('measured goal reference '
+                            f"{self.policy['goal_reference_family']}:{self.policy['goal_reference_id']}"
+                            if self.using_goal_reference else 'measured AprilTag checkpoint')
         self.feedback_note = f'checkpoint correction accepted; target distance {math.dist(pose.xy, self.path[self.index]):.3f} m'
         return None
 

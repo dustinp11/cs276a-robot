@@ -118,28 +118,36 @@ substitutes an older latest TF for the requested image timestamp.
    `/hw4/start`; no initial visual acquisition is required.
 2. Execute the full turn toward the current waypoint using the measured motor
    pair and full-rotation calibration, then drive up to one second per segment.
-3. The default is `visual_feedback: at_goal`: ignore observations throughout
-   the planned traversal to **(65, 229.5) cm**. Advance intermediate targets by
-   prediction. Only stop for visual correction once prediction reaches the end
-   within the 5 cm goal tolerance. Camera observations are still recorded.
-4. At that end stop, obtain fresh stable tag estimates and correct the measured
-   position error. Limit each correction drive to 10 cm and half the remaining
-   distance; verify again after each drive. Keep end correction active even if
-   vision places the robot farther from the goal. Forward motor inputs are `[0.42, 0.42]`.
-5. **No tag-search spins:** `tag_search_enabled: false` disables all recovery
-   searches. Ordinary planned turns and turns toward a measured goal correction
-   remain. If usable feedback does not arrive within three seconds after settling,
-   use prediction fallback and report an unverified finish instead of searching.
-6. A visually confirmed goal reports `complete`; a predicted-only route end
-   reports `unverified`, with `goal_reached: false`. Status events preserve the
-   unverified waypoint indices. Existing watchdog, clearance, correction, travel,
-   and mission-time limits remain active.
+3. The default is `visual_feedback: near_goal`: ignore observed poses during
+   initial travel to **(65, 229.5) cm**, then stop at 30 cm predicted goal distance.
+4. Refine position using **wall tag 3, family 36h11**, whose mapped center is
+   (100, 292.5) cm. Use its independent robot pose even if it is the only visible
+   tag; the normal two-tag consensus rule still applies to general localization.
+   Detection quality, geometry, capture freshness, and three stable post-stop
+   observations remain required. Obstacle tag 3 (41h12) cannot substitute for it.
+5. Limit correction drives to 8 cm and half the remaining distance, then stop,
+   settle, and measure again. Forward inputs remain `[0.43, 0.43]`; short drives
+   separated by measurement stops slow the approach without claiming a newly
+   calibrated lower motor speed. Keep refinement active after position updates.
+6. **No tag-search spins:** `tag_search_enabled: false`. If fresh stable wall-tag-3
+   feedback is unavailable for six seconds after settling, stop unverified with
+   an explicit reference-tag reason. No fallback to other tags or recovery spins.
+   Ordinary planned turns and turns toward measured goal corrections remain.
+7. A visually confirmed goal reports `complete`; an unconfirmed finish reports
+   `unverified`, with `goal_reached: false`. Existing watchdog, clearance,
+   correction, travel, and mission-time limits remain active.
+
+`goal_observations.csv` records each independent wall-tag-3 estimate or rejection,
+including captures that cannot pass the multi-tag consensus filter. Send it with
+`commands.csv` when evaluating final correction. Commands and status use this
+reference stream for their measured goal pose during the approach; general
+`observations.csv` continues recording multi-tag consensus separately.
 
 Select visual correction timing in `config/navigation.yaml`:
 
-- `visual_feedback: at_goal`: current default; correction only at the predicted
+- `visual_feedback: at_goal`: correction only at the predicted
   route end. Tag search is disabled independently by `tag_search_enabled: false`.
-- `visual_feedback: near_goal`: start correction at 30 cm predicted goal distance.
+- `visual_feedback: near_goal`: current default; start correction at 30 cm predicted goal distance.
 - `visual_feedback: throughout`: visual corrections throughout the route.
 - `visual_feedback: "off"`: ignore vision for the entire run and finish unverified.
 
@@ -175,14 +183,16 @@ controller use the same file and HW3 calibration readers.
 
 | Motion | Left input | Right input | Nominal model velocity |
 | --- | --- | --- | --- |
-| Straight | 0.42 | 0.42 | 0.567333 m/s (historical estimate) |
+| Straight | 0.43 | 0.43 | 0.567333 m/s (historical estimate) |
 | Counterclockwise | -0.43 | 0.43 | +1.769911 rad/s (360° in 3.55 s) |
 | Clockwise | 0.4 | -0.4 | -1.750191 rad/s (360° in 3.59 s) |
 
 The new measured turn inputs and direction-specific rates replace the earlier
 HW3 turn calibration. The user reported on November 24, 2026 that `[0.185, 0.15]` does not move
 the robot on the current surface and selected `[0.4, 0.4]`, later increased to `[0.42, 0.42]` after a run
-stopped about 20 cm short. This increase is not a measured speed calibration. Do not revert to the
+stopped about 20 cm short. At `[0.42, 0.42]`, the user reported about 10 cm
+remaining; the current inputs are `[0.43, 0.43]`. These increases are not a
+measured speed calibration. Do not revert to the
 smaller pair. The 0.567333 m/s model comes from the older `robot_testing` mapper;
 it needs physical remeasurement on the current surface. Reverse is uncalibrated. Smaller requested speeds do not slow the fixed-pair mapper. Commands are
 refreshed at 20 Hz; the reused driver's watchdog is 0.15 s.

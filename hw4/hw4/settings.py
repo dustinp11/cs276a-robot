@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 
 from hw4.planner import get_mode
+from hw4.tags import canonical_family
 
 
 def load_settings(path):
@@ -14,7 +15,8 @@ def load_settings(path):
     nav = data['navigation']
     get_mode(nav['mode'])
     for name, value in nav.items():
-        if name in ('mode', 'feedback_required', 'visual_feedback', 'tag_search_enabled'):
+        if name in ('mode', 'feedback_required', 'visual_feedback', 'tag_search_enabled',
+                    'goal_reference_family', 'goal_reference_id'):
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f'navigation.{name} must be positive and finite.')
@@ -29,6 +31,10 @@ def load_settings(path):
         raise ValueError('Required feedback needs visual_feedback: throughout.')
     if nav['goal_step_fraction'] > 1:
         raise ValueError('navigation.goal_step_fraction must be at most one.')
+
+    canonical_family(nav['goal_reference_family'])
+    if type(nav['goal_reference_id']) is not int or nav['goal_reference_id'] < 0:
+        raise ValueError('navigation.goal_reference_id must be a nonnegative integer.')
 
     # constrain sampling and footprint integration limits
     for name in ('stable_samples', 'max_turns', 'max_checkpoint_corrections'):

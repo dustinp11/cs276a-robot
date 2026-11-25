@@ -449,9 +449,9 @@ class RunOneTests(unittest.TestCase):
         pose = Feedback(0.55, 2.1, math.pi / 2, 11)
         self.assertIsNone(nav.apply_checkpoint_pose(pose))
         self.assertTrue(nav.visual_feedback_enabled())
-        self.assertAlmostEqual(nav.approach_step_limit(pose, path[-1]), 0.1)
+        self.assertAlmostEqual(nav.approach_step_limit(pose, path[-1]), policy['goal_max_step_m'])
         self.assertEqual(nav.drive_segment(11, pose, path[-1]), (self.forward.speed_mps, 0))
-        self.assertAlmostEqual(nav.deadline - 11, 0.1 / self.forward.speed_mps)
+        self.assertAlmostEqual(nav.deadline - 11, policy['goal_max_step_m'] / self.forward.speed_mps)
         closer = Feedback(0.55, 2.42, math.pi / 2, 12)
         self.assertAlmostEqual(nav.approach_step_limit(closer, path[-1]), 0.04)
 
@@ -482,7 +482,7 @@ class RunOneTests(unittest.TestCase):
         self.assertEqual(nav.state, 'moving')
         self.assertTrue(nav.goal_feedback_active)
         self.assertAlmostEqual(nav.segment_pose.y, 2.12)
-        self.assertAlmostEqual(nav.deadline - nav.segment_start, 0.1 / self.forward.speed_mps)
+        self.assertAlmostEqual(nav.deadline - nav.segment_start, policy['goal_max_step_m'] / self.forward.speed_mps)
         self.assertEqual(nav.index, 1)
         self.assertEqual(nav.unverified_waypoints, [])
 
@@ -525,6 +525,65 @@ class RunOneTests(unittest.TestCase):
         self.assertEqual(state, 'unverified', reason)
         self.assertIsNone(nav.search)
         self.assertIsNone(nav.measured)
+
+    def test_goal_reference_uses_wall_tag_three_without_second_tag(self):
+        """Recover a single wall-tag pose while preserving consensus requirements elsewhere."""
+        # compose the measured reference in the real map
+        environment = load_validated_environment(ROOT / 'config/environment.json')
+        model = Localizer(environment, self.settings['camera_mount'], self.settings['localization'])
+        key = ('36h11', 3)
+        base = make_transform(euler_to_rotation_matrix(0, 0, math.pi / 3), [0.65, 2.1, 0])
+        transform = np.linalg.inv(base @ np.linalg.inv(model.camera_base)) @ model.landmarks[key]
+        pose = model.estimate_tag([(key, transform)], key, 10)
+        np.testing.assert_allclose((pose.x, pose.y, pose.yaw), (0.65, 2.1, math.pi / 3), atol=1e-10)
+        self.assertEqual(pose.tags, (key,))
+        with self.assertRaisesRegex(ValueError, 'insufficient tags'):
+            model.estimate([(key, transform)], 10)
+        with self.assertRaisesRegex(ValueError, 'unavailable'):
+            model.estimate_tag([(('41h12', 3), transform)], key, 10)
+
+    def test_goal_correction_uses_reference_samples_instead_of_fused_pose(self):
+        """Use tag three to correct a short stop despite conflicting multi-tag feedback."""
+        # prefer the independent reference only in approach
+        policy = dict(self.policy, feedback_required=False, visual_feedback='near_goal', tag_search_enabled=False)
+        path = [(0.55, 0.55), (0.55, 2.5)]
+        nav = Navigator(self.grid, path, self.forward, self.turn, policy, 10, math.pi / 2)
+        nav.expected = (0.55, 2.22, math.pi / 2)
+        self.assertTrue(nav.visual_feedback_enabled())
+        nav.begin_verification(10)
+        after = nav.after
+        goal = [Feedback(0.55, 2.12, math.pi / 2, after + dt, (('36h11', 3),))
+                for dt in (0.01, 0.11, 0.21)]
+        fused = [Feedback(0.70, 2.46, math.pi / 2, p.stamp) for p in goal]
+        for i in range(1, 40):
+            now = 10 + i * 0.05
+            nav.tick(now, [p for p in fused if p.stamp <= now], [p for p in goal if p.stamp <= now])
+            if nav.state == 'moving':
+                break
+        self.assertEqual(nav.state, 'moving')
+        self.assertAlmostEqual(nav.segment_pose.y, 2.12)
+        self.assertIn('36h11:3', nav.pose_source)
+        self.assertEqual(nav.unverified_waypoints, [])
+        self.assertIsNone(nav.search)
+
+    def test_missing_reference_cannot_be_replaced_by_other_visible_tags(self):
+        """Stop with an explicit missing-reference result and never spin to search."""
+        policy = dict(self.policy, feedback_required=False, visual_feedback='near_goal', tag_search_enabled=False)
+        nav = Navigator(self.grid, [(0.55, 0.55), (0.55, 2.5)], self.forward, self.turn, policy, 10)
+        nav.expected = (0.55, 2.22, math.pi / 2)
+        self.assertTrue(nav.visual_feedback_enabled())
+        nav.begin_verification(10)
+        for i in range(1, 180):
+            now = 10 + i * 0.05
+            fused = [Feedback(0.55, 2.49, math.pi / 2, now - age) for age in (0.3, 0.2, 0.1)]
+            nav.tick(now, fused, goal_samples=[])
+            if nav.finished:
+                break
+        self.assertEqual(nav.state, 'unverified')
+        self.assertIn('36h11:3 unavailable', nav.reason)
+        self.assertIsNone(nav.measured)
+        self.assertIsNone(nav.search)
+        self.assertEqual(nav.command, (0, 0))
 
     def test_off_mode_never_uses_available_vision_or_searches(self):
         """Finish predicted traversal unverified even when ideal feedback is available."""
@@ -711,7 +770,7 @@ class RunOneTests(unittest.TestCase):
         mapper = VelocityMapper(self.turn, self.forward)
         self.assertAlmostEqual(2 * math.pi / self.turn.ccw_radps, 3.55)
         self.assertAlmostEqual(2 * math.pi / self.turn.cw_radps, 3.59)
-        for command, pair in [((self.forward.speed_mps, 0), (0.42, 0.42)), ((0, 1), (-0.43, 0.43)),
+        for command, pair in [((self.forward.speed_mps, 0), (0.43, 0.43)), ((0, 1), (-0.43, 0.43)),
                               ((0, -1), (0.4, -0.4)), ((0, 0), (0., 0.))]:
             applied = mapper.map_command(*command)
             self.assertEqual((applied.left, applied.right), pair)

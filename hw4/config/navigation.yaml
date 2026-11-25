@@ -3,13 +3,16 @@
     # select fast; safe remains an unimplemented skeleton
     navigation:
       mode: fast
-      # follow the plan; use vision only at its predicted end
+      # follow the plan; refine the final approach from wall tag 3
       feedback_required: false
       # options: at_goal, near_goal, throughout, off
-      visual_feedback: at_goal
+      visual_feedback: near_goal
+      goal_reference_family: 36h11
+      goal_reference_id: 3
+      goal_feedback_wait_s: 6.0
       tag_search_enabled: false
       visual_enable_distance_m: 0.30
-      goal_max_step_m: 0.10
+      goal_max_step_m: 0.08
       goal_step_fraction: 0.5
       grid_resolution_m: 0.05
       planning_buffer_m: 0.05

@@ -29,12 +29,37 @@ class PoseSource:
         self.max_age = settings['navigation']['pose_timeout_s']
         self.samples, self.frames = deque(maxlen=30), CaptureBuffer()
         self.families = mapped_families(environment)
+        self.setup_goal_reference(settings['navigation'])
         self.buffer = Buffer(node=node)
         self.listener = TransformListener(self.buffer, node)
         self.subscriptions = [node.create_subscription(
             AprilTagDetectionArray, detection_topic(family),
             partial(self.observe, family), 1) for family in self.families]
         self.publisher = node.create_publisher(PoseStamped, '/hw4/pose', 10)
+
+    def setup_goal_reference(self, policy):
+        """Keep reference-tag feedback separate from multi-tag consensus."""
+        # record a single reference without weakening consensus
+        self.goal_tag = canonical_family(policy['goal_reference_family']), policy['goal_reference_id']
+        if self.goal_tag not in self.model.landmarks:
+            raise ValueError('Configured goal reference tag is not in the measured map.')
+        self.goal_samples = deque(maxlen=30)
+        self.goal_log = self.log.open_csv('goal_observations.csv', [
+            'time_s', 'image_stamp_ns', 'accepted', 'reason', 'tag', 'x_m', 'y_m', 'yaw_rad'])
+
+    def record_goal_reference(self, now, ns, age, measurements):
+        """Save the selected tag even when the multi-tag frame cannot establish consensus."""
+        label = f'{self.goal_tag[0]}:{self.goal_tag[1]}'
+        try:
+            pose = self.model.estimate_tag(measurements, self.goal_tag, now - age)
+        except (ValueError, np.linalg.LinAlgError) as error:
+            self.goal_log.writerow([now, ns, False, str(error), label, '', '', ''])
+            return
+
+        # preserve capture timing for stopped confirmation
+        self.goal_samples.append(pose)
+        self.goal_log.writerow([now, ns, True, 'independent goal reference', label,
+                               pose.x, pose.y, pose.yaw])
 
     def observe(self, family, message):
         """Combine family packets without counting an image more than once."""
@@ -112,6 +137,7 @@ class PoseSource:
             measurements, missing = self.measurements(capture, stamp)
             if missing and now - capture.received < 0.15:
                 return
+            self.record_goal_reference(now, ns, age, measurements)
             if missing and not measurements:
                 self.reject(now, ns, 'timestamped TF unavailable for mapped tags', self.candidate_details(measurements))
                 return

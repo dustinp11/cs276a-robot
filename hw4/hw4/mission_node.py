@@ -126,7 +126,7 @@ class MissionNode(Node):
             now = time.monotonic()
             self.poses.update(now)
             if self.navigator is not None:
-                command = self.navigator.tick(now, self.poses.samples)
+                command = self.navigator.tick(now, self.poses.samples, self.poses.goal_samples)
                 self.publish_command(command)
                 self.record_tick(now, command)
         except Exception as error:
@@ -148,7 +148,8 @@ class MissionNode(Node):
         """Record measured feedback separately from command-predicted pose and state."""
         # keep observations separate from command predictions
         nav = self.navigator
-        sample = self.poses.samples[-1] if self.poses.samples else None
+        samples = self.poses.goal_samples if nav.goal_feedback_active else self.poses.samples
+        sample = samples[-1] if samples else None
         measured = (sample.x, sample.y, sample.yaw) if sample else ('', '', '')
         age = now - sample.stamp if sample else ''
         target = nav.path[min(nav.index, len(nav.path) - 1)]
@@ -180,6 +181,7 @@ class MissionNode(Node):
                    'search_attempted': nav.search_attempted,
                    'visual_feedback_mode': nav.visual_feedback_mode,
                    'visual_feedback_enabled': nav.visual_feedback_enabled(),
+                   'goal_reference_tag': f"{self.policy['goal_reference_family']}:{self.policy['goal_reference_id']}",
                    'target_xy_m': target, 'measured_target_distance_m': measured_distance,
                    'predicted_target_distance_m': predicted_distance,
                    'measured_goal_distance_m': goal_distance,
