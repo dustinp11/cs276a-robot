@@ -406,15 +406,17 @@ class RunOneTests(unittest.TestCase):
         unsafe = Feedback(1.2 - grid.radius - 0.01, 1.5, math.pi, 12)
         self.assertIn('too close to collision', nav.apply_checkpoint_pose(unsafe))
 
-    def test_goal_requires_all_fresh_frames_inside_three_centimeters(self):
+    def test_goal_requires_all_fresh_frames_inside_goal_tolerance(self):
         """A close average cannot hide one confirming observation outside tolerance."""
         # hold the target until every frame agrees
         path = [(0.55, 0.55), (0.55, 1.0)]
         nav = Navigator(self.grid, path, self.forward, self.turn, self.policy, 10)
         nav.expected = 0.55, 1.0, math.pi / 2
         nav.begin_verification(10)
+        tolerance = self.policy['goal_tolerance_m']
         samples = [Feedback(0.55 + dx, 1.0, math.pi / 2, stamp, (0,))
-                   for dx, stamp in zip((0.02, 0.021, 0.031), (11.1, 11.3, 11.5))]
+                   for dx, stamp in zip((tolerance - 0.01, tolerance - 0.009, tolerance + 0.001),
+                                       (11.1, 11.3, 11.5))]
         self.assertEqual(nav.tick(11.55, samples), (0, 0))
         self.assertEqual(nav.state, 'verifying')
         self.assertEqual(nav.index, 1)
@@ -425,6 +427,30 @@ class RunOneTests(unittest.TestCase):
         self.assertEqual(nav.tick(12.05, samples), (0, 0))
         self.assertEqual(nav.state, 'complete')
         self.assertEqual(nav.index, 2)
+
+    def test_goal_refinement_rejects_the_logged_twenty_four_centimeter_jump(self):
+        """Do not steer toward a new position cluster after already approaching the goal."""
+        # reject the observed localization cluster switch
+        grid = build_grid(self.environment)
+        path = [(0.55, 0.55), (0.75, 1.54)]
+        nav = Navigator(grid, path, self.forward, self.turn, self.policy, 10)
+        nav.expected = 0.775, 1.527, math.radians(-22.9)
+        nav.measured = Feedback(0.67, 1.571, math.radians(112.4), 10)
+        bad = Feedback(0.508, 1.522, math.radians(28.3), 12)
+        error = nav.apply_checkpoint_pose(bad)
+        self.assertIn('position limit', error)
+        self.assertEqual(nav.expected[:2], (0.775, 1.527))
+
+    def test_two_tag_estimates_twenty_four_centimeters_apart_are_not_averaged(self):
+        """Reject the observed two-cluster disagreement instead of accepting their midpoint."""
+        # preserve independent tag evidence before fusion
+        model = Localizer(self.environment, self.settings['camera_mount'], self.settings['localization'])
+        measurements = []
+        for index, (key, world) in enumerate(model.landmarks.items()):
+            base = make_transform(np.eye(3), [0.55 + index * 0.24, 0.55, 0])
+            measurements.append((key, np.linalg.inv(base @ np.linalg.inv(model.camera_base)) @ world))
+        with self.assertRaisesRegex(ValueError, 'disagree'):
+            model.estimate(measurements, 10)
 
     def test_waypoint_verification_cannot_use_pre_stop_or_stale_frames(self):
         """Repeated or old observations do not confirm an intermediate waypoint."""

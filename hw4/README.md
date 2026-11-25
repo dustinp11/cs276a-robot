@@ -119,7 +119,7 @@ substitutes an older latest TF for the requested image timestamp.
    to two seconds while stopped, but the newest must be at most one second old.
 4. Replace dead reckoning with the measured checkpoint pose. If still short or
    off course, retain the target, turn toward it, and continue correcting.
-5. Require **all three confirming goal observations within 3 cm** of the active
+5. Require **all three confirming goal observations within 5 cm** of the active
    goal. A predicted endpoint cannot finish the run. Missing observations or
    exhausted correction budgets stop with an explicit failure.
 
@@ -130,8 +130,15 @@ small final corrections; assess actual accuracy from physical measurements.
 no longer makes waypoint verification optional. `true` additionally requires
 initial acquisition and measured continuous-turn feedback.
 
-Consistent checkpoint corrections can override up to 1 m of position drift and
-90° of heading drift. A measured robot already inside the usual safety margin
+The physical run reached a 3–5 cm goal error, then oscillated while chasing a
+3 cm threshold. The current goal tolerance is 5 cm, still requiring three fresh
+confirming observations. Once a measured checkpoint is within 20 cm of the goal,
+subsequent position corrections over 12 cm are rejected rather than chased.
+Independent tag solutions must agree within 5 cm before averaging; the earlier
+25 cm gate admitted substantially different position clusters.
+
+Consistent checkpoint corrections can otherwise override up to 1 m of position
+drift and 90° of heading drift. A measured robot already inside the usual safety margin
 may recover outward while preserving its measured initial body clearance, with
 an absolute 3 cm clearance floor. It must move toward greater clearance; normal
 10 cm checks resume after recovery. Unsafe poses or a blocked corrective route
@@ -179,7 +186,8 @@ and videos of the physical run. Results are excluded from Git.
   Axes and the text table use centimeters to match the survey. These are
   planned coordinates, not a measured robot trajectory.
 - `observations.csv`: capture timestamps, accepted/rejected feedback, rejection
-  reasons, measured world poses, tag IDs, and camera-to-tag ranges in meters.
+  reasons, measured world poses, tag IDs, camera-to-tag ranges in meters, and each tag
+  candidate world pose before averaging, including rejected observations.
 - `commands.csv`: state/waypoint, nominal commands, feedback age, measured pose,
   command-predicted pose, correction budgets, measured body clearance, turn
   target/progress angles, pose source, correction reason, measured/predicted

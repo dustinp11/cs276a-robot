@@ -11,7 +11,10 @@
       turn_feedback_timeout_s: 0.35
       turn_timeout_s: 8.0
       position_tolerance_m: 0.08
-      goal_tolerance_m: 0.03
+      # avoid chasing centimeter noise with fixed-speed motors
+      goal_tolerance_m: 0.05
+      goal_refine_radius_m: 0.20
+      goal_max_correction_m: 0.12
       checkpoint_window_s: 2.0
       checkpoint_max_correction_m: 1.0
       checkpoint_max_heading_rad: 1.5707963267948966
@@ -46,5 +49,5 @@
       max_tag_distance_m: 5.0
       max_height_error_m: 0.20
       max_tilt_deg: 20.0
-      max_disagreement_m: 0.25
+      max_disagreement_m: 0.05
       max_disagreement_rad: 0.3490658503988659

@@ -197,7 +197,12 @@ class Navigator:
         clearance = self.grid.clearance(pose.xy)
         if clearance < self.policy['recovery_min_clearance_m']:
             return 'checkpoint pose too close to collision for automatic correction'
-        if self.expected and math.dist(pose.xy, self.expected[:2]) > self.policy['checkpoint_max_correction_m']:
+        limit = self.policy['checkpoint_max_correction_m']
+        refining = (self.index == len(self.path) - 1 and self.measured is not None
+                    and math.dist(self.measured.xy, self.path[-1]) <= self.policy['goal_refine_radius_m'])
+        if refining:
+            limit = min(limit, self.policy['goal_max_correction_m'])
+        if self.expected and math.dist(pose.xy, self.expected[:2]) > limit:
             return 'checkpoint localization correction exceeds position limit'
         if self.expected and abs(wrap_angle(pose.yaw - self.expected[2])) > self.policy['checkpoint_max_heading_rad']:
             return 'checkpoint localization correction exceeds heading limit'

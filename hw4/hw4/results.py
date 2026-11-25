@@ -47,7 +47,7 @@ class RunLog:
         # open separate observation and command streams
         self.handles = []
         self.observations = self.open_csv('observations.csv', [
-            'time_s', 'image_stamp_ns', 'accepted', 'reason', 'x_m', 'y_m', 'yaw_rad', 'tag_ids', 'camera_tag_ranges_m'])
+            'time_s', 'image_stamp_ns', 'accepted', 'reason', 'x_m', 'y_m', 'yaw_rad', 'tag_ids', 'camera_tag_ranges_m', 'tag_pose_candidates'])
         self.commands = self.open_csv('commands.csv', [
             'time_s', 'state', 'waypoint', 'reason', 'linear_mps', 'angular_radps',
             'pose_age_s', 'measured_x_m', 'measured_y_m', 'measured_yaw_rad',

@@ -43,8 +43,9 @@
   prediction drifted by more than the usual optional correction gate. Keep the
   same target and correct until measured arrival; fail explicitly if no usable
   observations arrive or correction budgets are exhausted.
-- Goal success requires all confirming fresh observations within 0.03 m of the
-  active goal. This is measured localization tolerance, not exact ground truth.
+- Goal success requires all confirming fresh observations within 0.05 m of the
+  active goal. The 0.03 m threshold caused oscillations around a 3–5 cm error in
+  the physical run; do not restore it without improved calibration. This is measured localization tolerance, not exact ground truth.
 - If measured drift placed the robot inside the 0.10 m safety margin, allow only
   outward recovery preserving its measured starting clearance, never below the
   configured recovery floor. Log that temporary clearance and the correction.
@@ -66,3 +67,11 @@
 - The current physical test starts at 180 degrees and stops at intermediate
   goal (0.75, 1.54) m, left of the obstacle. The original final goal is saved
   in `final_goal` and must not be executed automatically during this test.
+
+- For near-goal refinement, reject corrections over 0.12 m after a measured
+  checkpoint already placed the robot within 0.20 m. The physical log switched
+  between stationary pose clusters about 0.24 m apart; do not chase those jumps.
+  Independent tag solutions must agree within 0.05 m before averaging. Log each
+  tag's candidate pose even when the combined observation is rejected.
+- Confirmed obstacle tag detection-square size remains 0.185 m; the user briefly
+  said 0.18 m then corrected it back to 0.185 m. Do not apply a whole-pattern ratio.

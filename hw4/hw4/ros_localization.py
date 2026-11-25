@@ -78,6 +78,19 @@ class PoseSource:
 
         return result, missing
 
+    def candidate_details(self, measurements):
+        """Expose each tag's independent world pose before combining estimates."""
+        # identify which landmark produces a position bias
+        details = {}
+        for key, transform in measurements:
+            label = f'{key[0]}:{key[1]}'
+            try:
+                details[label] = {'pose_xy_yaw': self.model.candidate(key, transform),
+                                  'camera_range_m': float(np.linalg.norm(transform[:3, 3]))}
+            except (ValueError, np.linalg.LinAlgError) as error:
+                details[label] = {'rejected': str(error)}
+        return details
+
     def update(self, now):
         """Accept one fresh image after briefly combining both detector results."""
         # preserve distinct capture identities across families
@@ -92,16 +105,17 @@ class PoseSource:
 
         # allow timestamped transforms to arrive asynchronously
         stamp = Time(nanoseconds=ns, clock_type=self.node.get_clock().clock_type)
+        measurements = []
         try:
             measurements, missing = self.measurements(capture, stamp)
             if missing and now - capture.received < 0.15:
                 return
             if missing and not measurements:
-                self.reject(now, ns, 'timestamped TF unavailable for mapped tags')
+                self.reject(now, ns, 'timestamped TF unavailable for mapped tags', self.candidate_details(measurements))
                 return
             pose = self.model.estimate(measurements, now - age)
         except (ValueError, np.linalg.LinAlgError) as error:
-            self.reject(now, ns, str(error))
+            self.reject(now, ns, str(error), self.candidate_details(measurements))
             return
 
         # publish one measured pose per image
@@ -110,7 +124,7 @@ class PoseSource:
         reason = 'mapped landmark estimate; some TF unavailable' if missing else 'mapped landmark estimate'
         ranges = {f'{key[0]}:{key[1]}': round(float(np.linalg.norm(transform[:3, 3])), 4)
                   for key, transform in measurements if key in pose.tags}
-        self.log.observations.writerow([now, ns, True, reason, pose.x, pose.y, pose.yaw, pose.tags, json.dumps(ranges)])
+        self.log.observations.writerow([now, ns, True, reason, pose.x, pose.y, pose.yaw, pose.tags, json.dumps(ranges), json.dumps(self.candidate_details(measurements))])
         output = PoseStamped()
         output.header.stamp = next(iter(capture.messages.values())).header.stamp
         output.header.frame_id = 'map'
@@ -118,7 +132,7 @@ class PoseSource:
         output.pose.orientation.z, output.pose.orientation.w = math.sin(pose.yaw / 2), math.cos(pose.yaw / 2)
         self.publisher.publish(output)
 
-    def reject(self, now, stamp, reason):
+    def reject(self, now, stamp, reason, candidates=None):
         """Record a rejection without refreshing the age of the previous pose."""
         self.frames.finish(stamp)
-        self.log.observations.writerow([now, stamp, False, reason, '', '', '', '', ''])
+        self.log.observations.writerow([now, stamp, False, reason, '', '', '', '', '', json.dumps(candidates or {})])
