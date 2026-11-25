@@ -7,10 +7,14 @@
   `/hw4/start`, and `/hw4/stop`. Extend their internals as features are added.
 - Keep physical measurements in `config/environment.json`; use
   `config/motion.yaml` as the shared source for mapper/controller calibration.
-- Preserve effective HW3 `mission:=slam_square` motion values unless the user
-  supplies new calibration: forward `[0.185, 0.15]` at nominal 0.203 m/s;
-  CCW `[-0.35, 0.35]`, CW `[0.37, -0.37]`, nominal pi/2 rad/s magnitudes.
-  The 0.203 m/s measurement preceded the left trim increase to 0.185.
+- Use forward `[0.4, 0.4]`, explicitly requested by the user on November 24,
+  2026. The user observed that `[0.185, 0.15]` does not move the robot on the
+  current surface. Do not restore that pair from HW3 defaults.
+- Forward speed 0.567333 m/s is a historical estimate from the older mapper,
+  not a new measurement on this surface. Keep mapper and pulse timing aligned;
+  update this speed after physical calibration. Reverse remains uncalibrated.
+- Preserve HW3 turns: CCW `[-0.35, 0.35]`, CW `[0.37, -0.37]`, nominal
+  pi/2 rad/s magnitudes, unless the user supplies new turn calibration.
 - Reuse HW3's calibration readers, mapper, and motor driver. Do not silently
   fall back to HW2 values or the overridden HW3 default CCW pair.
 - HW3 mapping selects fixed motor pairs, not variable-speed motion. Keep

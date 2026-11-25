@@ -39,7 +39,7 @@ JSON does not allow comments or trailing commas.
 The four obstacle positions are **41h12 tag centers**, not physical corners.
 They are now part of `landmarks`, alongside the 36h11 wall tags. IDs 1–4 have
 confirmed face headings 180°, 90°, 0°, and 270°, respectively, center height
-0.187 m, and printed size 0.172 m. The confirmed physical obstacle rectangle is
+0.187 m, and printed size 0.185 m. The confirmed physical obstacle rectangle is
 x = 1.14–1.76 m and y = 1.23–1.85 m; it is not a diamond.
 
 One detector handles each family on `/detections/tag36h11` and `/detections/tag41h12`.
@@ -113,24 +113,29 @@ unmapped obstacle; it uses the measured obstacle map.
 
 ## Calibration baseline
 
-`config/motion.yaml` contains the **effective** HW3
-`hw3_navigation.launch.py mission:=slam_square` values. The mapper and HW4
+`config/motion.yaml` contains the user-selected forward inputs for the current
+surface and the effective HW3 `slam_square` turn values. The mapper and HW4
 controller use the same file and HW3 calibration readers.
 
 | Motion | Left input | Right input | Nominal model velocity |
 | --- | --- | --- | --- |
-| Straight | 0.185 | 0.15 | 0.203 m/s |
+| Straight | 0.4 | 0.4 | 0.567333 m/s (historical estimate) |
 | Counterclockwise | -0.35 | 0.35 | +pi/2 rad/s |
 | Clockwise | 0.37 | -0.37 | -pi/2 rad/s |
 
 The HW3 default CCW pair `[-0.40, 0.37]` was overridden by `slam_square`; it is
-not used here. HW3 measured 0.203 m/s at `[0.18, 0.15]` before raising the left
-trim to 0.185 pending remeasurement. Preserve that distinction when evaluating
-run 1. Smaller requested speeds do not slow the fixed-pair mapper. Commands are
+not used here. The user reported on November 24, 2026 that `[0.185, 0.15]` does not move
+the robot on the current surface and selected `[0.4, 0.4]`. Do not revert to the
+smaller pair. The 0.567333 m/s model comes from the older `robot_testing` mapper;
+it needs physical remeasurement on the current surface. Reverse is uncalibrated. Smaller requested speeds do not slow the fixed-pair mapper. Commands are
 refreshed at 20 Hz; the reused driver's watchdog is 0.15 s.
 
 Camera intrinsics use the same installed HW3 calibration, respecting the existing
 `CAMERA_CALIBRATION` environment override. The actual file is archived per run.
+The camera launch enables GStreamer diagnostics (`GST_DEBUG=3` unless already
+set) to expose startup failures before the driver reads its error bus. These
+messages appear in the terminal and launch logs. This is diagnostic logging,
+not a fix for a camera pipeline that cannot start.
 
 ## Data to bring back
 

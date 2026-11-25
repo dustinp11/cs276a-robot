@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, EmitEvent, ExecuteProcess, IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, EmitEvent, ExecuteProcess, GroupAction, IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler, SetEnvironmentVariable
 from launch.event_handlers import OnProcessExit
 from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -55,12 +55,18 @@ def configured_nodes(context):
 
 
 def camera_launch(calibration):
-    """Reuse HW3's camera launch and calibrated rectification settings."""
+    """Reuse HW3's camera settings with scoped GStreamer startup diagnostics."""
+    # expose pipeline failures without altering calibration
     source = PythonLaunchDescriptionSource(PathJoinSubstitution([
         FindPackageShare('robot_vision_camera'), 'launch', 'robot_vision_camera.launch.py']))
-    return IncludeLaunchDescription(source, launch_arguments={
+    camera = IncludeLaunchDescription(source, launch_arguments={
         'image_rectify': 'true', 'camera_parameter_path': calibration,
     }.items())
+    return GroupAction(actions=[
+        SetEnvironmentVariable('GST_DEBUG', EnvironmentVariable('GST_DEBUG', default_value='3')),
+        SetEnvironmentVariable('GST_DEBUG_NO_COLOR', '1'),
+        camera,
+    ], scoped=True)
 
 
 def detectors(environment):

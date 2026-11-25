@@ -244,7 +244,7 @@ class RunOneTests(unittest.TestCase):
         # exercise both active motion failure conditions
         for now, samples in [(10.05, []), (10.25, [Feedback(0.55, 0.55, 0, 10.25)])]:
             nav = Navigator(self.grid, self.plans['fast'], self.forward, self.turn, self.policy, 10)
-            nav.begin_pulse(10, Feedback(0.55, 0.55, 0, 10), 0.203, 0, 1, 'test pulse')
+            nav.begin_pulse(10, Feedback(0.55, 0.55, 0, 10), self.forward.speed_mps, 0, 1, 'test pulse')
             self.assertEqual(nav.tick(now, samples), (0, 0))
             self.assertEqual(nav.state, 'failed')
             self.assertEqual(nav.index, 1)
@@ -288,14 +288,16 @@ class RunOneTests(unittest.TestCase):
         self.assertEqual(nav.state, 'failed')
         self.assertIn('budget', nav.reason)
 
-    def test_shared_motor_mapping_preserves_effective_hw3_values(self):
+    def test_motor_mapping_preserves_requested_forward_and_hw3_turns(self):
         """Exercise actual straight, signed turn, and stop motor mapping."""
-        # retain exact asymmetric calibrated motor pairs
+        # preserve user inputs and existing turns
         mapper = VelocityMapper(self.turn, self.forward)
-        for command, pair in [((0.203, 0), (0.185, 0.15)), ((0, 1), (-0.35, 0.35)),
+        for command, pair in [((self.forward.speed_mps, 0), (0.4, 0.4)), ((0, 1), (-0.35, 0.35)),
                               ((0, -1), (0.37, -0.37)), ((0, 0), (0., 0.))]:
             applied = mapper.map_command(*command)
             self.assertEqual((applied.left, applied.right), pair)
+            if command[0] > 0:
+                self.assertEqual(applied.linear_mps, 0.567333)
 
     def test_artifact_snapshot_and_session_reuse_protection(self):
         """Preserve inputs and prevent a second mission from overwriting the first."""
