@@ -85,8 +85,8 @@ class HW4Navigator:
         goal_cm: Tuple[float, float] = (65.0, 229.5),
         position_tolerance_m: float = 0.06,
         heading_tolerance_rad: float = 0.12,  # ~6.9 deg
-        max_forward_step_m: float = 0.25,      # 25 cm bounded visual drive segments
-        drive_speed_mps: float = 0.18,         # calibrated forward speed
+        max_forward_step_m: float = 0.40,      # bounded visual drive segment (increased from 0.25m to 0.40m)
+        drive_speed_mps: float = 0.28,         # calibrated forward speed (increased from 0.18 to 0.28 m/s for faster traversal)
         turn_rate_radps: float = 1.309,        # calibrated turn rate (~4.8s per 360 deg, ~75 deg/s)
         settle_time_s: float = 1.2,            # camera stabilization pause
         max_pose_age_s: float = 3.5,           # maximum age of visual pose before declaring lost (tolerant to frame latency)
@@ -260,7 +260,8 @@ class HW4ControlNode(Node):
         self.declare_parameter('goal_y_cm', 229.5)
         self.declare_parameter('position_tolerance_m', 0.06)
         self.declare_parameter('heading_tolerance_deg', 7.0)
-        self.declare_parameter('speed_mps', 0.18)
+        self.declare_parameter('speed_mps', 0.28)
+        self.declare_parameter('max_forward_step_m', 0.40)
         self.declare_parameter('turn_time_360_s', 4.8)
         self.declare_parameter('turn_motor_power', 0.38)
         self.declare_parameter('settle_time_s', 1.2)
@@ -279,7 +280,8 @@ class HW4ControlNode(Node):
             goal_cm=(goal_x, goal_y),
             position_tolerance_m=self.get_parameter('position_tolerance_m').value,
             heading_tolerance_rad=math.radians(self.get_parameter('heading_tolerance_deg').value),
-            drive_speed_mps=self.get_parameter('speed_mps').value,
+            max_forward_step_m=float(self.get_parameter('max_forward_step_m').value),
+            drive_speed_mps=float(self.get_parameter('speed_mps').value),
             turn_rate_radps=2.0 * math.pi / max(turn_time_s, 0.1),
             settle_time_s=settle_time_s,
         )

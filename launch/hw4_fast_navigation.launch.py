@@ -47,8 +47,13 @@ def generate_launch_description():
     )
     speed_arg = DeclareLaunchArgument(
         'speed_mps',
-        default_value='0.18',
+        default_value='0.28',
         description='Calibrated nominal forward speed (m/s)'
+    )
+    max_step_arg = DeclareLaunchArgument(
+        'max_forward_step_m',
+        default_value='0.40',
+        description='Maximum forward step distance per visual drive pulse (m)'
     )
     turn_time_arg = DeclareLaunchArgument(
         'turn_time_360_s',
@@ -112,6 +117,7 @@ def generate_launch_description():
             'goal_x_cm': LaunchConfiguration('goal_x_cm'),
             'goal_y_cm': LaunchConfiguration('goal_y_cm'),
             'speed_mps': LaunchConfiguration('speed_mps'),
+            'max_forward_step_m': LaunchConfiguration('max_forward_step_m'),
             'turn_time_360_s': LaunchConfiguration('turn_time_360_s'),
             'turn_motor_power': LaunchConfiguration('turn_motor_power'),
             'grid_resolution_cm': LaunchConfiguration('grid_resolution_cm'),
@@ -125,6 +131,7 @@ def generate_launch_description():
         goal_x_arg,
         goal_y_arg,
         speed_arg,
+        max_step_arg,
         turn_time_arg,
         turn_power_arg,
         grid_res_arg,
