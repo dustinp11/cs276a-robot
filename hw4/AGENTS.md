@@ -76,3 +76,10 @@
   a frame solely for cross-tag disagreement. Log each tag's candidate pose.
 - Confirmed obstacle tag detection-square size remains 0.185 m; the user briefly
   said 0.18 m then corrected it back to 0.185 m. Do not apply a whole-pattern ratio.
+
+
+- `hw4.launch.py localization_only:=true` records manual fixed-center rotation
+  without launching motor drivers, velocity mapping, or navigation. Preserve the
+  same PoseSource and Localizer used by navigation. Log the supplied physical
+  reference separately from estimates; do not claim measured heading or full
+  rotation coverage from estimated yaw. Archive per-tag errors and a position plot.

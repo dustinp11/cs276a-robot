@@ -22,5 +22,6 @@ setup(
     entry_points={"console_scripts": [
         "hw4_config = hw4.config:main",
         "hw4_navigation = hw4.mission_node:main",
+        "hw4_localization_test = hw4.localization_node:main",
     ]},
 )

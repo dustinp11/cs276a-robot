@@ -232,3 +232,38 @@ HW4 each time. Source measurements and motion calibration are passed explicitly;
 `navigation.yaml` is installed by the build, so rebuild after changing it.
 Restart the launch after changing any configuration. Keep the same branch on
 both checkouts; only the user operates the robot and transfers result files.
+
+
+## Manual rotation localization check
+
+Stop the previous robot launch. Use the manual rotation command in
+`run_commands.txt`; it keeps `hw4.launch.py` and adds `localization_only:=true`.
+This mode starts the same camera, AprilTag detectors, and localization pipeline,
+but starts no motor driver, velocity mapper, or navigation controller.
+Do not call `/hw4/start` for this test.
+
+Mark the robot footprint center at the reference point: currently the active
+intermediate goal **(75, 154) cm**, not the original final goal. The launch command
+supplies `reference_x_m:=0.75 reference_y_m:=1.54`; change those meter values if
+using a different physically measured point. Keep that center on the mark while
+rotating by hand. Stop approximately every 30 degrees for 4–5 seconds, including
+a stationary hold before and after the full revolution. Avoid covering the camera.
+This is one continuous recording; heading coverage is observed by the user,
+not automatically established from the estimated headings.
+
+Press Ctrl+C after the sweep. The timestamped output folder contains:
+
+- `observations.csv`: the original observations and individual candidate poses.
+- `per_tag.csv`: family/ID, capture timestamp, estimated robot xy/yaw, camera range,
+  signed xy error and total position error relative to the supplied center (meters).
+- `tag_summary.csv`: each observed tag's mean position, bias, RMSE, maximum error
+  (centimeters), and usable sample count. Rejected candidates remain in `per_tag.csv`.
+- `tag_positions.svg`: measured map with each tag's position estimates in its own
+  color and a cross at the supplied physical reference center.
+- Archived environment, navigation settings, camera calibration, reference position,
+  and telemetry bag including camera info. No reference heading is assumed.
+
+Copy the entire result folder back locally for analysis. The report command in
+`run_commands.txt` can regenerate the CSV summary and SVG after an interrupted run.
+Tags that were not observed have no accuracy result. A stationary-looking cluster
+is not proof of accuracy; compare its distance from the physically placed center.

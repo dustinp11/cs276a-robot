@@ -10,6 +10,7 @@ from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 from hw4.config import load_validated_environment
@@ -24,7 +25,11 @@ def generate_launch_description():
     arguments = [DeclareLaunchArgument(name, default_value=PathJoinSubstitution([config, filename]))
                  for name, filename in [('environment_file', 'environment.json'),
                                         ('motion_file', 'motion.yaml'), ('navigation_file', 'navigation.yaml')]]
-    arguments += [DeclareLaunchArgument('output_dir', description='Absolute path to a new result directory'),
+    arguments += [DeclareLaunchArgument('localization_only', default_value='false',
+                                        description='Record manual rotation; do not launch motor or navigation nodes'),
+                  DeclareLaunchArgument('reference_x_m', default_value='', description='Measured robot center; defaults to goal x'),
+                  DeclareLaunchArgument('reference_y_m', default_value='', description='Measured robot center; defaults to goal y'),
+                  DeclareLaunchArgument('output_dir', description='Absolute path to a new result directory'),
                   DeclareLaunchArgument('camera_parameter_path', default_value=EnvironmentVariable(
                       'CAMERA_CALIBRATION', default_value=camera))]
     return LaunchDescription(arguments + [OpaqueFunction(function=configured_nodes)])
@@ -43,15 +48,31 @@ def configured_nodes(context):
     # archive actual camera intrinsics before launch
     output.mkdir(parents=True, exist_ok=True)
     shutil.copy2(values['camera_parameter_path'], output / 'camera_parameter.yaml')
-    motion = values['motion_file']
-    nodes = [Node(package='hw3', executable=name, output='screen', parameters=[motion])
-             for name in ('motor_control', 'velocity_mapping')]
-    nodes += [Node(package='hw4', executable='hw4_navigation', output='screen',
-                   parameters=[motion, {key: value for key, value in values.items() if key != 'camera_parameter_path'}]),
-              recorder(values['output_dir'])]
+    nodes = recording_nodes(context, values) + [recorder(values['output_dir'])]
     handlers = [RegisterEventHandler(OnProcessExit(target_action=node, on_exit=[EmitEvent(
         event=Shutdown(reason='HW4 essential process exited; ending run.'))])) for node in nodes]
     return handlers + [camera_launch(values['camera_parameter_path'])] + detectors(environment) + nodes
+
+
+def recording_nodes(context, values):
+    """Select a motor-free localization recorder or the existing navigation stack."""
+    # keep diagnostic mode independent of motor hardware
+    mode = LaunchConfiguration('localization_only').perform(context).lower()
+    if mode not in ('true', 'false'):
+        raise ValueError('localization_only must be true or false.')
+    parameters = {key: value for key, value in values.items() if key != 'camera_parameter_path'}
+    if mode == 'true':
+        parameters.update({f'reference_{axis}_m': ParameterValue(
+            LaunchConfiguration(f'reference_{axis}_m').perform(context), value_type=str)
+                           for axis in ('x', 'y')})
+        return [Node(package='hw4', executable='hw4_localization_test', output='screen', parameters=[parameters])]
+
+    # preserve the established navigation entry points
+    motion = values['motion_file']
+    nodes = [Node(package='hw3', executable=name, output='screen', parameters=[motion])
+             for name in ('motor_control', 'velocity_mapping')]
+    return nodes + [Node(package='hw4', executable='hw4_navigation', output='screen',
+                         parameters=[motion, parameters])]
 
 
 def camera_launch(calibration):
@@ -84,6 +105,6 @@ def recorder(output):
     """Record commands and measured localization without saving raw camera video."""
     return ExecuteProcess(cmd=[
         'ros2', 'bag', 'record', '-o', str(Path(output) / 'telemetry'),
-        '/cmd_vel', '/cmd_vel_applied', '/motor_commands', '/imu_data',
+        '/camera/camera_info', '/cmd_vel', '/cmd_vel_applied', '/motor_commands', '/imu_data',
         detection_topic('36h11'), detection_topic('41h12'), '/tf', '/tf_static', '/hw4/pose', '/hw4/status',
     ], output='screen')
