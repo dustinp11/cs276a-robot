@@ -179,7 +179,7 @@ def compute_trajectory_metrics(
         'mean_cte_cm': mean_cte_cm,
         'max_cte_cm': max_cte_cm,
         'min_actual_clearance_cm': min_actual_clearance_cm,
-        'bottleneck_clearance_cm': planned_path.bottleneck_clearance_cm,
+        'bottleneck_clearance_cm': getattr(planned_path, 'bottleneck_clearance_cm', getattr(planned_path, 'min_clearance_cm', 0.0)),
     }
 
 

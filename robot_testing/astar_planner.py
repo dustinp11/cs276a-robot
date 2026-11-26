@@ -37,6 +37,11 @@ class FastPlannedPath:
     planning_time_s: float
     grid_resolution_cm: float
 
+    @property
+    def bottleneck_clearance_cm(self) -> float:
+        """Compatibility property for trajectory metric evaluation."""
+        return self.min_clearance_cm
+
 
 class OccupancyGrid:
     """2D Configuration-Space Occupancy Grid representation of the workspace."""
