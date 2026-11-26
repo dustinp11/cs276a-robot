@@ -93,6 +93,7 @@ def plot_fast_environment_and_path(
     actual_trajectory: Optional[List[Tuple[float, float]]] = None,
     safe_path: Optional[object] = None,
     output_filename: str = 'hw4_fast_path_visualization.png',
+    show_metrics_box: Optional[bool] = None,
 ):
     """Generate high-resolution visualization of HW4 Fast A* path planning."""
     fig, ax = plt.subplots(figsize=(14, 14), dpi=150)
@@ -314,40 +315,17 @@ def plot_fast_environment_and_path(
 
     # Title & Formatting
     if has_actual:
-        title_str = (
-            "Homework 4: Fast A* Shortest Path Planning vs Actual Trajectory\n"
-            f"Planned Length: {fast_path.total_length_cm:.1f} cm | Actual Length: {metrics.get('actual_length_cm', 0.0):.1f} cm | "
-            f"Mean Cross-Track Error: {metrics.get('mean_cte_cm', 0.0):.1f} cm | Goal Error: {metrics.get('goal_error_cm', 0.0):.1f} cm"
-        )
+        title_str = "Homework 4: Fast A* Shortest Path Planning vs Actual Trajectory"
     else:
-        title_str = (
-            "Homework 4: Fast A* Shortest-Distance Path Planning\n"
-            f"Path Length: {fast_path.total_length_cm:.1f} cm | Min Clearance: {fast_path.min_clearance_cm:.1f} cm | "
-            f"Planning Time: {fast_path.planning_time_s * 1000.0:.1f} ms"
-        )
+        title_str = "Homework 4: Fast A* Shortest-Distance Path Planning"
 
     ax.set_title(title_str, fontsize=12.5, fontweight='bold', pad=15)
     ax.set_xlabel("X (cm)", fontsize=11, fontweight='semibold')
     ax.set_ylabel("Y (cm)", fontsize=11, fontweight='semibold')
     ax.grid(True, linestyle=':', alpha=0.6)
 
-    # Info summary box
-    if has_actual:
-        summary_text = (
-            "FAST A* TRAJECTORY METRICS\n"
-            "-------------------------\n"
-            f"Run Duration:         {metrics['duration_s']} s ({metrics['count']} records)\n"
-            f"Planned Path Length:  {metrics['planned_length_cm']:.1f} cm\n"
-            f"Actual Path Length:   {metrics['actual_length_cm']:.1f} cm\n"
-            f"Length Difference:    {metrics['length_diff_cm']:+.1f} cm\n"
-            f"Mean Cross-Track Err: {metrics['mean_cte_cm']:.2f} cm\n"
-            f"Max Cross-Track Err:  {metrics['max_cte_cm']:.2f} cm\n"
-            f"Start Position Error: {metrics['start_error_cm']:.2f} cm\n"
-            f"Goal Arrival Error:   {metrics['goal_error_cm']:.2f} cm\n"
-            f"Min Actual Clearance: {metrics['min_actual_clearance_cm']:.2f} cm\n"
-            f"Safety Check:         {'SAFE' if metrics['min_actual_clearance_cm'] >= r_robot else 'UNSAFE'}"
-        )
-    else:
+    # Info summary box (omitted per user request; only rendered if explicitly show_metrics_box=True)
+    if show_metrics_box is True:
         summary_text = (
             "FAST A* PLANNING METRICS\n"
             "------------------------\n"
@@ -363,15 +341,15 @@ def plot_fast_environment_and_path(
             f"Planning Time: {fast_path.planning_time_s * 1000.0:.1f} ms"
         )
 
-    ax.text(
-        0.02, 0.98, summary_text,
-        transform=ax.transAxes,
-        verticalalignment='top',
-        fontsize=8.5,
-        fontfamily='monospace',
-        bbox=dict(boxstyle="round,pad=0.5", fc="#f1f5f9", ec="#64748b", alpha=0.95),
-        zorder=20
-    )
+        ax.text(
+            0.02, 0.98, summary_text,
+            transform=ax.transAxes,
+            verticalalignment='top',
+            fontsize=8.5,
+            fontfamily='monospace',
+            bbox=dict(boxstyle="round,pad=0.5", fc="#f1f5f9", ec="#64748b", alpha=0.95),
+            zorder=20
+        )
 
     ax.legend(loc='lower left', bbox_to_anchor=(0.0, -0.18), ncol=3, fontsize=8, framealpha=0.95)
 
@@ -389,6 +367,10 @@ def main():
                         help='Output image filename (default: hw4_fast_path_visualization.png)')
     parser.add_argument('--compare', action='store_true',
                         help='Include safe Voronoi path in visualization for direct comparison')
+    parser.add_argument('--no-actual', action='store_true',
+                        help='Do not plot actual trajectory even if file exists')
+    parser.add_argument('--no-metrics-box', action='store_true',
+                        help='Do not draw any metrics summary box')
     args = parser.parse_args()
 
     env = Environment()
@@ -405,17 +387,20 @@ def main():
         safe_planner = SafePathPlanner(env, vg)
         safe_path = safe_planner.plan(start, goal)
 
-    actual_pts = load_fast_trajectory(args.trajectory)
+    actual_pts = None if args.no_actual else load_fast_trajectory(args.trajectory)
+    show_box = False if args.no_metrics_box else None
 
     if actual_pts:
-        output_file = args.output or 'hw4_fast_trajectory_comparison.png'
+        output_file = args.output or 'fast-actual.png'
         print(f"Plotting Fast A* planned path vs actual trajectory ({len(actual_pts)} points)...")
-        plot_fast_environment_and_path(fast_path, env, landmarks, actual_pts, safe_path, output_file)
-        plot_fast_environment_and_path(fast_path, env, landmarks, actual_pts, safe_path, 'hw4_fast_path_visualization.png')
+        plot_fast_environment_and_path(fast_path, env, landmarks, actual_pts, safe_path, output_file, show_metrics_box=show_box)
+        if args.output is None:
+            plot_fast_environment_and_path(fast_path, env, landmarks, actual_pts, safe_path, 'hw4_fast_trajectory_comparison.png', show_metrics_box=show_box)
+            plot_fast_environment_and_path(fast_path, env, landmarks, actual_pts, safe_path, 'hw4_fast_path_visualization.png', show_metrics_box=show_box)
     else:
-        output_file = args.output or 'hw4_fast_path_visualization.png'
+        output_file = args.output or 'fast-planned.png'
         print("Plotting Fast A* shortest-distance planned path...")
-        plot_fast_environment_and_path(fast_path, env, landmarks, None, safe_path, output_file)
+        plot_fast_environment_and_path(fast_path, env, landmarks, None, safe_path, output_file, show_metrics_box=show_box)
 
 
 if __name__ == '__main__':

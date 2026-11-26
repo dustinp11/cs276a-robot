@@ -189,6 +189,7 @@ def plot_environment_and_path(
     landmarks_data: dict,
     actual_trajectory: Optional[List[Tuple[float, float]]] = None,
     output_filename: str = 'hw4_safe_path_visualization.png',
+    show_metrics_box: bool = False,
 ):
     """Generate high-resolution diagram of HW4 workspace, Voronoi graph, and actual vs planned path."""
     fig, ax = plt.subplots(figsize=(14, 14), dpi=150)
@@ -397,41 +398,17 @@ def plot_environment_and_path(
                linewidths=2.0, zorder=16, label=f'Planned Goal ({goal[0]}, {goal[1]})')
 
     # Formatting
-    title_text = (
-        "Homework 4: Safe Voronoi Path Planning vs Actual Robot Trajectory\n"
-        if has_actual else
-        "Homework 4: Maximum-Safety Voronoi Path Planning\n"
-    )
-    subtitle = (
-        f"Planned Length: {path.total_length_cm:.1f} cm | Actual Length: {metrics.get('actual_length_cm', 0.0):.1f} cm | "
-        f"Mean Cross-Track Error: {metrics.get('mean_cte_cm', 0.0):.1f} cm | Goal Error: {metrics.get('goal_error_cm', 0.0):.1f} cm"
-        if has_actual else
-        f"Path Length: {path.total_length_cm:.1f} cm | Min Clearance: {path.min_clearance_cm:.1f} cm | "
-        f"Robot Net Margin: {path.min_clearance_cm - r_robot:.1f} cm"
-    )
-    ax.set_title(title_text + subtitle, fontsize=12.5, fontweight='bold', pad=15)
+    if has_actual:
+        title_text = "Homework 4: Safe Voronoi Path Planning vs Actual Robot Trajectory"
+    else:
+        title_text = "Homework 4: Maximum-Safety Voronoi Path Planning"
+    ax.set_title(title_text, fontsize=12.5, fontweight='bold', pad=15)
     ax.set_xlabel("X (cm)", fontsize=11, fontweight='semibold')
     ax.set_ylabel("Y (cm)", fontsize=11, fontweight='semibold')
     ax.grid(True, linestyle=':', alpha=0.6)
 
-    # Info summary box
-    if has_actual:
-        summary_text = (
-            "TRAJECTORY COMPARISON METRICS\n"
-            "----------------------------\n"
-            f"Run Duration:         {metrics['duration_s']} s ({metrics['count']} records)\n"
-            f"Planned Path Length:  {metrics['planned_length_cm']:.1f} cm\n"
-            f"Actual Path Length:   {metrics['actual_length_cm']:.1f} cm\n"
-            f"Length Difference:    {metrics['length_diff_cm']:+.1f} cm\n"
-            f"Mean Cross-Track Err: {metrics['mean_cte_cm']:.2f} cm\n"
-            f"Max Cross-Track Err:  {metrics['max_cte_cm']:.2f} cm\n"
-            f"Start Position Error: {metrics['start_error_cm']:.2f} cm\n"
-            f"Goal Arrival Error:   {metrics['goal_error_cm']:.2f} cm\n"
-            f"Min Actual Clearance: {metrics['min_actual_clearance_cm']:.2f} cm\n"
-            f"Planned Bottleneck:   {metrics['bottleneck_clearance_cm']:.2f} cm\n"
-            f"Collision-Free:       {'YES (SAFE)' if metrics['min_actual_clearance_cm'] >= r_robot else 'NO'}"
-        )
-    else:
+    # Info summary box (omitted per user request; only rendered if explicitly show_metrics_box=True)
+    if show_metrics_box is True:
         summary_text = (
             "PATH & SAFETY METRICS\n"
             "--------------------\n"
@@ -448,15 +425,15 @@ def plot_environment_and_path(
             f"Physical Robot Margin: {path.min_clearance_cm - r_robot:.2f} cm"
         )
 
-    ax.text(
-        0.02, 0.98, summary_text,
-        transform=ax.transAxes,
-        verticalalignment='top',
-        fontsize=8.5,
-        fontfamily='monospace',
-        bbox=dict(boxstyle="round,pad=0.5", fc="#f1f5f9", ec="#64748b", alpha=0.95),
-        zorder=20
-    )
+        ax.text(
+            0.02, 0.98, summary_text,
+            transform=ax.transAxes,
+            verticalalignment='top',
+            fontsize=8.5,
+            fontfamily='monospace',
+            bbox=dict(boxstyle="round,pad=0.5", fc="#f1f5f9", ec="#64748b", alpha=0.95),
+            zorder=20
+        )
 
     ax.legend(loc='lower left', bbox_to_anchor=(0.0, -0.18), ncol=3, fontsize=8, framealpha=0.95)
 
@@ -471,7 +448,11 @@ def main():
     parser.add_argument('--trajectory', '-t', type=str, default=None,
                         help='Path to recorded coordinates file (coordinates.txt, hw4_trajectory.txt, or CSV)')
     parser.add_argument('--output', '-o', type=str, default=None,
-                        help='Output image filename (default: hw4_trajectory_comparison.png if trajectory found)')
+                        help='Output image filename (default: safe-actual.png / safe-planned.png)')
+    parser.add_argument('--no-actual', action='store_true',
+                        help='Do not plot actual trajectory even if file exists')
+    parser.add_argument('--no-metrics-box', action='store_true',
+                        help='Do not draw any metrics summary box')
     args = parser.parse_args()
 
     env = Environment()
@@ -483,19 +464,19 @@ def main():
     path = planner.plan(start, goal)
     landmarks = load_hw4_landmarks()
 
-    actual_pts = load_actual_trajectory(args.trajectory)
+    actual_pts = None if args.no_actual else load_actual_trajectory(args.trajectory)
 
     if actual_pts:
-        output_file = args.output or 'hw4_trajectory_comparison.png'
+        output_file = args.output or 'safe-actual.png'
         print(f"Plotting planned path vs actual trajectory ({len(actual_pts)} points)...")
         plot_environment_and_path(path, env, landmarks, actual_pts, output_file)
-        # Also update hw4_safe_path_visualization.png
-        plot_environment_and_path(path, env, landmarks, actual_pts, 'hw4_safe_path_visualization.png')
+        if args.output is None:
+            plot_environment_and_path(path, env, landmarks, actual_pts, 'hw4_trajectory_comparison.png')
+            plot_environment_and_path(path, env, landmarks, actual_pts, 'hw4_safe_path_visualization.png')
     else:
-        output_file = args.output or 'hw4_safe_path_visualization.png'
-        print("No recorded trajectory file found yet. Plotting planned safe Voronoi path...")
+        output_file = args.output or 'safe-planned.png'
+        print("Plotting planned safe Voronoi path...")
         plot_environment_and_path(path, env, landmarks, None, output_file)
-        print("Tip: Run navigation first to generate coordinates.txt / hw4_trajectory.txt, then rerun this script.")
 
 
 if __name__ == '__main__':
